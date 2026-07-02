@@ -237,6 +237,8 @@ type sessionStatusResult struct {
 	OtherSessions []string          `json:"other_sessions"`
 	Mode          string            `json:"mode"`
 	Host          string            `json:"host"`
+	OobVia        string            `json:"oob_via"`
+	SSHUser       string            `json:"ssh_user,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
 	PromptReady   bool              `json:"prompt_ready"`
 	EchoOff       bool              `json:"echo_off"`
@@ -250,15 +252,18 @@ type sessionStatusResult struct {
 
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
 	snap := c.Term.Screen.Snapshot()
-	oscHost, cwd := c.Tracker.Cwd()
-	host := "local"
-	if oscHost != "" && oscHost != c.Tracker.LocalHost() {
-		host = oscHost
+	_, cwd := c.Tracker.Cwd()
+	rt := c.route()
+	var sshUser string
+	if rt.ci != nil {
+		sshUser = rt.ci.User
 	}
 	res := sessionStatusResult{
 		SessionID:   c.Sess.ID,
 		Mode:        string(c.Tracker.Mode(snap.AltScreen)),
-		Host:        host,
+		Host:        rt.host,
+		OobVia:      rt.via,
+		SSHUser:     sshUser,
 		Cwd:         cwd,
 		PromptReady: c.Tracker.PromptReady(),
 		EchoOff:     c.Tracker.EchoOff(),

@@ -13,6 +13,7 @@ import (
 
 	"ai-ssh/internal/framing"
 	"ai-ssh/internal/session"
+	"ai-ssh/internal/sshmux"
 	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
 )
@@ -23,6 +24,8 @@ type Core struct {
 	Term    *term.Terminal
 	Tracker *state.Tracker
 	Engine  *framing.Engine
+	Mux     *sshmux.Mux
+	Tasks   *sshmux.Table
 	Version string
 }
 
@@ -37,6 +40,7 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)
+	registerRemoteTools(server, core)
 
 	go func() {
 		<-ctx.Done()

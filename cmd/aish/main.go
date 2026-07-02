@@ -17,6 +17,7 @@ import (
 	"ai-ssh/internal/proxy"
 	"ai-ssh/internal/session"
 	"ai-ssh/internal/shellintegration"
+	"ai-ssh/internal/sshmux"
 	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
 )
@@ -38,7 +39,7 @@ func main() {
 	// Busybox-style dispatch: when invoked through the PATH shim symlink
 	// named "ssh", act as the ssh wrapper.
 	if filepath.Base(os.Args[0]) == "ssh" {
-		os.Exit(sshShimMain(os.Args[1:]))
+		os.Exit(sshmux.ShimMain(os.Args[1:]))
 	}
 
 	args := os.Args[1:]
@@ -96,6 +97,20 @@ func runMain(args []string) int {
 		"AISH_SOCKET=" + sock,
 	}, shellEnv...)
 
+	// Install the ssh PATH shim: a symlink to this binary named "ssh",
+	// first on PATH inside the session, so every ssh invocation gains
+	// ControlMaster multiplexing.
+	shimBin := paths.ShimBin(id)
+	if exe, err := os.Executable(); err == nil {
+		if err := os.MkdirAll(shimBin, 0o700); err == nil {
+			if err := os.Symlink(exe, filepath.Join(shimBin, "ssh")); err == nil {
+				extraEnv = append(extraEnv,
+					"PATH="+shimBin+":"+os.Getenv("PATH"),
+					"AISH_SHIM_BIN="+shimBin)
+			}
+		}
+	}
+
 	sess := session.New(id, argv, extraEnv)
 	trm := term.NewTerminal(24, 80)
 	sess.AddTap(trm)
@@ -113,9 +128,14 @@ func runMain(args []string) int {
 
 	engine := &framing.Engine{Sess: sess, Term: trm, Tracker: tracker}
 
+	mux := sshmux.New(dir)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	core := &mcpserver.Core{Sess: sess, Term: trm, Tracker: tracker, Engine: engine, Version: version}
+	core := &mcpserver.Core{
+		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
+		Mux: mux, Tasks: sshmux.NewTable(), Version: version,
+	}
 	go func() {
 		if err := mcpserver.Serve(ctx, core, sock); err != nil {
 			fmt.Fprintln(os.Stderr, "aish: mcp server:", err)
@@ -123,6 +143,7 @@ func runMain(args []string) int {
 	}()
 
 	code, err := sess.Run()
+	mux.CloseAll()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "aish:", err)
 	}

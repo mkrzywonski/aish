@@ -3,6 +3,11 @@
 if [[ -n $AISH_SESSION && -z $AISH_INTEGRATED ]]; then
   export AISH_INTEGRATED=1
 
+  # The user's rc may have prepended PATH entries; keep the aish ssh shim first.
+  if [[ -n $AISH_SHIM_BIN && ":$PATH:" != *":$AISH_SHIM_BIN:"* ]]; then
+    PATH="$AISH_SHIM_BIN:$PATH"
+  fi
+
   __aish_report_cwd() {
     printf '\033]7;file://%s%s\033\\' "${HOST:-$(hostname)}" "$PWD"
   }
