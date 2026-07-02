@@ -41,7 +41,14 @@ func (s *Screen) Resize(rows, cols int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.generation++
+	// midterm v0.2.4 miscomputes the grid when growing both dimensions
+	// (ensureHeight appends rows against a stale Height, ballooning the
+	// screen to tens of thousands of rows). A second Resize to the same
+	// size converges to the correct grid, so always issue it twice.
 	s.vt.Resize(rows, cols)
+	if s.vt.Height != rows || s.vt.Width != cols {
+		s.vt.Resize(rows, cols)
+	}
 }
 
 // Snapshot returns an atomic rendering of the current screen as plain text,
