@@ -5,19 +5,26 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"ai-ssh/internal/debugcli"
+	"ai-ssh/internal/mcpserver"
+	"ai-ssh/internal/paths"
+	"ai-ssh/internal/proxy"
 	"ai-ssh/internal/session"
+	"ai-ssh/internal/term"
 )
 
 const usage = `aish — AI-shareable terminal
 
 Usage:
   aish [run]          start a shared shell session (default)
-  aish mcp-proxy      stdio<->socket MCP proxy for AI agents
-  aish client <tool> [json-args]
+  aish mcp-proxy [--session <id>]
+                      stdio<->socket MCP proxy for AI agents
+  aish client [--session <id>] <tool> [json-args]
                       call an MCP tool on a running session (debug)
   aish version
 `
@@ -42,9 +49,9 @@ func main() {
 	case "run":
 		os.Exit(runMain(args))
 	case "mcp-proxy":
-		os.Exit(proxyMain(args))
+		os.Exit(proxy.Main(args))
 	case "client":
-		os.Exit(clientMain(args))
+		os.Exit(debugcli.Main(version, args))
 	case "version":
 		fmt.Println("aish", version)
 	case "help", "-h", "--help":
@@ -67,9 +74,35 @@ func runMain(args []string) int {
 	}
 
 	id := session.NewID()
-	extraEnv := []string{"AISH_SESSION=" + id}
+	dir := paths.SessionDir(id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fmt.Fprintln(os.Stderr, "aish:", err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	sock := paths.Socket(id)
+
+	extraEnv := []string{
+		"AISH_SESSION=" + id,
+		"AISH_SOCKET=" + sock,
+	}
 
 	sess := session.New(id, []string{shell}, extraEnv)
+	trm := term.NewTerminal(24, 80)
+	sess.AddTap(trm)
+	sess.OnResize(func(rows, cols uint16) {
+		trm.Screen.Resize(int(rows), int(cols))
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	core := &mcpserver.Core{Sess: sess, Term: trm, Version: version}
+	go func() {
+		if err := mcpserver.Serve(ctx, core, sock); err != nil {
+			fmt.Fprintln(os.Stderr, "aish: mcp server:", err)
+		}
+	}()
+
 	code, err := sess.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "aish:", err)

@@ -174,8 +174,10 @@ func nowNanos() int64 { return time.Now().UnixNano() }
 
 func (s *Session) applySize() {
 	ws, err := pty.GetsizeFull(os.Stdin)
-	if err != nil {
-		return
+	if err != nil || ws.Rows == 0 || ws.Cols == 0 {
+		// No usable size (e.g. stdin is not a real terminal): pick a sane
+		// default rather than propagating a 0x0 winsize to the shell.
+		ws = &pty.Winsize{Rows: 24, Cols: 80}
 	}
 	pty.Setsize(s.Ptmx, ws)
 	s.resizeMu.Lock()
