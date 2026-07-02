@@ -11,7 +11,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ai-ssh/internal/framing"
 	"ai-ssh/internal/session"
+	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
 )
 
@@ -19,6 +21,8 @@ import (
 type Core struct {
 	Sess    *session.Session
 	Term    *term.Terminal
+	Tracker *state.Tracker
+	Engine  *framing.Engine
 	Version string
 }
 

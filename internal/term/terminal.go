@@ -11,6 +11,7 @@ import (
 type Terminal struct {
 	Ring   *Ring
 	Screen *Screen
+	Parser *OSCParser
 }
 
 const DefaultRingSize = 4 << 20 // 4 MiB
@@ -19,12 +20,15 @@ func NewTerminal(rows, cols int) *Terminal {
 	return &Terminal{
 		Ring:   NewRing(DefaultRingSize),
 		Screen: NewScreen(rows, cols),
+		Parser: &OSCParser{},
 	}
 }
 
 func (t *Terminal) Write(p []byte) (int, error) {
+	base := t.Ring.End()
 	t.Ring.Write(p)
 	t.Screen.Write(p)
+	t.Parser.Feed(base, p)
 	return len(p), nil
 }
 

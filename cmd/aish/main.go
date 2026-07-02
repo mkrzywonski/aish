@@ -11,10 +11,13 @@ import (
 	"path/filepath"
 
 	"ai-ssh/internal/debugcli"
+	"ai-ssh/internal/framing"
 	"ai-ssh/internal/mcpserver"
 	"ai-ssh/internal/paths"
 	"ai-ssh/internal/proxy"
 	"ai-ssh/internal/session"
+	"ai-ssh/internal/shellintegration"
+	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
 )
 
@@ -82,21 +85,37 @@ func runMain(args []string) int {
 	defer os.RemoveAll(dir)
 	sock := paths.Socket(id)
 
-	extraEnv := []string{
-		"AISH_SESSION=" + id,
-		"AISH_SOCKET=" + sock,
+	argv, shellEnv, err := shellintegration.Setup(shell, dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "aish: shell integration disabled: %v\n", err)
+		argv, shellEnv = []string{shell}, nil
 	}
 
-	sess := session.New(id, []string{shell}, extraEnv)
+	extraEnv := append([]string{
+		"AISH_SESSION=" + id,
+		"AISH_SOCKET=" + sock,
+	}, shellEnv...)
+
+	sess := session.New(id, argv, extraEnv)
 	trm := term.NewTerminal(24, 80)
 	sess.AddTap(trm)
 	sess.OnResize(func(rows, cols uint16) {
 		trm.Screen.Resize(int(rows), int(cols))
 	})
 
+	tracker := state.NewTracker(func() int {
+		if sess.Ptmx == nil {
+			return -1
+		}
+		return int(sess.Ptmx.Fd())
+	})
+	go tracker.Consume(trm.Parser.Subscribe())
+
+	engine := &framing.Engine{Sess: sess, Term: trm, Tracker: tracker}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	core := &mcpserver.Core{Sess: sess, Term: trm, Version: version}
+	core := &mcpserver.Core{Sess: sess, Term: trm, Tracker: tracker, Engine: engine, Version: version}
 	go func() {
 		if err := mcpserver.Serve(ctx, core, sock); err != nil {
 			fmt.Fprintln(os.Stderr, "aish: mcp server:", err)

@@ -9,11 +9,20 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ai-ssh/internal/framing"
 	"ai-ssh/internal/paths"
+	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
 )
 
 func registerTools(s *mcp.Server, c *Core) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "run_command",
+		Description: "Run a shell command in the shared terminal (visible to the user) and return its output and exit code. " +
+			"Works transparently whether the session is local or inside ssh. Errors if a full-screen app is active or the " +
+			"terminal is waiting for secret input.",
+	}, c.runCommand)
+
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "send_input",
 		Description: "Type raw text into the shared terminal exactly as if the user typed it. " +
@@ -50,6 +59,21 @@ func registerTools(s *mcp.Server, c *Core) {
 		Description: "Get the status of the shared terminal session: session id, screen size, alternate-screen flag, " +
 			"time since last output, and other live aish sessions on this machine.",
 	}, c.sessionStatus)
+}
+
+// ---- run_command ----
+
+type runCommandArgs struct {
+	Command   string `json:"command" jsonschema:"the shell command line to run"`
+	TimeoutMs int    `json:"timeout_ms,omitempty" jsonschema:"give up waiting after this long (default 30000); the command keeps running"`
+}
+
+func (c *Core) runCommand(ctx context.Context, req *mcp.CallToolRequest, args runCommandArgs) (*mcp.CallToolResult, *framing.Result, error) {
+	res, err := c.Engine.Run(args.Command, time.Duration(args.TimeoutMs)*time.Millisecond)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, res, nil
 }
 
 // ---- send_input ----
@@ -209,23 +233,40 @@ func (c *Core) waitIdle(ctx context.Context, req *mcp.CallToolRequest, args wait
 type sessionStatusArgs struct{}
 
 type sessionStatusResult struct {
-	SessionID     string   `json:"session_id"`
-	OtherSessions []string `json:"other_sessions"`
-	Rows          int      `json:"rows"`
-	Cols          int      `json:"cols"`
-	AltScreen     bool     `json:"alt_screen"`
-	LastOutputMs  int64    `json:"last_output_ms_ago"`
-	Ended         bool     `json:"ended"`
+	SessionID     string            `json:"session_id"`
+	OtherSessions []string          `json:"other_sessions"`
+	Mode          string            `json:"mode"`
+	Host          string            `json:"host"`
+	Cwd           string            `json:"cwd,omitempty"`
+	PromptReady   bool              `json:"prompt_ready"`
+	EchoOff       bool              `json:"echo_off"`
+	Foreground    *state.Foreground `json:"foreground,omitempty"`
+	Rows          int               `json:"rows"`
+	Cols          int               `json:"cols"`
+	AltScreen     bool              `json:"alt_screen"`
+	LastOutputMs  int64             `json:"last_output_ms_ago"`
+	Ended         bool              `json:"ended"`
 }
 
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
 	snap := c.Term.Screen.Snapshot()
+	oscHost, cwd := c.Tracker.Cwd()
+	host := "local"
+	if oscHost != "" && oscHost != c.Tracker.LocalHost() {
+		host = oscHost
+	}
 	res := sessionStatusResult{
-		SessionID: c.Sess.ID,
-		Rows:      snap.Rows,
-		Cols:      snap.Cols,
-		AltScreen: snap.AltScreen,
-		Ended:     c.Sess.Closed(),
+		SessionID:   c.Sess.ID,
+		Mode:        string(c.Tracker.Mode(snap.AltScreen)),
+		Host:        host,
+		Cwd:         cwd,
+		PromptReady: c.Tracker.PromptReady(),
+		EchoOff:     c.Tracker.EchoOff(),
+		Foreground:  c.Tracker.Foreground(),
+		Rows:        snap.Rows,
+		Cols:        snap.Cols,
+		AltScreen:   snap.AltScreen,
+		Ended:       c.Sess.Closed(),
 	}
 	if n := c.Sess.LastOutputNanos(); n > 0 {
 		res.LastOutputMs = time.Since(time.Unix(0, n)).Milliseconds()
