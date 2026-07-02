@@ -34,7 +34,7 @@ Then exercise it from another shell with the one-shot debug client:
 ./aish client send_input '{"text":"vim\r"}'          # then read_screen shows alt_screen: true
 ```
 
-Gotchas learned the hard way: piping input into interactive programs races (vim eats queued lines; its termios restore flushes typeahead) — pace input with sleeps or use `send_input` per step. Don't `pkill -f` patterns that appear in your own wrapper command line. Killing the session with signals is the supported path (a handler cleans the runtime dir); stale dirs are swept at next startup.
+Gotchas learned the hard way: piping input into interactive programs races (vim eats queued lines; its termios restore flushes typeahead) — pace input with sleeps or use `send_input` per step. Don't `pkill -f` patterns that appear in your own wrapper command line. When killing a test session, resolve the exact PID from its session id (`grep AISH_SESSION=<id> /proc/<pid>/environ`) — generic matches like "aish with a pts stdin" have killed the user's live session before. Killing the session with signals is the supported path (a handler cleans the runtime dir); stale dirs are swept at next startup.
 
 `ssh localhost` works passwordlessly here and is the M4 test bed for ControlMaster paths.
 
