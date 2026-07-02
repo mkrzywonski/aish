@@ -7,8 +7,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"ai-ssh/internal/debugcli"
 	"ai-ssh/internal/framing"
@@ -77,6 +80,8 @@ func runMain(args []string) int {
 		shell = "/bin/sh"
 	}
 
+	sweepStaleSessions()
+
 	id := session.NewID()
 	dir := paths.SessionDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -142,10 +147,42 @@ func runMain(args []string) int {
 		}
 	}()
 
+	// The deferred cleanup only runs on a normal return; make external
+	// termination (window closed → SIGHUP, kill) clean up too.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sig
+		mux.CloseAll()
+		os.RemoveAll(dir)
+		os.Exit(1)
+	}()
+
 	code, err := sess.Run()
 	mux.CloseAll()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "aish:", err)
 	}
 	return code
+}
+
+// sweepStaleSessions removes runtime dirs of sessions whose MCP socket no
+// longer answers (left behind by SIGKILL or a crash).
+func sweepStaleSessions() {
+	entries, err := os.ReadDir(paths.Base())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sock := paths.Socket(e.Name())
+		conn, err := net.Dial("unix", sock)
+		if err == nil {
+			conn.Close()
+			continue
+		}
+		os.RemoveAll(paths.SessionDir(e.Name()))
+	}
 }
