@@ -55,7 +55,7 @@ Debug/poke without an AI:
 
 | Tool | What it does |
 |---|---|
-| `run_command` | Run a command in the shared terminal; exact output + exit code (OSC 133 framing locally, invisible sentinel fallback inside remotes) |
+| `run_command` | Run a command in the shared terminal; exact output + exit code with OSC 133 framing (integrated shells), or output-only via idle detection on shells without integration (nothing extra is ever typed) |
 | `send_input` / `send_keys` | Raw typing / named keys (ctrl_c, arrows, F-keys) |
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
@@ -85,8 +85,10 @@ off entirely. Hosts without a usable channel degrade to in-band operation
 through the shared terminal (marked `via: "in_band"` in results).
 
 Shell integration (OSC 133/7) is injected via `--rcfile` (bash) / `ZDOTDIR`
-(zsh), sourcing your own rc first. Unsupported shells still work — command
-framing just falls back to the sentinel strategy.
+(zsh), sourcing your own rc first. Shells without integration (plain
+remotes, fish) still work: `run_command` types the command bare and infers
+completion from output quiescence — no exit code on that path, and add the
+aish snippet to the remote's shell rc if you want exact framing there.
 
 Session runtime state lives in `$XDG_RUNTIME_DIR/aish/<session-id>/` and is
 removed on exit; ControlPersist reaps orphaned masters within 60s even after

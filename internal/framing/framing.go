@@ -5,9 +5,15 @@
 // Strategies, in preference order:
 //   - osc133: the current shell has aish integration; capture between the
 //     C (pre-exec) and D (done) marks. Exact.
-//   - sentinel: no integration in the current context (e.g. plain remote
-//     shell). Append an invisible OSC-7979 printf carrying a nonce and $?.
-//     Assumes a POSIX shell at a prompt.
+//   - idle: no integration in the current context (e.g. plain remote
+//     shell). The command is typed bare — nothing extra appears in the
+//     shared terminal — and completion is inferred from output quiescence.
+//     No exit code is available on this path.
+//
+// RunSentinel (OSC-7979 nonce wrapper) still exists for internal in-band
+// file/exec fallbacks that need exit codes and exact boundaries, but it is
+// no longer used for user-visible run_command: the echoed wrapper text on
+// remote shells was deemed too intrusive.
 package framing
 
 import (
@@ -16,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"ai-ssh/internal/session"
@@ -57,7 +64,47 @@ func (e *Engine) Run(command string, timeout time.Duration) (*Result, error) {
 	if e.Tracker.PromptReady() {
 		return e.runOSC133(command, timeout)
 	}
-	return e.runSentinel(command, timeout)
+	return e.runIdle(command, timeout)
+}
+
+// runIdle types the command bare and waits for the output stream to go
+// quiet. Trade-offs: no exit code, a minimum latency of idleQuiet, and
+// commands that pause longer than idleQuiet mid-run are reported complete
+// with partial output (the rest remains readable via read_output).
+func (e *Engine) runIdle(command string, timeout time.Duration) (*Result, error) {
+	const idleQuiet = 1200 * time.Millisecond
+
+	echoStart := e.Term.Ring.End()
+	if _, err := e.Sess.WriteInput([]byte(command + "\r")); err != nil {
+		return nil, err
+	}
+
+	deadline := time.Now().Add(timeout)
+	timedOut := false
+	for {
+		last := time.Unix(0, e.Sess.LastOutputNanos())
+		quiet := time.Since(last)
+		// Only count quiescence after the injection produced some output.
+		if e.Term.Ring.End() > echoStart && quiet >= idleQuiet {
+			break
+		}
+		if time.Now().After(deadline) {
+			timedOut = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	res := e.window(afterEcho(e.Term, echoStart), e.Term.Ring.End(), "idle")
+	res.TimedOut = timedOut
+	// The remote prompt has usually been printed by the time we go idle; it
+	// is the unterminated last line, so drop it.
+	if i := strings.LastIndexByte(res.Output, '\n'); i >= 0 {
+		res.Output = res.Output[:i+1]
+	} else if !timedOut {
+		res.Output = ""
+	}
+	return res, nil
 }
 
 func (e *Engine) runOSC133(command string, timeout time.Duration) (*Result, error) {
@@ -102,7 +149,14 @@ func (e *Engine) runOSC133(command string, timeout time.Duration) (*Result, erro
 	}
 }
 
-func (e *Engine) runSentinel(command string, timeout time.Duration) (*Result, error) {
+// RunSentinel wraps the command with an invisible OSC-7979 printf carrying
+// a nonce and $?, giving exact completion detection and an exit code on
+// shells without integration. The wrapper is visible as echoed text on the
+// remote, so this is reserved for internal in-band fallback operations.
+func (e *Engine) RunSentinel(command string, timeout time.Duration) (*Result, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	nb := make([]byte, 6)
 	rand.Read(nb)
 	nonce := hex.EncodeToString(nb)

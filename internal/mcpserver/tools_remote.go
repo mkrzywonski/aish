@@ -155,7 +155,7 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 			max = maxInBand
 		}
 		cmd := fmt.Sprintf("tail -c +%d %s | head -c %d | base64", args.Offset+1, sshmux.Quote(args.Path), max+1)
-		res, err := c.Engine.Run(cmd, 30*time.Second)
+		res, err := c.Engine.RunSentinel(cmd, 30*time.Second)
 		if err != nil {
 			return nil, fileReadResult{}, err
 		}
@@ -256,7 +256,7 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		if args.Mode != "" {
 			cmd += fmt.Sprintf(" && chmod %s %s", args.Mode, sshmux.Quote(args.Path))
 		}
-		res, err := c.Engine.Run(cmd, 30*time.Second)
+		res, err := c.Engine.RunSentinel(cmd, 30*time.Second)
 		if err != nil {
 			return nil, fileWriteResult{}, err
 		}
@@ -334,7 +334,7 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 		if args.Background {
 			return nil, execResult{}, errors.New("no out-of-band channel to the remote; run it in the shared terminal with run_command (e.g. with & for background)")
 		}
-		res, err := c.Engine.Run(args.Command, time.Duration(args.TimeoutMs)*time.Millisecond)
+		res, err := c.Engine.RunSentinel(args.Command, time.Duration(args.TimeoutMs)*time.Millisecond)
 		if err != nil {
 			return nil, execResult{}, err
 		}
