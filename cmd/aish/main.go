@@ -117,6 +117,9 @@ func runMain(args []string) int {
 	}
 
 	sess := session.New(id, argv, extraEnv)
+	titles := term.NewTitleMarker(os.Stdout)
+	sess.Stdout = titles
+	titles.Refresh() // badge the title immediately, before any shell output
 	trm := term.NewTerminal(24, 80)
 	sess.AddTap(trm)
 	sess.OnResize(func(rows, cols uint16) {
@@ -140,6 +143,7 @@ func runMain(args []string) int {
 	core := &mcpserver.Core{
 		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
 		Mux: mux, Tasks: sshmux.NewTable(), Version: version,
+		OnClients: func(n int) { titles.SetConnected(n > 0) },
 	}
 	go func() {
 		if err := mcpserver.Serve(ctx, core, sock); err != nil {

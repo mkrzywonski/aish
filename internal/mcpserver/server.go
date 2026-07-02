@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -27,6 +28,10 @@ type Core struct {
 	Mux     *sshmux.Mux
 	Tasks   *sshmux.Table
 	Version string
+
+	// OnClients, when set, is called with the number of connected MCP
+	// clients whenever it changes (drives the title-bar activity marker).
+	OnClients func(n int)
 }
 
 // Serve listens on socketPath until ctx is canceled. It removes any stale
@@ -47,6 +52,14 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 		l.Close()
 	}()
 
+	var clients atomic.Int64
+	notify := func(delta int64) {
+		n := clients.Add(delta)
+		if core.OnClients != nil {
+			core.OnClients(int(n))
+		}
+	}
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -55,6 +68,15 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 			}
 			return err
 		}
-		go server.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+		go func() {
+			ss, err := server.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+			if err != nil {
+				conn.Close()
+				return
+			}
+			notify(+1)
+			ss.Wait()
+			notify(-1)
+		}()
 	}
 }

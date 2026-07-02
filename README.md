@@ -65,6 +65,15 @@ Debug/poke without an AI:
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
 
+## Visual indicators
+
+Every aish session is visibly marked as shared:
+
+- **Prompt badge**: a magenta `⧉` prefixes your shell prompt (bash/zsh).
+- **Window title**: any title set by your shell — or by a remote host over
+  ssh — is rewritten to start with `⧉ `, and switches to `⧉⚡ ` while an MCP
+  client (an AI) is actually connected, reverting when it disconnects.
+
 ## How the ssh integration works
 
 Inside a session, a PATH shim makes `ssh` resolve to aish itself, which

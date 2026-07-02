@@ -29,6 +29,10 @@ type Session struct {
 	Cmd  *exec.Cmd
 	Ptmx *os.File
 
+	// Stdout is where the user-visible output goes (defaults to os.Stdout).
+	// runMain wraps it with term.TitleMarker to badge window titles.
+	Stdout io.Writer
+
 	inputMu sync.Mutex
 
 	tapsMu sync.RWMutex
@@ -142,12 +146,16 @@ func (s *Session) Run() (int, error) {
 
 	// Output pump: PTY -> real stdout + taps. Runs on the main goroutine so
 	// Run returns only after the final output is flushed.
+	stdout := s.Stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
 	buf := make([]byte, 32*1024)
 	for {
 		n, rerr := ptmx.Read(buf)
 		if n > 0 {
 			s.lastOutput.Store(nowNanos())
-			os.Stdout.Write(buf[:n])
+			stdout.Write(buf[:n])
 			s.tapsMu.RLock()
 			for _, t := range s.taps {
 				t.Write(buf[:n])

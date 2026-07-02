@@ -30,4 +30,12 @@ if [[ -n $AISH_SESSION && -z $AISH_INTEGRATED ]]; then
   autoload -Uz add-zsh-hook
   add-zsh-hook precmd __aish_precmd
   add-zsh-hook preexec __aish_preexec
+
+  # Visual badge: this prompt is shared with an AI. Insert after a leading
+  # newline so the badge sits on the prompt line itself.
+  if [[ $PS1 == $'\n'* ]]; then
+    PS1=$'\n'"%F{magenta}⧉%f ${PS1#$'\n'}"
+  else
+    PS1="%F{magenta}⧉%f $PS1"
+  fi
 fi

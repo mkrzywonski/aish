@@ -40,4 +40,11 @@ if [ -n "$AISH_SESSION" ] && [ -z "$AISH_INTEGRATED" ]; then
 
   PROMPT_COMMAND='__aish_prompt'${PROMPT_COMMAND:+";$PROMPT_COMMAND"}
   trap '__aish_preexec' DEBUG
+
+  # Visual badge: this prompt is shared with an AI. Insert after a leading
+  # \n (NixOS-style prompts) so the badge sits on the prompt line itself.
+  case "$PS1" in
+    "\n"*) PS1="\n\[\033[35m\]⧉\[\033[0m\] ${PS1#\\n}" ;;
+    *)     PS1="\[\033[35m\]⧉\[\033[0m\] $PS1" ;;
+  esac
 fi
