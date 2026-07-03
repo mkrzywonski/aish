@@ -23,9 +23,19 @@ AI comes along — no installation on the remote host, ever.
 
 ## Build
 
+Any Linux with Go ≥ 1.25 (from [go.dev](https://go.dev/dl/) if your distro's
+package is older) and an OpenSSH client:
+
 ```sh
-nix-shell -p go --run "go build -o aish ./cmd/aish"   # or just: go build -o aish ./cmd/aish
+go build -o aish ./cmd/aish
 ```
+
+On NixOS without Go on PATH: `nix-shell -p go --run "go build -o aish ./cmd/aish"`.
+
+Linux is the supported platform. On Windows 11, run aish inside WSL2 (a
+native port isn't viable: Windows OpenSSH lacks ControlMaster multiplexing
+and the PTY model differs). macOS currently doesn't compile (Linux-only
+termios and /proc usage) — port contributions welcome.
 
 ## Use
 
