@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -181,6 +182,31 @@ func runMain(args []string) int {
 		label = id
 	}
 	titles.SetLabel(label) // also badges the title immediately, before any shell output
+
+	// Ctrl-] opens the aish menu (currently: rename this session). The prompt
+	// badge re-reads the name file on the next prompt; SetLabel updates the
+	// window title immediately.
+	sess.SetMenu(func() {
+		choice, ok := sess.Prompt("aish menu — [r] rename session, Esc to cancel", "r", 30*time.Second)
+		if !ok || choice != 'r' {
+			return
+		}
+		newName, ok := sess.PromptLine("new session name:", 60*time.Second)
+		if !ok {
+			return
+		}
+		newName = strings.TrimSpace(newName)
+		if !paths.ValidName(newName) {
+			sess.Notify("invalid name (letters, digits, . _ -, max 32 chars, must start alphanumeric)")
+			return
+		}
+		if err := paths.WriteName(id, newName); err != nil {
+			sess.Notify("rename failed: %v", err)
+			return
+		}
+		titles.SetLabel(newName)
+		sess.Notify("session renamed to %q", newName)
+	})
 	trm := term.NewTerminal(24, 80)
 	sess.AddTap(trm)
 	sess.OnResize(func(rows, cols uint16) {

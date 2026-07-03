@@ -313,6 +313,16 @@ Every aish session is visibly marked as shared:
   ssh — is rewritten to start with `⧉<label> `, gaining a `⚡` while an MCP
   client (an AI) is actually connected, reverting when it disconnects.
 
+## The aish menu
+
+Press **`Ctrl-]`** at the shell to open the aish menu (the keypress is caught
+by aish and never reaches the shell). Currently it offers **rename this
+session** — press `r`, type a new name, Enter. The rename shows up in the
+prompt badge on the next prompt and in the window title immediately, and the
+session is thereafter selectable by the new name. `Esc` cancels the menu at
+any point. (This is the same rename the AI can do with `set_session_name`;
+the menu is for when you want to do it yourself.)
+
 ## How the ssh integration works
 
 Inside a session started with `--oob`, a PATH shim makes `ssh` resolve to

@@ -33,25 +33,31 @@ func (s *Session) Notify(format string, args ...any) {
 	fmt.Fprintf(os.Stdout, "\r\n%s🔒 aish%s %s\r\n", promptColor, promptReset, msg)
 }
 
-// Prompt shows question on the terminal and waits for the user to press one
-// of the accept keys (case-insensitive), returning the lowercased key. The
-// keypress is captured before the shell sees it. On timeout it returns
-// (0, false) so callers fail closed. accept must be lowercase.
-func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, bool) {
-	s.promptMu.Lock()
-	defer s.promptMu.Unlock()
-
-	ch := make(chan byte, 64)
+// beginCapture diverts stdin from the shell to a fresh channel and returns it
+// with a cleanup func. Callers hold promptMu.
+func (s *Session) beginCapture() (chan byte, func()) {
+	ch := make(chan byte, 256)
 	s.capMu.Lock()
 	s.capCh = ch
 	s.capMu.Unlock()
 	s.capturing.Store(true)
-	defer func() {
+	return ch, func() {
 		s.capturing.Store(false)
 		s.capMu.Lock()
 		s.capCh = nil
 		s.capMu.Unlock()
-	}()
+	}
+}
+
+// Prompt shows question on the terminal and waits for the user to press one
+// of the accept keys (case-insensitive), returning the lowercased key. The
+// keypress is captured before the shell sees it. Esc or timeout returns
+// (0, false) so callers fail closed. accept must be lowercase.
+func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, bool) {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	ch, done := s.beginCapture()
+	defer done()
 
 	// Hold output for the whole interaction so the frozen screen doesn't
 	// scroll under the prompt; draw the question.
@@ -63,6 +69,10 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 	for {
 		select {
 		case b := <-ch:
+			if b == 0x1b { // Esc cancels
+				fmt.Fprintf(os.Stdout, "(cancelled)\r\n")
+				return 0, false
+			}
 			lb := lower(b)
 			if strings.IndexByte(accept, lb) >= 0 {
 				fmt.Fprintf(os.Stdout, "%c\r\n", lb) // echo the choice
@@ -72,6 +82,47 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 		case <-deadline:
 			fmt.Fprintf(os.Stdout, "(timed out)\r\n")
 			return 0, false
+		}
+	}
+}
+
+// PromptLine shows question and reads a line the user types (echoed, with
+// backspace), returning it on Enter. Esc or timeout returns ("", false). The
+// typed bytes are captured before the shell sees them.
+func (s *Session) PromptLine(question string, timeout time.Duration) (string, bool) {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	ch, done := s.beginCapture()
+	defer done()
+
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	fmt.Fprintf(os.Stdout, "\r\n%s🔒 aish%s %s ", promptColor, promptReset, question)
+
+	var line []byte
+	deadline := time.After(timeout)
+	for {
+		select {
+		case b := <-ch:
+			switch {
+			case b == '\r' || b == '\n':
+				fmt.Fprint(os.Stdout, "\r\n")
+				return string(line), true
+			case b == 0x1b: // Esc cancels
+				fmt.Fprint(os.Stdout, "\r\n")
+				return "", false
+			case b == 0x7f || b == 0x08: // backspace
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+					fmt.Fprint(os.Stdout, "\b \b")
+				}
+			case b >= 0x20 && b < 0x7f: // printable
+				line = append(line, b)
+				fmt.Fprintf(os.Stdout, "%c", b)
+			}
+		case <-deadline:
+			fmt.Fprint(os.Stdout, "\r\n")
+			return "", false
 		}
 	}
 }
@@ -91,6 +142,20 @@ func (s *Session) deliverCaptured(p []byte) {
 		default: // prompt buffer full; drop excess typeahead
 		}
 	}
+}
+
+// menuTrigger returns the index of the menu key in p if a menu handler is
+// registered and the key is present, else -1.
+func (s *Session) menuTrigger(p []byte) int {
+	if s.onMenu == nil {
+		return -1
+	}
+	for i, b := range p {
+		if b == s.menuKey {
+			return i
+		}
+	}
+	return -1
 }
 
 func lower(b byte) byte {

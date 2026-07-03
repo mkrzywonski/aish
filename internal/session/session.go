@@ -51,6 +51,11 @@ type Session struct {
 	capMu     sync.Mutex
 	capCh     chan byte
 
+	// menuKey (default Ctrl-]) opened the aish menu when typed at the shell;
+	// onMenu runs the menu. Swallowed from the shell input when triggered.
+	menuKey byte
+	onMenu  func()
+
 	lastOutput atomic.Int64 // unix nanos of last PTY output
 	closed     atomic.Bool
 }
@@ -69,8 +74,12 @@ func NewID() string {
 func New(id string, argv []string, extraEnv []string) *Session {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), extraEnv...)
-	return &Session{ID: id, Cmd: cmd}
+	return &Session{ID: id, Cmd: cmd, menuKey: 0x1d} // Ctrl-]
 }
+
+// SetMenu registers the handler invoked when the user presses the aish menu
+// key (Ctrl-]) at the terminal. It runs on its own goroutine.
+func (s *Session) SetMenu(fn func()) { s.onMenu = fn }
 
 // AddTap registers an additional writer that receives every byte the PTY
 // emits. Taps must not block; slow consumers should buffer internally.
@@ -145,9 +154,17 @@ func (s *Session) Run() (int, error) {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
 				if s.capturing.Load() {
-					// A consent prompt is up: the keypress answers aish, not
-					// the shell.
+					// A prompt/menu is up: the keypress answers aish, not the
+					// shell.
 					s.deliverCaptured(buf[:n])
+				} else if i := s.menuTrigger(buf[:n]); i >= 0 {
+					// Swallow the menu key, forward the rest to the shell,
+					// open the menu on its own goroutine.
+					rest := append(append([]byte{}, buf[:i]...), buf[i+1:n]...)
+					if len(rest) > 0 {
+						s.WriteInput(rest)
+					}
+					go s.onMenu()
 				} else if _, werr := s.WriteInput(buf[:n]); werr != nil {
 					return
 				}
