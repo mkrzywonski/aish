@@ -38,8 +38,11 @@ Usage:
                       --no-auth skips the y/n prompt on each new client
                       connection (zero-friction; you won't be asked)
   aish sessions       list live sessions (id, name)
-  aish mcp-proxy [--session <id|name>]
-                      stdio<->socket MCP proxy for AI agents
+  aish install [claude|codex|all]
+                      register the aish MCP server with an AI TUI (default: all found)
+  aish uninstall [claude|codex|all]
+                      remove the aish MCP server from an AI TUI
+  aish mcp-proxy      stdio<->socket MCP proxy for AI agents (run by the TUI)
   aish client [--session <id|name>] <tool> [json-args]
                       call an MCP tool on a running session (debug)
   aish version
@@ -66,6 +69,10 @@ func main() {
 		os.Exit(runMain(args))
 	case "sessions":
 		os.Exit(sessionsMain())
+	case "install":
+		os.Exit(installMain(args))
+	case "uninstall":
+		os.Exit(uninstallMain(args))
 	case "mcp-proxy":
 		os.Exit(proxy.Main(version, args))
 	case "client":

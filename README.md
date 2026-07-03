@@ -123,13 +123,21 @@ process tracking uses `/proc`. Port contributions welcome.
 ./aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
-Register the MCP server with Claude Code once (any directory):
+Register the MCP server with your AI TUI once — aish does it for you (it
+shells out to the tool's own `mcp add`, so you don't have to remember the
+syntax):
 
 ```sh
-claude mcp add aish -- /path/to/aish mcp-proxy
+aish install            # register with every AI TUI found (Claude Code, Codex)
+aish install claude     # ... or just one
+aish uninstall          # remove it again
 ```
 
-Then run `claude` in another window and ask it to run commands.
+`install` registers the server as `aish mcp-proxy` at user/global scope (so
+it's available in every project), replacing any previous entry. Then run
+`claude` (or `codex`) in another window and ask it to work in a session.
+
+Equivalent by hand, if you prefer: `claude mcp add aish --scope user -- aish mcp-proxy`.
 
 **The AI can reach every live session**: every tool accepts a `session`
 argument (id or name) to run that call in another session; `session_status`
