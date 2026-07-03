@@ -29,11 +29,13 @@ import (
 const usage = `aish — AI-shareable terminal
 
 Usage:
-  aish [run] [--name <name>] [--oob]
+  aish [run] [--name <name>] [--oob] [--no-auth]
                       start a shared shell session (default)
                       --oob authorizes out-of-band (invisible) file/exec
                       operations; without it every AI action goes through
                       the shared terminal where you can see it
+                      --no-auth skips the y/n prompt on each new client
+                      connection (zero-friction; you won't be asked)
   aish sessions       list live sessions (id, name)
   aish mcp-proxy [--session <id|name>]
                       stdio<->socket MCP proxy for AI agents
@@ -80,6 +82,7 @@ func main() {
 func runMain(args []string) int {
 	var name string
 	var oob bool
+	var noAuth bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--name":
@@ -91,6 +94,8 @@ func runMain(args []string) int {
 			i++
 		case "--oob":
 			oob = true
+		case "--no-auth":
+			noAuth = true
 		default:
 			fmt.Fprintf(os.Stderr, "aish: unknown option %q\n%s", args[i], usage)
 			return 2
@@ -198,7 +203,7 @@ func runMain(args []string) int {
 	defer cancel()
 	core := &mcpserver.Core{
 		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
-		Mux: mux, Tasks: sshmux.NewTable(), Version: version, Token: token,
+		Mux: mux, Tasks: sshmux.NewTable(), Version: version, Token: token, NoAuth: noAuth,
 		OnClients: func(n int) { titles.SetConnected(n > 0) },
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}

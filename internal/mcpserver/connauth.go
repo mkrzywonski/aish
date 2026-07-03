@@ -2,30 +2,33 @@ package mcpserver
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Connection authorization: a newly connected MCP client cannot drive the
-// session until it proves it is operated by someone who can see this
-// terminal. On the first gated tool call, aish displays a 6-digit code in
-// the terminal (out of band from the shell); the user reads it to the AI,
-// which submits it via the authorize tool. Internal same-uid clients
-// (cross-session forwarding, the debug CLI) present the session token
-// instead, so they never spam the terminal.
+// session until the user approves it with a y/n prompt in the terminal (out
+// of band from the shell — see session/console.go). This is a consent and
+// awareness control, not a defense against same-uid code: the socket lives
+// in a 0700 dir, so only same-uid processes can connect at all, and a
+// hostile same-uid process is out of scope (it can already read your files
+// and scrape your tty). What this guarantees is that YOU are aware of, and
+// approved, every client that takes control of the session.
 //
-// The challenge is displayed lazily (first denied call), not on connect, so
-// token-authenticating internal clients stay silent.
+// Internal same-uid helpers (cross-session forwarding, the debug CLI) present
+// the per-session token via the authorize tool and are never prompted.
+//
+// --no-auth (Core.NoAuth) disables the prompt for a zero-friction session.
 
 type connAuth struct {
-	code   string
-	shown  bool
+	mu     sync.Mutex
 	authed bool
+	denied bool // explicit "no"; sticky so a client can't re-prompt-spam you
 }
 
 func (c *Core) connState(ss *mcp.ServerSession) *connAuth {
@@ -33,7 +36,7 @@ func (c *Core) connState(ss *mcp.ServerSession) *connAuth {
 	defer c.authMu.Unlock()
 	st := c.conns[ss]
 	if st == nil {
-		st = &connAuth{code: gen6()}
+		st = &connAuth{}
 		c.conns[ss] = st
 	}
 	return st
@@ -45,14 +48,14 @@ func (c *Core) forgetConn(ss *mcp.ServerSession) {
 	c.authMu.Unlock()
 }
 
-// connAuthMiddleware gates tools/call until the connection is authorized.
+// connAuthMiddleware gates tools/call until the user approves the connection.
 // Non-tool methods (initialize, tools/list, notifications) pass through so a
-// client can discover the authorize tool; the authorize call itself is never
-// gated.
+// client can complete its handshake; the authorize call (internal token
+// path) is never gated.
 func connAuthMiddleware(c *Core) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			if method != "tools/call" {
+			if c.NoAuth || method != "tools/call" {
 				return next(ctx, method, req)
 			}
 			params, ok := req.GetParams().(*mcp.CallToolParamsRaw)
@@ -63,38 +66,53 @@ func connAuthMiddleware(c *Core) mcp.Middleware {
 			if ss == nil {
 				return next(ctx, method, req)
 			}
-			st := c.connState(ss)
-			c.authMu.Lock()
-			authed := st.authed
-			c.authMu.Unlock()
-			if authed {
-				return next(ctx, method, req)
+			if err := c.ensureApproved(ss); err != nil {
+				res := &mcp.CallToolResult{}
+				res.SetError(err)
+				return res, nil
 			}
-			c.presentChallenge(st)
-			res := &mcp.CallToolResult{}
-			res.SetError(errors.New("this aish session requires authorization: a 6-digit code is displayed in the user's terminal — ask the user to read it to you, then call authorize with it"))
-			return res, nil
+			return next(ctx, method, req)
 		}
 	}
 }
 
-// presentChallenge shows the connection's code in the terminal once.
-func (c *Core) presentChallenge(st *connAuth) {
-	c.authMu.Lock()
-	if st.shown {
-		c.authMu.Unlock()
-		return
+// ensureApproved returns nil once the connection is approved, prompting the
+// user y/n on first use. The per-connection lock collapses concurrent first
+// calls into a single prompt.
+func (c *Core) ensureApproved(ss *mcp.ServerSession) error {
+	st := c.connState(ss)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.authed {
+		return nil
 	}
-	st.shown = true
-	code := st.code
-	c.authMu.Unlock()
-	c.Sess.Notify("an AI client wants to control this session. To allow it, give it this code: %s", code)
+	if st.denied {
+		return errors.New("the user denied this client access to the session; reconnect to ask again")
+	}
+	ans, ok := c.Sess.Prompt(fmt.Sprintf("%s wants to control this session — allow?", clientName(ss)), "yn", 120*time.Second)
+	switch {
+	case ok && ans == 'y':
+		st.authed = true
+		return nil
+	case ok && ans == 'n':
+		st.denied = true
+		return errors.New("the user denied this client access to the session; reconnect to ask again")
+	default:
+		return errors.New("no response to the authorization prompt; ask the user to approve this client in their terminal, then retry")
+	}
 }
 
-// ---- authorize tool ----
+func clientName(ss *mcp.ServerSession) string {
+	if ip := ss.InitializeParams(); ip != nil && ip.ClientInfo != nil && ip.ClientInfo.Name != "" {
+		return "an AI client (" + ip.ClientInfo.Name + ")"
+	}
+	return "an AI client"
+}
+
+// ---- authorize tool (internal token path) ----
 
 type authorizeArgs struct {
-	Code string `json:"code" jsonschema:"the 6-digit code shown in the aish terminal (or the internal session token)"`
+	Token string `json:"token" jsonschema:"the internal per-session token (used by same-uid helpers to bypass the connection prompt)"`
 }
 
 type authorizeResult struct {
@@ -102,29 +120,17 @@ type authorizeResult struct {
 }
 
 func (c *Core) authorize(ctx context.Context, req *mcp.CallToolRequest, args authorizeArgs) (*mcp.CallToolResult, authorizeResult, error) {
-	ss := req.Session
-	st := c.connState(ss)
-	c.authMu.Lock()
-	want := st.code
-	c.authMu.Unlock()
-
-	if constEq(args.Code, want) || (c.Token != "" && constEq(args.Code, c.Token)) {
-		c.authMu.Lock()
-		st.authed = true
-		c.authMu.Unlock()
-		return nil, authorizeResult{Authorized: true}, nil
+	if c.Token == "" || !constEq(args.Token, c.Token) {
+		return nil, authorizeResult{}, errors.New("invalid token")
 	}
-	return nil, authorizeResult{}, errors.New("incorrect code")
+	st := c.connState(req.Session)
+	st.mu.Lock()
+	st.authed = true
+	st.denied = false
+	st.mu.Unlock()
+	return nil, authorizeResult{Authorized: true}, nil
 }
 
 func constEq(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
-// gen6 returns a random 6-digit code (leading zeros preserved).
-func gen6() string {
-	var b [8]byte
-	rand.Read(b[:])
-	n := binary.BigEndian.Uint64(b[:]) % 1000000
-	return fmt.Sprintf("%06d", n)
 }

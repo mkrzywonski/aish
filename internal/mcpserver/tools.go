@@ -74,9 +74,9 @@ func registerTools(s *mcp.Server, c *Core) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "authorize",
-		Description: "Unlock this aish session with the 6-digit code shown in the user's terminal. A new connection " +
-			"cannot use any other tool until authorized: ask the user to read you the code aish displayed, then call " +
-			"this with it. Only needed once per connection.",
+		Description: "Internal: same-uid helpers (cross-session forwarding, the debug CLI) present the per-session " +
+			"token to bypass the connection-approval prompt. AI clients don't call this — the user approves new " +
+			"connections with a y/n prompt in the terminal instead.",
 	}, c.authorize)
 }
 

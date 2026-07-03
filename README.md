@@ -165,7 +165,7 @@ Debug/poke without an AI:
 | `wait_idle` | Wait for output to go quiet |
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
-| `authorize` | Unlock a newly connected client with the 6-digit code shown in the terminal |
+| `authorize` | Internal token bypass for same-uid helpers; AI clients are approved via the terminal y/n prompt instead |
 
 Every tool also takes an optional `session` (id or name) to run the call in
 another live session on the machine; forwarded calls are executed by the
@@ -186,12 +186,16 @@ so nothing it asks lands at your prompt or in the scrollback — for two consent
 moments:
 
 - **New connections**: when an MCP client first tries to use a tool, aish
-  shows a 6-digit code in your terminal (`🔒 aish an AI client wants to control
-  this session. To allow it, give it this code: 123456`). Read it to the AI; it
-  calls `authorize` with the code. Until then the connection can call no other
-  tool. This stops any client that can't see your terminal from driving the
-  session. (Internal helpers — cross-session forwarding, the debug CLI —
-  authenticate with a per-session token file and never prompt.)
+  asks in your terminal `🔒 aish an AI client (claude-code) wants to control
+  this session — allow? [y/n]`, captured off your keystroke so nothing reaches
+  the shell. **y** approves the client for the connection; **n** denies it
+  (sticky — reconnect to be asked again); no answer fails closed. This is a
+  consent/awareness control so you always know which clients are driving the
+  session — not a defense against code already running as you (the socket is
+  `0700`, so only your own uid can connect at all; a hostile same-uid process
+  is out of scope). Start with `--no-auth` for a zero-friction session that
+  never prompts. (Internal helpers — cross-session forwarding, the debug CLI —
+  present a per-session token and never prompt.)
 - **Out-of-band access without `--oob`**: the first time the AI attempts an
   invisible file/exec operation, aish asks `… wants out-of-band (invisible)
   access on <host> — allow? [y/n/a]`, captured off your keystrokes so nothing

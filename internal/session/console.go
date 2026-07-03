@@ -100,16 +100,13 @@ func lower(b byte) byte {
 	return b
 }
 
-// keyHint renders accept keys as e.g. "y/n/a", capitalizing the first as the
-// conventional default indicator.
+// keyHint renders accept keys as e.g. "y/n/a". Kept neutral (no capitalized
+// default) because prompts fail closed on timeout regardless of any implied
+// default.
 func keyHint(accept string) string {
 	parts := make([]string, len(accept))
 	for i := 0; i < len(accept); i++ {
-		if i == 0 {
-			parts[i] = strings.ToUpper(string(accept[i]))
-		} else {
-			parts[i] = string(accept[i])
-		}
+		parts[i] = string(accept[i])
 	}
 	return strings.Join(parts, "/")
 }

@@ -68,7 +68,7 @@ func Main(version string, args []string) int {
 	// Authenticate with the session token (same dir as the socket) so the
 	// debug CLI isn't blocked by the interactive connection challenge.
 	if tok, terr := os.ReadFile(filepath.Join(filepath.Dir(sock), "token")); terr == nil {
-		if _, aerr := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"code": strings.TrimSpace(string(tok))}}); aerr != nil {
+		if _, aerr := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"token": strings.TrimSpace(string(tok))}}); aerr != nil {
 			fmt.Fprintln(os.Stderr, "aish client: authorize:", aerr)
 			return 1
 		}

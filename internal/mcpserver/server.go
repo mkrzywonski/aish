@@ -32,8 +32,13 @@ type Core struct {
 	Version string
 
 	// Token is the per-session secret that lets internal same-uid clients
-	// (cross-session forwarding, debug CLI) skip the connection challenge.
+	// (cross-session forwarding, debug CLI) skip the connection prompt.
 	Token string
+
+	// NoAuth disables the interactive connection-approval prompt (--no-auth):
+	// any client that connects can drive the session immediately. For
+	// zero-friction sessions where the user doesn't want to approve clients.
+	NoAuth bool
 
 	// oobAlways records a runtime "always" grant of out-of-band access (the
 	// 'a' answer). The persistent marker is the OOB file (also written), but

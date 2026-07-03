@@ -76,7 +76,7 @@ func (c *Core) callInSession(ctx context.Context, target, tool string, args map[
 	// Authenticate this internal connection with the target session's token
 	// so it isn't blocked by the connection challenge.
 	if tok := paths.ReadToken(info.ID); tok != "" {
-		if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"code": tok}}); err != nil {
+		if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"token": tok}}); err != nil {
 			return nil, fmt.Errorf("session %s: authorize: %v", info.Label(), err)
 		}
 	}
