@@ -45,9 +45,9 @@ if [[ -n $AISH_SESSION && -z $AISH_INTEGRATED ]]; then
     [[ $label == "$__aish_label" ]] && return 0
     __aish_label=$label
     if [[ $__aish_ps1_base == $'\n'* ]]; then
-      PS1=$'\n'"%F{magenta}⧉$__aish_label%f ${__aish_ps1_base#$'\n'}"
+      PS1=$'\n'"%F{magenta}$__aish_label⧉%f ${__aish_ps1_base#$'\n'}"
     else
-      PS1="%F{magenta}⧉$__aish_label%f $__aish_ps1_base"
+      PS1="%F{magenta}$__aish_label⧉%f $__aish_ps1_base"
     fi
   }
   __aish_badge

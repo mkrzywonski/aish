@@ -55,8 +55,8 @@ if [ -n "$AISH_SESSION" ] && [ -z "$AISH_INTEGRATED" ]; then
     [ "$label" = "$__aish_label" ] && return 0
     __aish_label=$label
     case "$__aish_ps1_base" in
-      "\n"*) PS1="\n\[\033[35m\]⧉$__aish_label\[\033[0m\] ${__aish_ps1_base#\\n}" ;;
-      *)     PS1="\[\033[35m\]⧉$__aish_label\[\033[0m\] $__aish_ps1_base" ;;
+      "\n"*) PS1="\n\[\033[35m\]$__aish_label⧉\[\033[0m\] ${__aish_ps1_base#\\n}" ;;
+      *)     PS1="\[\033[35m\]$__aish_label⧉\[\033[0m\] $__aish_ps1_base" ;;
     esac
   }
   __aish_badge
