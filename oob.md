@@ -163,15 +163,29 @@ Key property:
 
 Only one persistent extra SSH-backed channel would be added.
 
-## Open Question
+## Open Question — ANSWERED (2026-07-03)
 
-The critical unknown is whether this environment will allow:
+The critical unknown was whether this environment would allow:
 
 - one additional SSH session/channel to trigger Duo once
 - then continued activity over that same already-open channel without more pushes
 
-We confirmed that **new** channel opens trigger Duo.
-We have **not** yet proven whether a single persistent extra channel would stay quiet after its initial authorization.
+**Validated: yes.** Against a Duo-protected RHEL 8.10 host
+(per-channel push regime — a single OOB `exec` was confirmed to trigger
+a push), we opened one persistent channel over the existing master:
+
+```sh
+ssh -S <sock> -oControlMaster=no -oBatchMode=yes -p <port> -l <user> <host> 'sh -s' < fifo
+```
+
+and streamed four commands through its stdin over ~90 seconds, including
+a base64 file read (a working prototype of `file_read` over this
+transport). Result: **exactly one Duo push**, at channel open; every
+subsequent command executed silently with correct output and exit codes.
+
+The persistent-channel design is therefore viable on real Duo
+infrastructure: one authorization event per host per session, then an
+already-authorized OOB pathway.
 
 ## Recommended Direction
 
@@ -189,11 +203,17 @@ A stronger test would be an actual benign remote command probe over the mux path
 
 ### Long term
 
-Explore a persistent single-channel OOB design that:
+Build the persistent single-channel OOB design (now validated — see the
+answered open question above):
 
 - remains fully local in deployment model
 - installs nothing on remote hosts
 - minimizes MFA prompts by avoiding repeated SSH channel/session creation
+- one long-lived `sh -s` over the mux; sentinel-framed command RPC and
+  base64 file transfer over its stdin/stdout (the in-band engine already
+  implements both — this is that machinery pointed at a hidden channel)
+- open lazily on first OOB op; never reopen silently (a reopen costs a
+  push, so surface it)
 
 ## Practical Implication for Current Use
 
