@@ -27,36 +27,40 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "file_read",
 		Description: "Read a file from the host the shared session is currently on (remote when ssh'd, local otherwise). " +
-			"Out-of-band: does not disturb the interactive terminal when a multiplexed ssh channel is available; " +
-			"without one it falls back to typing through the shared terminal (visible to the user, size-limited). " +
+			"Out-of-band (invisible) when the session was started with aish --oob and a channel is available; " +
+			"otherwise it works by typing through the shared terminal (visible to the user, size-limited). " +
 			"Non-UTF-8 content is returned base64 (see encoding).",
 	}, c.fileRead)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "file_write",
 		Description: "Write (or append to) a file on the host the shared session is currently on. " +
-			"Content is UTF-8, or base64 with encoding=base64. Without a multiplexed ssh channel the fallback " +
-			"types base64 through the shared terminal (visible to the user) and is limited to 48KB.",
+			"Content is UTF-8, or base64 with encoding=base64. Out-of-band (invisible) only in sessions started " +
+			"with aish --oob; otherwise the write types base64 through the shared terminal (visible to the user) " +
+			"and is limited to 48KB.",
 	}, c.fileWrite)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "file_upload",
 		Description: "Copy a file from the local machine to the remote host of the current ssh session (multiplexed, no re-auth). " +
-			"Errors when the session is local or no multiplexed channel is available — use file_write then.",
+			"Errors when the session is local, was not started with aish --oob, or no multiplexed channel is available — " +
+			"use file_write then.",
 	}, c.fileUpload)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "file_download",
 		Description: "Copy a file from the remote host of the current ssh session to the local machine (multiplexed, no re-auth). " +
-			"Errors when the session is local or no multiplexed channel is available — use file_read then.",
+			"Errors when the session is local, was not started with aish --oob, or no multiplexed channel is available — " +
+			"use file_read then.",
 	}, c.fileDownload)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "exec",
-		Description: "Run a command out-of-band on the host the shared session is currently on — it does NOT appear in the " +
-			"shared terminal. Use background=true for long-running commands, then poll exec_status " +
-			"(background requires an out-of-band channel: local or controlmaster). " +
-			"For commands the user should see, use run_command instead.",
+		Description: "Run a command on the host the shared session is currently on. Invisible out-of-band execution " +
+			"requires the session to have been started with aish --oob (the user's authorization for hidden activity); " +
+			"otherwise the command runs in-band, visibly, through the shared terminal. Use background=true for " +
+			"long-running commands, then poll exec_status (background requires an out-of-band channel). " +
+			"For commands the user should see, prefer run_command.",
 	}, c.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -74,11 +78,13 @@ type route struct {
 
 func (c *Core) route() route {
 	if ci := c.Mux.Current(); ci != nil {
-		if c.Mux.SocketLive(ci) {
+		// The mux socket only exists when the session was started with
+		// --oob (the shim skips ControlMaster injection otherwise).
+		if c.OOB && c.Mux.SocketLive(ci) {
 			return route{via: "controlmaster", ci: ci, host: ci.Host}
 		}
-		// ssh is up but no usable master (user override, server refusal):
-		// fall back to typing through the shared terminal.
+		// ssh is up but no usable master (no --oob, user override, server
+		// refusal): fall back to typing through the shared terminal.
 		return route{via: "in_band", host: ci.Host}
 	}
 	// No shim-tracked ssh. If the foreground process is an ssh the shim
@@ -88,6 +94,11 @@ func (c *Core) route() route {
 	}
 	if h, _ := c.Tracker.Cwd(); h != "" && h != c.Tracker.LocalHost() {
 		return route{via: "in_band", host: h}
+	}
+	if !c.OOB {
+		// Local session without --oob: file/exec operations type through
+		// the shared terminal instead of acting invisibly on the fs.
+		return route{via: "in_band", host: "local"}
 	}
 	return route{via: "local", host: "local"}
 }
@@ -291,7 +302,7 @@ type transferResult struct {
 func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
 	rt := c.route()
 	if rt.via != "controlmaster" {
-		return nil, transferResult{}, errors.New("no multiplexed ssh channel (session is local or channel unavailable); use file_write instead")
+		return nil, transferResult{}, errors.New("no multiplexed ssh channel (session is local, not started with --oob, or channel unavailable); use file_write instead")
 	}
 	data, err := os.ReadFile(expandLocal(args.LocalPath))
 	if err != nil {
@@ -307,7 +318,7 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
 	rt := c.route()
 	if rt.via != "controlmaster" {
-		return nil, transferResult{}, errors.New("no multiplexed ssh channel (session is local or channel unavailable); use file_read instead")
+		return nil, transferResult{}, errors.New("no multiplexed ssh channel (session is local, not started with --oob, or channel unavailable); use file_read instead")
 	}
 	out, err := c.muxOutput(ctx, rt.ci, "cat "+sshmux.Quote(args.RemotePath), nil)
 	if err != nil {
@@ -342,7 +353,7 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 
 	if rt.via == "in_band" {
 		if args.Background {
-			return nil, execResult{}, errors.New("no out-of-band channel to the remote; run it in the shared terminal with run_command (e.g. with & for background)")
+			return nil, execResult{}, errors.New("no out-of-band channel (session not started with --oob, or none available); run it in the shared terminal with run_command (e.g. with & for background)")
 		}
 		res, err := c.Engine.RunSentinel(args.Command, time.Duration(args.TimeoutMs)*time.Millisecond)
 		if err != nil {

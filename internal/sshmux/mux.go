@@ -66,6 +66,9 @@ func pidIsSSH(pid int) bool {
 
 // SocketLive checks the master socket is up (ssh -O check).
 func (m *Mux) SocketLive(ci *ConnInfo) bool {
+	if ci.Sock == "" { // connection tracked without multiplexing (no --oob)
+		return false
+	}
 	if _, err := os.Stat(ci.Sock); err != nil {
 		return false
 	}
@@ -101,7 +104,7 @@ func (m *Mux) CloseAll() {
 			continue
 		}
 		var ci ConnInfo
-		if json.Unmarshal(b, &ci) != nil || seen[ci.Sock] {
+		if json.Unmarshal(b, &ci) != nil || ci.Sock == "" || seen[ci.Sock] {
 			continue
 		}
 		seen[ci.Sock] = true

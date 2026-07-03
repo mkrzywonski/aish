@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"ai-ssh/internal/debugcli"
 	"ai-ssh/internal/framing"
@@ -28,8 +29,11 @@ import (
 const usage = `aish — AI-shareable terminal
 
 Usage:
-  aish [run] [--name <name>]
+  aish [run] [--name <name>] [--oob]
                       start a shared shell session (default)
+                      --oob authorizes out-of-band (invisible) file/exec
+                      operations; without it every AI action goes through
+                      the shared terminal where you can see it
   aish sessions       list live sessions (id, name)
   aish mcp-proxy [--session <id|name>]
                       stdio<->socket MCP proxy for AI agents
@@ -75,6 +79,7 @@ func main() {
 
 func runMain(args []string) int {
 	var name string
+	var oob bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--name":
@@ -84,6 +89,8 @@ func runMain(args []string) int {
 			}
 			name = args[i+1]
 			i++
+		case "--oob":
+			oob = true
 		default:
 			fmt.Fprintf(os.Stderr, "aish: unknown option %q\n%s", args[i], usage)
 			return 2
@@ -132,6 +139,11 @@ func runMain(args []string) int {
 		"AISH_SOCKET=" + sock,
 		"AISH_DIR=" + dir,
 	}, shellEnv...)
+	if oob {
+		// Read by the ssh shim: ControlMaster injection only happens in
+		// sessions where the user authorized out-of-band operations.
+		extraEnv = append(extraEnv, "AISH_OOB=1")
+	}
 
 	// Install the ssh PATH shim: a symlink to this binary named "ssh",
 	// first on PATH inside the session, so every ssh invocation gains
@@ -177,7 +189,7 @@ func runMain(args []string) int {
 	defer cancel()
 	core := &mcpserver.Core{
 		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
-		Mux: mux, Tasks: sshmux.NewTable(), Version: version,
+		Mux: mux, Tasks: sshmux.NewTable(), Version: version, OOB: oob,
 		OnClients: func(n int) { titles.SetConnected(n > 0) },
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}
@@ -235,6 +247,14 @@ func sweepStaleSessions() {
 		if err == nil {
 			conn.Close()
 			continue
+		}
+		// No answering socket. If the socket file doesn't exist yet this may
+		// be a session that is starting up right now (dir created, listener
+		// not yet bound) — only sweep it once the dir is old enough.
+		if _, serr := os.Stat(sock); serr != nil {
+			if info, ierr := e.Info(); ierr == nil && time.Since(info.ModTime()) < time.Minute {
+				continue
+			}
 		}
 		os.RemoveAll(paths.SessionDir(e.Name()))
 	}

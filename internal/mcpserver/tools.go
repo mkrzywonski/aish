@@ -264,6 +264,7 @@ type sessionStatusResult struct {
 	Mode          string            `json:"mode"`
 	Host          string            `json:"host"`
 	OobVia        string            `json:"oob_via"`
+	OobEnabled    bool              `json:"oob_enabled"`
 	SSHUser       string            `json:"ssh_user,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
 	PromptReady   bool              `json:"prompt_ready"`
@@ -290,6 +291,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		Mode:        string(c.Tracker.Mode(snap.AltScreen)),
 		Host:        rt.host,
 		OobVia:      rt.via,
+		OobEnabled:  c.OOB,
 		SSHUser:     sshUser,
 		Cwd:         cwd,
 		PromptReady: c.Tracker.PromptReady(),

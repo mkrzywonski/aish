@@ -53,9 +53,18 @@ func ShimMain(args []string) int {
 		return execReplace(realSSH, args)
 	}
 
+	// ControlMaster multiplexing (the substrate for invisible out-of-band
+	// operations) is set up only when the user started the session with
+	// --oob. Without it we still record the connection event — sans socket —
+	// so the daemon knows which host the terminal is on for in-band routing.
+	oob := os.Getenv("AISH_OOB") == "1"
+
 	dir := paths.SessionDir(id)
-	sum := sha256.Sum256([]byte(user + "@" + host + ":" + port))
-	sock := filepath.Join(dir, fmt.Sprintf("cm-%x", sum[:8]))
+	var sock string
+	if oob {
+		sum := sha256.Sum256([]byte(user + "@" + host + ":" + port))
+		sock = filepath.Join(dir, fmt.Sprintf("cm-%x", sum[:8]))
+	}
 
 	evDir := filepath.Join(dir, "ssh")
 	if err := os.MkdirAll(evDir, 0o700); err == nil {
@@ -68,6 +77,9 @@ func ShimMain(args []string) int {
 		}
 	}
 
+	if !oob {
+		return execReplace(realSSH, args)
+	}
 	inject := []string{
 		"-oControlMaster=auto",
 		"-oControlPath=" + sock,

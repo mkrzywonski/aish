@@ -29,6 +29,12 @@ type Core struct {
 	Tasks   *sshmux.Table
 	Version string
 
+	// OOB reports whether the user started the session with --oob,
+	// authorizing invisible out-of-band file/exec operations. Without it,
+	// route() forces the in-band path: everything the AI does goes through
+	// the shared terminal where the user can see it.
+	OOB bool
+
 	// OnClients, when set, is called with the number of connected MCP
 	// clients whenever it changes (drives the title-bar activity marker).
 	OnClients func(n int)

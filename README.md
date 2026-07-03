@@ -14,12 +14,17 @@ AI comes along — no installation on the remote host, ever.
   prompts in the shared terminal, *you* type the password. Echo is off, so
   the password never enters anything the AI can read (and aish refuses to
   inject commands while a secret prompt is active).
-- **Shared visibility**: everything either of you runs is in one scrollback.
-  For genuinely invisible work there's an explicit out-of-band `exec` tool.
-- **Remote superpowers via ControlMaster**: `ssh` invoked inside the session
-  is transparently multiplexed. The AI gets file read/write and background
-  command execution on the remote over the already-authenticated connection
-  — without touching your interactive shell and without re-auth.
+- **Shared visibility, by default total**: everything either of you runs is
+  in one scrollback. Out of the box the AI *cannot* act invisibly — file and
+  exec tools work by typing through the shared terminal where you see them.
+- **Opt-in remote superpowers via ControlMaster** (`aish --oob`): `ssh`
+  invoked inside the session is transparently multiplexed. The AI gets
+  invisible file read/write and background command execution on the remote
+  over the already-authenticated connection — without touching your
+  interactive shell and without re-auth. Starting with `--oob` is your
+  explicit authorization for that behind-the-scenes activity (it also
+  avoids surprise MFA prompts on hosts where extra ssh channels re-trigger
+  Duo-style push authentication).
 
 ## Build
 
@@ -115,6 +120,7 @@ process tracking uses `/proc`. Port contributions welcome.
 ```sh
 ./aish                       # start a shared session (wraps your $SHELL)
 ./aish --name deploy-web     # ... with a meaningful name
+./aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
 Register the MCP server with Claude Code once (any directory):
@@ -163,6 +169,11 @@ Debug/poke without an AI:
 Every tool also takes an optional `session` (id or name) to run the call in
 another live session on the machine; forwarded calls are executed by the
 target session's own server, so its safety guards apply unchanged.
+
+Out-of-band (invisible) operation of `exec`/`file_*` requires the session to
+have been started with `--oob`; otherwise those tools run in-band — typed
+visibly through the shared terminal, size-capped — and `file_upload`/
+`file_download`/background `exec` refuse with guidance.
 | `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
@@ -180,9 +191,11 @@ Every aish session is visibly marked as shared:
 
 ## How the ssh integration works
 
-Inside a session, a PATH shim makes `ssh` resolve to aish itself, which
-injects `-oControlMaster=auto -oControlPath=<session>/cm-<hash>
--oControlPersist=60s` and execs the real ssh. Your interactive connection
+Inside a session started with `--oob`, a PATH shim makes `ssh` resolve to
+aish itself, which injects `-oControlMaster=auto
+-oControlPath=<session>/cm-<hash> -oControlPersist=60s` and execs the real
+ssh. (Without `--oob` the shim only records which host you're on and execs
+ssh untouched — no multiplexing, no extra channels.) Your interactive connection
 becomes the multiplexing master; file and exec tools open extra channels
 over it. If you pass your own `-S`/`-o Control*` options, the shim backs
 off entirely. Hosts without a usable channel degrade to in-band operation

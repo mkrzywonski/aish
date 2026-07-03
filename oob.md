@@ -1,5 +1,14 @@
 # OOB Behavior on MFA-Protected Hosts
 
+> **Status update:** the short-term recommendation below is implemented,
+> inverted to default-deny: OOB is now disabled unless the session is
+> started with `aish --oob`. Without it, `exec`/`file_*` run in-band
+> (visible in the shared terminal), upload/download and background exec
+> refuse, and the ssh shim doesn't inject ControlMaster at all — so no
+> extra channels exist to trigger MFA. The medium/long-term items
+> (consent-based OOB health probing, persistent single-channel OOB) remain
+> open.
+
 ## Problem
 
 `aish` was designed to let an AI work through a local shared terminal and follow the user into SSH sessions without installing AI tooling on every remote host.
