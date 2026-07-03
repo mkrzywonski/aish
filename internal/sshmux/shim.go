@@ -54,10 +54,13 @@ func ShimMain(args []string) int {
 	}
 
 	// ControlMaster multiplexing (the substrate for invisible out-of-band
-	// operations) is set up only when the user started the session with
-	// --oob. Without it we still record the connection event — sans socket —
-	// so the daemon knows which host the terminal is on for in-band routing.
-	oob := os.Getenv("AISH_OOB") == "1"
+	// operations) is set up only when out-of-band access is authorized for
+	// the session — via `aish --oob` or a runtime "always" grant, both of
+	// which write the OOB marker file (checked here, not a frozen env var,
+	// so a mid-session grant reaches later ssh invocations). Without it we
+	// still record the connection event — sans socket — so the daemon knows
+	// which host the terminal is on for in-band routing.
+	oob := paths.OOBGranted(id)
 
 	dir := paths.SessionDir(id)
 	var sock string

@@ -8,11 +8,13 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ai-ssh/internal/framing"
+	"ai-ssh/internal/paths"
 	"ai-ssh/internal/session"
 	"ai-ssh/internal/sshmux"
 	"ai-ssh/internal/state"
@@ -29,11 +31,20 @@ type Core struct {
 	Tasks   *sshmux.Table
 	Version string
 
-	// OOB reports whether the user started the session with --oob,
-	// authorizing invisible out-of-band file/exec operations. Without it,
-	// route() forces the in-band path: everything the AI does goes through
-	// the shared terminal where the user can see it.
-	OOB bool
+	// Token is the per-session secret that lets internal same-uid clients
+	// (cross-session forwarding, debug CLI) skip the connection challenge.
+	Token string
+
+	// oobAlways records a runtime "always" grant of out-of-band access (the
+	// 'a' answer). The persistent marker is the OOB file (also written), but
+	// this avoids a stat on the hot path once granted in-process.
+	oobAlways atomic.Bool
+
+	// authMu guards conns: per-connection authorization state, so a new MCP
+	// client must present the 6-digit code shown in the terminal (or the
+	// internal token) before its tool calls are honored.
+	authMu sync.Mutex
+	conns  map[*mcp.ServerSession]*connAuth
 
 	// OnClients, when set, is called with the number of connected MCP
 	// clients whenever it changes (drives the title-bar activity marker).
@@ -45,6 +56,20 @@ type Core struct {
 	OnRenamed func(name string)
 }
 
+// oobGranted reports whether out-of-band (invisible) operations are
+// authorized for this session — by --oob, a persisted grant, or an
+// in-process "always" answer.
+func (c *Core) oobGranted() bool {
+	return c.oobAlways.Load() || paths.OOBGranted(c.Sess.ID)
+}
+
+// grantOOBAlways records a session-wide out-of-band authorization, both
+// in-process and persisted (so the ssh shim honors it for future ssh).
+func (c *Core) grantOOBAlways() {
+	c.oobAlways.Store(true)
+	_ = paths.GrantOOB(c.Sess.ID)
+}
+
 // Serve listens on socketPath until ctx is canceled. It removes any stale
 // socket first; callers own directory creation and cleanup.
 func Serve(ctx context.Context, core *Core, socketPath string) error {
@@ -54,10 +79,15 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 		return err
 	}
 
+	if core.conns == nil {
+		core.conns = map[*mcp.ServerSession]*connAuth{}
+	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)
 	registerRemoteTools(server, core)
-	server.AddReceivingMiddleware(crossSession(core))
+	// Outermost first: gate on connection authorization before anything
+	// else (including cross-session forwarding) runs.
+	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core))
 
 	go func() {
 		<-ctx.Done()
@@ -89,6 +119,7 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 			notify(+1)
 			ss.Wait()
 			notify(-1)
+			core.forgetConn(ss)
 		}()
 	}
 }

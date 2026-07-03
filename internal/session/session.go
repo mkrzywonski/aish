@@ -41,6 +41,16 @@ type Session struct {
 	resizeMu  sync.Mutex
 	resizeCbs []func(rows, cols uint16)
 
+	// Console (console.go): out-of-band interaction with the user that does
+	// not touch the PTY. outMu gates the output pump while a prompt is on
+	// screen; promptMu serializes prompts; capturing/capCh divert stdin from
+	// the shell to an active prompt.
+	outMu     sync.Mutex
+	promptMu  sync.Mutex
+	capturing atomic.Bool
+	capMu     sync.Mutex
+	capCh     chan byte
+
 	lastOutput atomic.Int64 // unix nanos of last PTY output
 	closed     atomic.Bool
 }
@@ -134,7 +144,11 @@ func (s *Session) Run() (int, error) {
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				if _, werr := s.WriteInput(buf[:n]); werr != nil {
+				if s.capturing.Load() {
+					// A consent prompt is up: the keypress answers aish, not
+					// the shell.
+					s.deliverCaptured(buf[:n])
+				} else if _, werr := s.WriteInput(buf[:n]); werr != nil {
 					return
 				}
 			}
@@ -155,7 +169,12 @@ func (s *Session) Run() (int, error) {
 		n, rerr := ptmx.Read(buf)
 		if n > 0 {
 			s.lastOutput.Store(nowNanos())
+			// outMu is held while a console prompt owns the screen, so shell
+			// output waits here and flushes after — never interleaving with
+			// the prompt.
+			s.outMu.Lock()
 			stdout.Write(buf[:n])
+			s.outMu.Unlock()
 			s.tapsMu.RLock()
 			for _, t := range s.taps {
 				t.Write(buf[:n])

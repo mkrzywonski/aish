@@ -128,6 +128,20 @@ func runMain(args []string) int {
 		}
 	}
 
+	// Per-session token for internal same-uid clients (cross-session
+	// forwarding, debug CLI) to bypass the interactive connection challenge.
+	token := session.NewID() + session.NewID() // 16 random hex bytes
+	if err := os.WriteFile(paths.TokenFile(id), []byte(token), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "aish:", err)
+		return 1
+	}
+	if oob {
+		if err := paths.GrantOOB(id); err != nil {
+			fmt.Fprintln(os.Stderr, "aish:", err)
+			return 1
+		}
+	}
+
 	argv, shellEnv, err := shellintegration.Setup(shell, dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "aish: shell integration disabled: %v\n", err)
@@ -139,11 +153,6 @@ func runMain(args []string) int {
 		"AISH_SOCKET=" + sock,
 		"AISH_DIR=" + dir,
 	}, shellEnv...)
-	if oob {
-		// Read by the ssh shim: ControlMaster injection only happens in
-		// sessions where the user authorized out-of-band operations.
-		extraEnv = append(extraEnv, "AISH_OOB=1")
-	}
 
 	// Install the ssh PATH shim: a symlink to this binary named "ssh",
 	// first on PATH inside the session, so every ssh invocation gains
@@ -189,7 +198,7 @@ func runMain(args []string) int {
 	defer cancel()
 	core := &mcpserver.Core{
 		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
-		Mux: mux, Tasks: sshmux.NewTable(), Version: version, OOB: oob,
+		Mux: mux, Tasks: sshmux.NewTable(), Version: version, Token: token,
 		OnClients: func(n int) { titles.SetConnected(n > 0) },
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}

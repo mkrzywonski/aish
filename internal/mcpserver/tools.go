@@ -71,6 +71,13 @@ func registerTools(s *mcp.Server, c *Core) {
 			"The name appears in the user's prompt badge and window title and selects the session in multi-session " +
 			"setups, so set it once the session's purpose is clear. Short kebab-case; letters, digits, . _ -, max 32 chars.",
 	}, c.setSessionName)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "authorize",
+		Description: "Unlock this aish session with the 6-digit code shown in the user's terminal. A new connection " +
+			"cannot use any other tool until authorized: ask the user to read you the code aish displayed, then call " +
+			"this with it. Only needed once per connection.",
+	}, c.authorize)
 }
 
 // ---- run_command ----
@@ -280,7 +287,7 @@ type sessionStatusResult struct {
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
 	snap := c.Term.Screen.Snapshot()
 	_, cwd := c.Tracker.Cwd()
-	rt := c.route()
+	rt := c.capability()
 	var sshUser string
 	if rt.ci != nil {
 		sshUser = rt.ci.User
@@ -291,7 +298,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		Mode:        string(c.Tracker.Mode(snap.AltScreen)),
 		Host:        rt.host,
 		OobVia:      rt.via,
-		OobEnabled:  c.OOB,
+		OobEnabled:  c.oobGranted(),
 		SSHUser:     sshUser,
 		Cwd:         cwd,
 		PromptReady: c.Tracker.PromptReady(),

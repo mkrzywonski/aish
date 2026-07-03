@@ -76,15 +76,18 @@ type route struct {
 	host string
 }
 
-func (c *Core) route() route {
+// capability reports where an out-of-band operation COULD go, ignoring
+// authorization policy: the live ControlMaster channel when the user is
+// ssh'd somewhere with multiplexing up, the local machine when the session
+// is local, and the interactive terminal (in_band) for remotes with no
+// usable master. It never prompts — session_status and route() both use it.
+func (c *Core) capability() route {
 	if ci := c.Mux.Current(); ci != nil {
-		// The mux socket only exists when the session was started with
-		// --oob (the shim skips ControlMaster injection otherwise).
-		if c.OOB && c.Mux.SocketLive(ci) {
+		if c.Mux.SocketLive(ci) {
 			return route{via: "controlmaster", ci: ci, host: ci.Host}
 		}
-		// ssh is up but no usable master (no --oob, user override, server
-		// refusal): fall back to typing through the shared terminal.
+		// ssh is up but no usable master (not authorized at connect, user
+		// override, server refusal): typing through the shared terminal.
 		return route{via: "in_band", host: ci.Host}
 	}
 	// No shim-tracked ssh. If the foreground process is an ssh the shim
@@ -95,12 +98,44 @@ func (c *Core) route() route {
 	if h, _ := c.Tracker.Cwd(); h != "" && h != c.Tracker.LocalHost() {
 		return route{via: "in_band", host: h}
 	}
-	if !c.OOB {
-		// Local session without --oob: file/exec operations type through
-		// the shared terminal instead of acting invisibly on the fs.
-		return route{via: "in_band", host: "local"}
-	}
 	return route{via: "local", host: "local"}
+}
+
+// route resolves where an actual file/exec operation goes, applying the
+// out-of-band authorization policy. in_band (visible) is always allowed. An
+// OOB-capable path (controlmaster/local) is used directly when OOB is
+// granted; otherwise the user is asked y/n/a in the terminal — yes allows
+// this op, always grants the session, no (or timeout) downgrades to the
+// visible in-band path. This is the only routing entry point that may block
+// on a prompt, so only real operations call it (never session_status).
+func (c *Core) route() route {
+	cap := c.capability()
+	if cap.via == "in_band" || c.oobGranted() {
+		return cap
+	}
+	ans, ok := c.Sess.Prompt(
+		fmt.Sprintf("the AI wants out-of-band (invisible) access on %s — allow?", cap.host),
+		"yna", 120*time.Second)
+	switch {
+	case ok && ans == 'a':
+		c.grantOOBAlways()
+		c.Sess.Notify("out-of-band access granted for this session.")
+		return cap
+	case ok && ans == 'y':
+		return cap
+	default:
+		// no / timeout: do it visibly through the shared terminal instead.
+		return c.downgrade(cap)
+	}
+}
+
+// downgrade turns an OOB-capable route into its visible in-band equivalent
+// (used when the user declines out-of-band access).
+func (c *Core) downgrade(cap route) route {
+	if cap.via == "controlmaster" {
+		return route{via: "in_band", ci: cap.ci, host: cap.host}
+	}
+	return route{via: "in_band", host: "local"}
 }
 
 const (

@@ -165,6 +165,7 @@ Debug/poke without an AI:
 | `wait_idle` | Wait for output to go quiet |
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
+| `authorize` | Unlock a newly connected client with the 6-digit code shown in the terminal |
 
 Every tool also takes an optional `session` (id or name) to run the call in
 another live session on the machine; forwarded calls are executed by the
@@ -177,6 +178,27 @@ visibly through the shared terminal, size-capped — and `file_upload`/
 | `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
+
+## Authorization
+
+aish talks to you directly through the terminal — out of band from the shell,
+so nothing it asks lands at your prompt or in the scrollback — for two consent
+moments:
+
+- **New connections**: when an MCP client first tries to use a tool, aish
+  shows a 6-digit code in your terminal (`🔒 aish an AI client wants to control
+  this session. To allow it, give it this code: 123456`). Read it to the AI; it
+  calls `authorize` with the code. Until then the connection can call no other
+  tool. This stops any client that can't see your terminal from driving the
+  session. (Internal helpers — cross-session forwarding, the debug CLI —
+  authenticate with a per-session token file and never prompt.)
+- **Out-of-band access without `--oob`**: the first time the AI attempts an
+  invisible file/exec operation, aish asks `… wants out-of-band (invisible)
+  access on <host> — allow? [y/n/a]`, captured off your keystrokes so nothing
+  reaches the shell. **y** allows that one operation, **a** grants it for the
+  rest of the session (and lets future `ssh` multiplex), **n** (or a timeout)
+  does it visibly in the shared terminal instead. Starting with `--oob`
+  pre-authorizes everything and suppresses this prompt.
 
 ## Visual indicators
 

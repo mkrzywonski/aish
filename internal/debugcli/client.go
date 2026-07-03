@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -62,6 +64,15 @@ func Main(version string, args []string) int {
 		return 1
 	}
 	defer cs.Close()
+
+	// Authenticate with the session token (same dir as the socket) so the
+	// debug CLI isn't blocked by the interactive connection challenge.
+	if tok, terr := os.ReadFile(filepath.Join(filepath.Dir(sock), "token")); terr == nil {
+		if _, aerr := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"code": strings.TrimSpace(string(tok))}}); aerr != nil {
+			fmt.Fprintln(os.Stderr, "aish client: authorize:", aerr)
+			return 1
+		}
+	}
 
 	if list {
 		res, err := cs.ListTools(ctx, nil)
