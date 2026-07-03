@@ -165,6 +165,9 @@ Debug/poke without an AI:
 | `wait_idle` | Wait for output to go quiet |
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
+| `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
+| `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
+| `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
 | `authorize` | Internal token bypass for same-uid helpers; AI clients are approved via the terminal y/n prompt instead |
 
 Every tool also takes an optional `session` (id or name) to run the call in
@@ -174,35 +177,130 @@ target session's own server, so its safety guards apply unchanged.
 Out-of-band (invisible) operation of `exec`/`file_*` requires the session to
 have been started with `--oob`; otherwise those tools run in-band — typed
 visibly through the shared terminal, size-capped — and `file_upload`/
-`file_download`/background `exec` refuse with guidance.
-| `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
-| `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
-| `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
+`file_download`/background `exec` refuse with guidance. See
+[Security](#security).
 
-## Authorization
+## Security
 
-aish talks to you directly through the terminal — out of band from the shell,
-so nothing it asks lands at your prompt or in the scrollback — for two consent
-moments:
+### Threat model
 
-- **New connections**: when an MCP client first tries to use a tool, aish
-  asks in your terminal `🔒 aish an AI client (claude-code) wants to control
-  this session — allow? [y/n]`, captured off your keystroke so nothing reaches
-  the shell. **y** approves the client for the connection; **n** denies it
-  (sticky — reconnect to be asked again); no answer fails closed. This is a
-  consent/awareness control so you always know which clients are driving the
-  session — not a defense against code already running as you (the socket is
-  `0700`, so only your own uid can connect at all; a hostile same-uid process
-  is out of scope). Start with `--no-auth` for a zero-friction session that
-  never prompts. (Internal helpers — cross-session forwarding, the debug CLI —
-  present a per-session token and never prompt.)
-- **Out-of-band access without `--oob`**: the first time the AI attempts an
-  invisible file/exec operation, aish asks `… wants out-of-band (invisible)
-  access on <host> — allow? [y/n/a]`, captured off your keystrokes so nothing
-  reaches the shell. **y** allows that one operation, **a** grants it for the
-  rest of the session (and lets future `ssh` multiplex), **n** (or a timeout)
-  does it visibly in the shared terminal instead. Starting with `--oob`
-  pre-authorizes everything and suppresses this prompt.
+aish's job is to keep the AI's activity **visible and consented** and to keep
+untrusted *network* actors out — not to sandbox code that is already running
+as you.
+
+- **In scope.** Untrusted code with no local foothold — above all a malicious
+  web page running JavaScript/WASM in your browser, the one place untrusted
+  code executes on your machine routinely. Also: accidental or unintended
+  clients (a misconfigured MCP client, attaching to the wrong session), and
+  keeping every AI action either visible in the shared terminal or explicitly
+  authorized.
+- **Out of scope.** Any code already executing under your uid. If an attacker
+  can run commands as you, they can read your files, `ptrace` your shell, and
+  scrape your terminal directly — your shared tty is the least of your
+  worries, and no in-process control could stop them. aish does not pretend
+  to defend against this.
+
+**The load-bearing decision is the transport.** aish's MCP endpoint is a
+**Unix-domain socket** under `$XDG_RUNTIME_DIR/aish/<id>/` (mode `0700`), not
+a TCP port. That single choice is what excludes the browser: JavaScript has
+no API that can open a Unix socket — `fetch`, `WebSocket`, `WebRTC`, and
+`WebTransport` all speak TCP/UDP to host:port and nothing else. A page cannot
+reach the socket, full stop. The `0700` directory additionally blocks other
+local users, so the only party that can even connect is your own uid.
+
+> **Corollary — never bind a TCP port.** If aish ever exposed MCP over
+> localhost TCP/HTTP/WebSocket, a malicious page could reach it via DNS
+> rebinding / CORS attacks — and because MCP calls have side effects (running
+> commands), even *write-only* access with no readable response would be
+> catastrophic. Remote access, if ever wanted, must be an SSH-forwarded Unix
+> socket, not a bound port. Likewise, nothing a browser can talk to (a
+> localhost HTTP relay, a browser extension with native messaging) should be
+> able to talk to the aish socket.
+
+Everything below is layered *on top of* that transport boundary. Because the
+only connecting party is already same-uid, the connection and OOB prompts are
+**consent and awareness controls** — they ensure you know about and approved
+what the AI does — rather than hard boundaries against a hostile local
+process.
+
+### How aish asks you
+
+aish talks to you directly through the terminal — writing to your screen and
+reading your keypress **out of band from the shell**, so nothing it asks ever
+lands at your prompt or in the scrollback, and the shell never sees the
+keystroke that answers. (This is the one sanctioned exception to aish's
+byte-transparency, alongside the window-title marker.)
+
+### MCP connection authorization
+
+When an MCP client first tries to use a tool, aish asks in your terminal:
+
+```
+🔒 aish an AI client (claude-code) wants to control this session — allow? [y/n]
+```
+
+- **y** approves that client for the life of the connection.
+- **n** denies it — sticky, so a client can't re-prompt-spam you; reconnect to
+  be asked again.
+- **No answer** fails closed (denied).
+
+The prompt names the connecting client (from its MCP `clientInfo`) so you know
+what's asking. This guarantees you're aware of every client driving the
+session and prevents accidental attachments; it is *not* a barrier against
+same-uid code (which is out of scope, above).
+
+- **`--no-auth`** starts a session that never prompts — zero friction when you
+  don't want to approve each connection.
+- **Internal helpers** — cross-session forwarding and the debug CLI (`aish
+  client`) — authenticate with a per-session token file (`token`, `0600`, in
+  the session dir) and are never prompted. The token is same-uid convenience,
+  not a security control: any process that could read it could already do
+  worse.
+
+### Out-of-band operation authorization
+
+By default the AI **cannot act invisibly**. `file_read`/`file_write`/`exec`
+work by typing through the shared terminal, visibly, where you watch them
+happen; `file_upload`/`file_download` and background `exec` (which have no
+visible form) simply refuse. No ControlMaster multiplexing is set up at all,
+so no hidden channel to a remote host even exists.
+
+Out-of-band (invisible) operation is opt-in, two ways:
+
+- **`aish --oob`** authorizes it up front for the whole session — you've
+  decided this session may act behind the scenes, so nothing prompts.
+- **Interactive grant.** In a session *without* `--oob`, the first time the AI
+  attempts an out-of-band-capable operation aish asks:
+
+  ```
+  🔒 aish the AI wants out-of-band (invisible) access on <host> — allow? [y/n/a]
+  ```
+
+  **y** allows that one operation; **a** grants it for the rest of the session
+  (and enables ControlMaster for future `ssh`, so remote work multiplexes);
+  **n** or a timeout does the operation *visibly* through the shared terminal
+  instead. The grant is remembered so you're not re-asked once you've said
+  **a**.
+
+Beyond visibility, `--oob` also has an MFA benefit: aish routes all remote OOB
+work through **one persistent ssh channel** per host (see
+[How the ssh integration works](#how-the-ssh-integration-works)). On hosts
+where each new ssh session re-triggers a Duo-style push, that means a single
+push per host per session instead of one per operation — and aish never
+silently reopens a dropped channel (which would cost another push); it tells
+you, and your retry is the consent.
+
+### What's protected, concretely
+
+- **Your password** never reaches the AI: `sudo`/ssh password prompts turn
+  terminal echo off, aish detects that and refuses to inject `run_command`
+  while it's active, and echo-off input never enters the scrollback the AI can
+  read.
+- **The AI's visibility is the default.** Invisible file/exec activity
+  requires `--oob` or an explicit y/n/a grant; without it, everything is in
+  the one shared scrollback.
+- **You approve every client** (unless `--no-auth`), and the approval is
+  per-connection.
 
 ## Visual indicators
 
