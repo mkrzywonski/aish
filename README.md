@@ -323,6 +323,11 @@ session is thereafter selectable by the new name. `Esc` cancels the menu at
 any point. (This is the same rename the AI can do with `set_session_name`;
 the menu is for when you want to do it yourself.)
 
+When a session is renamed — by you or the AI — the proxy notices the change
+and tells the AI on its next tool call (a notice riding the result, plus an
+MCP log message), so it doesn't keep addressing a session by a name that has
+moved. Session **ids** never change, so routing by id is always stable.
+
 ## How the ssh integration works
 
 Inside a session started with `--oob`, a PATH shim makes `ssh` resolve to

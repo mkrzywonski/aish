@@ -26,19 +26,19 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const proxyVersion = "aish-proxy"
-
 type aggProxy struct {
-	client *mcp.Client
+	client  *mcp.Client
+	frontSS *mcp.ServerSession // the connection to the AI client, for log notices
 
-	mu    sync.Mutex
-	conns map[string]*pooledConn // by session id
+	mu        sync.Mutex
+	conns     map[string]*pooledConn // by session id
+	lastNames map[string]string      // last-seen name per session id, for rename detection
 }
 
 type pooledConn struct {
@@ -49,8 +49,9 @@ type pooledConn struct {
 // Serve runs the aggregating proxy over stdio until the client disconnects.
 func Serve(version string) int {
 	p := &aggProxy{
-		client: mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
-		conns:  map[string]*pooledConn{},
+		client:    mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
+		conns:     map[string]*pooledConn{},
+		lastNames: map[string]string{},
 	}
 	ctx := context.Background()
 
@@ -85,6 +86,7 @@ func Serve(version string) int {
 		fmt.Fprintln(os.Stderr, "aish mcp-proxy:", err)
 		return 1
 	}
+	p.frontSS = ss
 	ss.Wait()
 	p.closeAll()
 	return 0
@@ -107,21 +109,67 @@ func (p *aggProxy) forward(ctx context.Context, tool string, req *mcp.CallToolRe
 
 	info, err := p.resolve(target)
 	if err != nil {
-		return toolError("%v", err), nil
+		// Annotate so a lookup that failed *because* of a rename carries the
+		// explanation, not just "no such session".
+		return p.annotate(ctx, toolError("%v", err)), nil
 	}
 
 	cs, err := p.conn(ctx, info)
 	if err != nil {
-		return toolError("connecting to session %s: %v", info.Label(), err), nil
+		return p.annotate(ctx, toolError("connecting to session %s: %v", info.Label(), err)), nil
 	}
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		// Connection likely died with the session; drop it and report so the
 		// AI can re-list and retry.
 		p.drop(info.ID)
-		return toolError("session %s: %v", info.Label(), err), nil
+		return p.annotate(ctx, toolError("session %s: %v", info.Label(), err)), nil
 	}
-	return res, nil
+	return p.annotate(ctx, res), nil
+}
+
+// renameNotices reports sessions whose name changed since the proxy last
+// observed them, and refreshes the record. This is how the AI learns a
+// session was renamed out from under the name it's been using.
+func (p *aggProxy) renameNotices() []string {
+	live := List()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var notices []string
+	cur := make(map[string]string, len(live))
+	for _, s := range live {
+		cur[s.ID] = s.Name
+		if old, seen := p.lastNames[s.ID]; seen && old != s.Name {
+			notices = append(notices, fmt.Sprintf("session %s was renamed %s → %q", s.ID, quoteName(old), s.Name))
+		}
+	}
+	p.lastNames = cur
+	return notices
+}
+
+func quoteName(n string) string {
+	if n == "" {
+		return "(unnamed)"
+	}
+	return fmt.Sprintf("%q", n)
+}
+
+// annotate prepends a rename notice to a result (the channel the model
+// reliably sees) and also emits a logging notification.
+func (p *aggProxy) annotate(ctx context.Context, res *mcp.CallToolResult) *mcp.CallToolResult {
+	notices := p.renameNotices()
+	if len(notices) == 0 {
+		return res
+	}
+	msg := "aish notice — " + strings.Join(notices, "; ") + ". Names may have moved between sessions; call list_sessions to reorient before acting."
+	if res == nil {
+		res = &mcp.CallToolResult{}
+	}
+	res.Content = append([]mcp.Content{&mcp.TextContent{Text: msg}}, res.Content...)
+	if p.frontSS != nil {
+		_ = p.frontSS.Log(ctx, &mcp.LoggingMessageParams{Level: "warning", Logger: "aish", Data: msg})
+	}
+	return res
 }
 
 // resolve picks the target session: the named one, or the sole live session
@@ -201,6 +249,9 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	for _, s := range List() {
 		out.Sessions = append(out.Sessions, sessionEntry{ID: s.ID, Name: s.Name})
 	}
+	// Refresh the rename baseline so list_sessions establishes ground truth
+	// without also flagging its own results (the AI is already looking here).
+	p.renameNotices()
 	return nil, out, nil
 }
 
@@ -284,5 +335,3 @@ func toolError(format string, args ...any) *mcp.CallToolResult {
 	res.SetError(fmt.Errorf(format, args...))
 	return res
 }
-
-var _ = time.Second // reserved for future pool health checks
