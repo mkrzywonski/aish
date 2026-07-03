@@ -23,19 +23,70 @@ AI comes along — no installation on the remote host, ever.
 
 ## Build
 
-Any Linux with Go ≥ 1.25 (from [go.dev](https://go.dev/dl/) if your distro's
-package is older) and an OpenSSH client:
+### Prerequisites
+
+- **Go ≥ 1.25** — build-time only. Distro packages are often older than
+  this; when in doubt install from [go.dev/dl](https://go.dev/dl/).
+- **git** — to clone this repo.
+- **OpenSSH client** (`ssh`) — runtime, for the ControlMaster remote
+  features. Already present on virtually every Linux.
+- **bash or zsh** as your shell for OSC 133 integration (other shells work
+  with degraded output framing).
+
+### Debian / Ubuntu
 
 ```sh
+sudo apt install git openssh-client
+
+# Go from go.dev (apt's golang-go is usually too old):
+curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin   # add to ~/.profile to persist
+
+git clone https://github.com/mkrzywonski/aish.git
+cd aish
 go build -o aish ./cmd/aish
 ```
 
-On NixOS without Go on PATH: `nix-shell -p go --run "go build -o aish ./cmd/aish"`.
+### Fedora / Arch
 
-Linux is the supported platform. On Windows 11, run aish inside WSL2 (a
-native port isn't viable: Windows OpenSSH lacks ControlMaster multiplexing
-and the PTY model differs). macOS currently doesn't compile (Linux-only
-termios and /proc usage) — port contributions welcome.
+Both ship a current Go:
+
+```sh
+sudo dnf install golang git openssh-clients   # Fedora
+sudo pacman -S go git openssh                 # Arch
+
+git clone https://github.com/mkrzywonski/aish.git
+cd aish
+go build -o aish ./cmd/aish
+```
+
+### NixOS
+
+```sh
+git clone https://github.com/mkrzywonski/aish.git
+cd aish
+nix-shell -p go --run "go build -o aish ./cmd/aish"
+```
+
+### Windows 11 — via WSL2
+
+aish requires a Unix PTY and OpenSSH ControlMaster multiplexing, neither of
+which exists natively on Windows, so run it inside WSL2:
+
+```powershell
+wsl --install -d Ubuntu   # once, then reboot / open Ubuntu
+```
+
+Inside the Ubuntu shell, follow the Debian/Ubuntu steps above. Windows
+Terminal gives you tabs/titles, and `ssh` from WSL reaches the same hosts.
+Your MCP client (e.g. Claude Code) must also run inside WSL to reach the
+session's Unix socket.
+
+### macOS
+
+Not yet supported: the build fails on Linux-only termios constants, and
+process tracking uses `/proc`. Port contributions welcome.
 
 ## Use
 
