@@ -125,12 +125,15 @@ claude mcp add aish -- /path/to/aish mcp-proxy
 
 Then run `claude` in another window and ask it to run commands.
 
-With one session live, the proxy finds it automatically. With several, it
-refuses to guess: pick one per Claude launch with `AISH_SESSION=<id|name>
-claude`, or pin `--session <id|name>` in the proxy args. Each session has an
-immutable short id and an optional mutable name (`--name` at start, or the
-AI names it via `set_session_name`); both are shown in the prompt badge and
-accepted anywhere a session is selected.
+**The AI can reach every live session**: every tool accepts a `session`
+argument (id or name) to run that call in another session; `session_status`
+lists the others. The proxy attaches to one session by default — the most
+recently active, or pick explicitly with `AISH_SESSION=<id|name> claude` or
+`--session <id|name>` in the proxy args — but attachment is just the
+default target, not a boundary. Each session has an immutable short id and
+an optional mutable name (`--name` at start, or the AI names it via
+`set_session_name`); both are shown in the prompt badge and accepted
+anywhere a session is selected.
 
 ```sh
 ./aish sessions              # list live sessions: id, name
@@ -156,6 +159,10 @@ Debug/poke without an AI:
 | `wait_idle` | Wait for output to go quiet |
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
+
+Every tool also takes an optional `session` (id or name) to run the call in
+another live session on the machine; forwarded calls are executed by the
+target session's own server, so its safety guards apply unchanged.
 | `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |

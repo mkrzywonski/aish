@@ -61,7 +61,8 @@ func registerTools(s *mcp.Server, c *Core) {
 		Name: "session_status",
 		Description: "Get the status of the shared terminal session: current host and out-of-band route (local/controlmaster/in_band), " +
 			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
-			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions on this machine.",
+			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
+			"on this machine. Every tool accepts a session argument to run against one of those other sessions instead.",
 	}, c.sessionStatus)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -75,6 +76,7 @@ func registerTools(s *mcp.Server, c *Core) {
 // ---- run_command ----
 
 type runCommandArgs struct {
+	SessionArg
 	Command   string `json:"command" jsonschema:"the shell command line to run"`
 	TimeoutMs int    `json:"timeout_ms,omitempty" jsonschema:"give up waiting after this long (default 30000); the command keeps running"`
 }
@@ -90,6 +92,7 @@ func (c *Core) runCommand(ctx context.Context, req *mcp.CallToolRequest, args ru
 // ---- send_input ----
 
 type sendInputArgs struct {
+	SessionArg
 	Text string `json:"text" jsonschema:"the exact bytes to type into the terminal"`
 }
 
@@ -108,6 +111,7 @@ func (c *Core) sendInput(ctx context.Context, req *mcp.CallToolRequest, args sen
 // ---- send_keys ----
 
 type sendKeysArgs struct {
+	SessionArg
 	Keys []string `json:"keys" jsonschema:"named keys to press, in order"`
 }
 
@@ -155,6 +159,7 @@ func (c *Core) sendKeys(ctx context.Context, req *mcp.CallToolRequest, args send
 // ---- read_screen ----
 
 type readScreenArgs struct {
+	SessionArg
 	Raw bool `json:"raw,omitempty" jsonschema:"reserved; plain text is always returned currently"`
 }
 
@@ -165,6 +170,7 @@ func (c *Core) readScreen(ctx context.Context, req *mcp.CallToolRequest, args re
 // ---- read_output ----
 
 type readOutputArgs struct {
+	SessionArg
 	Cursor   *int64 `json:"cursor,omitempty" jsonschema:"absolute stream offset to read from; omit for the most recent output"`
 	MaxBytes int    `json:"max_bytes,omitempty" jsonschema:"maximum bytes to return (default 65536)"`
 	Raw      bool   `json:"raw,omitempty" jsonschema:"return verbatim bytes including escape sequences"`
@@ -195,6 +201,7 @@ func (c *Core) readOutput(ctx context.Context, req *mcp.CallToolRequest, args re
 // ---- wait_idle ----
 
 type waitIdleArgs struct {
+	SessionArg
 	IdleMs    int `json:"idle_ms,omitempty" jsonschema:"quiet period that counts as idle (default 1500)"`
 	TimeoutMs int `json:"timeout_ms,omitempty" jsonschema:"give up after this long (default 30000)"`
 }
@@ -241,7 +248,9 @@ func (c *Core) waitIdle(ctx context.Context, req *mcp.CallToolRequest, args wait
 
 // ---- session_status ----
 
-type sessionStatusArgs struct{}
+type sessionStatusArgs struct {
+	SessionArg
+}
 
 type sessionRef struct {
 	ID   string `json:"id"`
@@ -310,6 +319,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 // ---- set_session_name ----
 
 type setSessionNameArgs struct {
+	SessionArg
 	Name string `json:"name" jsonschema:"the new session name"`
 }
 

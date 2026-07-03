@@ -101,6 +101,7 @@ const (
 // ---- file_read ----
 
 type fileReadArgs struct {
+	SessionArg
 	Path     string `json:"path" jsonschema:"absolute or ~-relative path on the current host"`
 	MaxBytes int    `json:"max_bytes,omitempty" jsonschema:"cap returned content (default 262144)"`
 	Offset   int64  `json:"offset,omitempty" jsonschema:"byte offset to start reading from"`
@@ -188,6 +189,7 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 // ---- file_write ----
 
 type fileWriteArgs struct {
+	SessionArg
 	Path     string `json:"path"`
 	Content  string `json:"content"`
 	Encoding string `json:"encoding,omitempty" jsonschema:"utf8 (default) or base64"`
@@ -276,6 +278,7 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 // ---- file_upload / file_download ----
 
 type transferArgs struct {
+	SessionArg
 	LocalPath  string `json:"local_path"`
 	RemotePath string `json:"remote_path"`
 }
@@ -319,6 +322,7 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 // ---- exec / exec_status ----
 
 type execArgs struct {
+	SessionArg
 	Command    string `json:"command"`
 	Background bool   `json:"background,omitempty"`
 	TimeoutMs  int    `json:"timeout_ms,omitempty" jsonschema:"foreground only; default 30000"`
@@ -384,6 +388,7 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 }
 
 type execStatusArgs struct {
+	SessionArg
 	TaskID string `json:"task_id"`
 	Cursor *int64 `json:"cursor,omitempty" jsonschema:"pass next_cursor from the previous poll"`
 }

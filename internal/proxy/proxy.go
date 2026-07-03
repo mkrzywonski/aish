@@ -17,9 +17,10 @@ import (
 
 // SessionInfo describes one live session found on this machine.
 type SessionInfo struct {
-	ID   string
-	Name string // "" when unnamed
-	Sock string
+	ID    string
+	Name  string // "" when unnamed
+	Sock  string
+	MTime int64 // session dir mtime, unix nanos
 }
 
 // Label renders the session for user-facing listings.
@@ -48,17 +49,51 @@ func List() []SessionInfo {
 			os.Remove(sock)
 			continue
 		}
-		live = append(live, SessionInfo{ID: e.Name(), Name: paths.ReadName(e.Name()), Sock: sock})
+		info, _ := e.Info()
+		var mt int64
+		if info != nil {
+			mt = info.ModTime().UnixNano()
+		}
+		live = append(live, SessionInfo{ID: e.Name(), Name: paths.ReadName(e.Name()), Sock: sock, MTime: mt})
 	}
 	sort.Slice(live, func(i, j int) bool { return live[i].ID < live[j].ID })
 	return live
 }
 
+// Resolve picks the session matching target — exact id, unique name, or
+// unique id prefix — from live.
+func Resolve(target string, live []SessionInfo) (SessionInfo, error) {
+	var byName, byPrefix []SessionInfo
+	for _, s := range live {
+		if s.ID == target {
+			return s, nil
+		}
+		if s.Name != "" && s.Name == target {
+			byName = append(byName, s)
+		}
+		if strings.HasPrefix(s.ID, target) {
+			byPrefix = append(byPrefix, s)
+		}
+	}
+	switch {
+	case len(byName) == 1:
+		return byName[0], nil
+	case len(byName) > 1:
+		return SessionInfo{}, fmt.Errorf("several sessions are named %q: %s — use the id", target, labels(byName))
+	case len(byPrefix) == 1:
+		return byPrefix[0], nil
+	case len(byPrefix) > 1:
+		return SessionInfo{}, fmt.Errorf("session %q is ambiguous: %s", target, labels(byPrefix))
+	}
+	return SessionInfo{}, fmt.Errorf("no session matches %q; live sessions: %s", target, labels(live))
+}
+
 // Discover resolves the socket of the target session. target (from --session
 // or $AISH_SESSION) may be a session id, a session name, or a unique id
-// prefix. Without a target: $AISH_SOCKET (set inside aish sessions) wins,
-// then a scan — a single live session is used; several is an error listing
-// them, so callers are never silently attached to the wrong terminal.
+// prefix. Without a target: $AISH_SOCKET (set inside aish sessions) wins;
+// otherwise the most recently active live session is used. Attaching is not
+// exclusive: every other session stays reachable through the tools' session
+// argument, so a default pick is safe.
 func Discover(target string) (string, error) {
 	if target == "" {
 		if s := os.Getenv("AISH_SOCKET"); s != "" {
@@ -72,36 +107,20 @@ func Discover(target string) (string, error) {
 	}
 
 	if target == "" {
-		if len(live) == 1 {
-			return live[0].Sock, nil
+		newest := live[0]
+		for _, s := range live[1:] {
+			if s.MTime > newest.MTime {
+				newest = s
+			}
 		}
-		return "", fmt.Errorf("multiple aish sessions are live: %s — pick one with --session <id|name> or AISH_SESSION",
-			labels(live))
+		return newest.Sock, nil
 	}
 
-	var byName, byPrefix []SessionInfo
-	for _, s := range live {
-		if s.ID == target {
-			return s.Sock, nil
-		}
-		if s.Name != "" && s.Name == target {
-			byName = append(byName, s)
-		}
-		if strings.HasPrefix(s.ID, target) {
-			byPrefix = append(byPrefix, s)
-		}
+	s, err := Resolve(target, live)
+	if err != nil {
+		return "", err
 	}
-	switch {
-	case len(byName) == 1:
-		return byName[0].Sock, nil
-	case len(byName) > 1:
-		return "", fmt.Errorf("several sessions are named %q: %s — use the id", target, labels(byName))
-	case len(byPrefix) == 1:
-		return byPrefix[0].Sock, nil
-	case len(byPrefix) > 1:
-		return "", fmt.Errorf("session %q is ambiguous: %s", target, labels(byPrefix))
-	}
-	return "", fmt.Errorf("no session matches %q; live sessions: %s", target, labels(live))
+	return s.Sock, nil
 }
 
 func labels(ss []SessionInfo) string {

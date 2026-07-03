@@ -51,6 +51,7 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)
 	registerRemoteTools(server, core)
+	server.AddReceivingMiddleware(crossSession(core))
 
 	go func() {
 		<-ctx.Done()
