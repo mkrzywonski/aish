@@ -156,17 +156,22 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 		data = buf[:n]
 
 	case "controlmaster":
-		// tail -c +N | head -c M is portable across GNU/busybox/BSD.
-		cmd := fmt.Sprintf("tail -c +%d %s | head -c %d", args.Offset+1, sshmux.Quote(args.Path), max+1)
-		out, err := c.muxOutput(ctx, rt.ci, cmd, nil)
+		// Over the persistent channel; base64 keeps the line-oriented
+		// framing binary-safe. tail/head/base64 are portable.
+		cmd := fmt.Sprintf("tail -c +%d %s | head -c %d | base64", args.Offset+1, sshmux.Quote(args.Path), max+1)
+		out, err := c.channelOutput(rt.ci, cmd, 60*time.Second)
 		if err != nil {
 			return nil, fileReadResult{}, err
 		}
-		eof = len(out) <= max
-		if len(out) > max {
-			out = out[:max]
+		dec, derr := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(out)), ""))
+		if derr != nil {
+			return nil, fileReadResult{}, fmt.Errorf("oob channel read failed (output: %.200s)", out)
 		}
-		data = out
+		eof = len(dec) <= max
+		if len(dec) > max {
+			dec = dec[:max]
+		}
+		data = dec
 
 	case "in_band":
 		if max > maxInBand {
@@ -188,7 +193,11 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 		data = out
 	}
 
-	res := fileReadResult{Eof: eof, Via: rt.via, Host: rt.host}
+	via := rt.via
+	if via == "controlmaster" {
+		via = "channel" // shared persistent channel, not a fresh one per op
+	}
+	res := fileReadResult{Eof: eof, Via: via, Host: rt.host}
 	if utf8.Valid(data) {
 		res.Content, res.Encoding = string(data), "utf8"
 	} else {
@@ -250,16 +259,15 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		}
 
 	case "controlmaster":
-		redir := ">"
-		if args.Append {
-			redir = ">>"
-		}
-		cmd := fmt.Sprintf("cat %s %s", redir, sshmux.Quote(args.Path))
-		if args.Mode != "" {
-			cmd += fmt.Sprintf(" && chmod %s %s", args.Mode, sshmux.Quote(args.Path))
-		}
-		if _, err := c.muxOutput(ctx, rt.ci, cmd, data); err != nil {
+		res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.Path, data, args.Append, args.Mode), 60*time.Second)
+		if err != nil {
 			return nil, fileWriteResult{}, err
+		}
+		if res.TimedOut {
+			return nil, fileWriteResult{}, errors.New("oob channel write timed out")
+		}
+		if res.Exit != 0 {
+			return nil, fileWriteResult{}, fmt.Errorf("oob channel write failed: %.300s", res.Output)
 		}
 
 	case "in_band":
@@ -283,7 +291,11 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 			return nil, fileWriteResult{}, fmt.Errorf("in-band write failed: %.200s", res.Output)
 		}
 	}
-	return nil, fileWriteResult{BytesWritten: len(data), Via: rt.via, Host: rt.host}, nil
+	via := rt.via
+	if via == "controlmaster" {
+		via = "channel"
+	}
+	return nil, fileWriteResult{BytesWritten: len(data), Via: via, Host: rt.host}, nil
 }
 
 // ---- file_upload / file_download ----
@@ -308,9 +320,12 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 	if err != nil {
 		return nil, transferResult{}, err
 	}
-	cmd := fmt.Sprintf("cat > %s", sshmux.Quote(args.RemotePath))
-	if _, err := c.muxOutput(ctx, rt.ci, cmd, data); err != nil {
+	res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.RemotePath, data, false, ""), 120*time.Second)
+	if err != nil {
 		return nil, transferResult{}, err
+	}
+	if res.TimedOut || res.Exit != 0 {
+		return nil, transferResult{}, fmt.Errorf("oob channel upload failed: %.300s", res.Output)
 	}
 	return nil, transferResult{Bytes: int64(len(data)), Host: rt.host}, nil
 }
@@ -320,14 +335,18 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 	if rt.via != "controlmaster" {
 		return nil, transferResult{}, errors.New("no multiplexed ssh channel (session is local, not started with --oob, or channel unavailable); use file_read instead")
 	}
-	out, err := c.muxOutput(ctx, rt.ci, "cat "+sshmux.Quote(args.RemotePath), nil)
+	out, err := c.channelOutput(rt.ci, "base64 < "+sshmux.Quote(args.RemotePath), 120*time.Second)
 	if err != nil {
 		return nil, transferResult{}, err
 	}
-	if err := os.WriteFile(expandLocal(args.LocalPath), out, 0o644); err != nil {
+	dec, derr := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(out)), ""))
+	if derr != nil {
+		return nil, transferResult{}, fmt.Errorf("oob channel download failed (output: %.200s)", out)
+	}
+	if err := os.WriteFile(expandLocal(args.LocalPath), dec, 0o644); err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(len(out)), Host: rt.host}, nil
+	return nil, transferResult{Bytes: int64(len(dec)), Host: rt.host}, nil
 }
 
 // ---- exec / exec_status ----
@@ -363,12 +382,33 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	}
 
 	if args.Background {
+		// Long-running tasks need a concurrent stream, so they get a
+		// dedicated channel (one extra MFA push on strict hosts).
 		cmd := c.buildExec(context.Background(), rt, args.Command)
 		task, err := c.Tasks.Start(cmd)
 		if err != nil {
 			return nil, execResult{}, err
 		}
 		return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host}, nil
+	}
+
+	if rt.via == "controlmaster" {
+		timeout := time.Duration(args.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		cres, err := c.Mux.ChannelRun(rt.ci, "{ "+args.Command+"\n} </dev/null 2>&1", timeout)
+		if err != nil {
+			return nil, execResult{}, err
+		}
+		res := execResult{Via: "channel", Host: rt.host, Output: capString(cres.Output, execOutputCap)}
+		if cres.TimedOut {
+			res.TimedOut = true
+			return nil, res, nil
+		}
+		exit := cres.Exit
+		res.ExitCode = &exit
+		return nil, res, nil
 	}
 
 	timeout := time.Duration(args.TimeoutMs) * time.Millisecond
@@ -435,21 +475,20 @@ func (c *Core) buildExec(ctx context.Context, rt route, command string) *exec.Cm
 	return exec.CommandContext(ctx, "/bin/sh", "-c", command)
 }
 
-// muxOutput runs a remote command over the mux, feeding stdin, returning stdout.
-func (c *Core) muxOutput(ctx context.Context, ci *sshmux.ConnInfo, remoteCmd string, stdin []byte) ([]byte, error) {
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	cmd := c.Mux.Command(cctx, ci, remoteCmd)
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
+// channelOutput runs a read-type command over the persistent OOB channel
+// and returns its stdout (stderr merged; a nonzero exit surfaces it).
+func (c *Core) channelOutput(ci *sshmux.ConnInfo, remoteCmd string, timeout time.Duration) ([]byte, error) {
+	res, err := c.Mux.ChannelRun(ci, "{ "+remoteCmd+"\n} </dev/null 2>&1", timeout)
+	if err != nil {
+		return nil, err
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("remote command failed: %v: %.300s", err, errb.String())
+	if res.TimedOut {
+		return nil, errors.New("oob channel command timed out")
 	}
-	return out.Bytes(), nil
+	if res.Exit != 0 {
+		return nil, fmt.Errorf("remote command failed (exit %d): %.300s", res.Exit, res.Output)
+	}
+	return res.Output, nil
 }
 
 func expandLocal(p string) string {

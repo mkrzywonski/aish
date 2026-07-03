@@ -195,7 +195,18 @@ Inside a session started with `--oob`, a PATH shim makes `ssh` resolve to
 aish itself, which injects `-oControlMaster=auto
 -oControlPath=<session>/cm-<hash> -oControlPersist=60s` and execs the real
 ssh. (Without `--oob` the shim only records which host you're on and execs
-ssh untouched — no multiplexing, no extra channels.) Your interactive connection
+ssh untouched — no multiplexing, no extra channels.)
+
+Remote OOB operations share **one persistent channel** per remote: a
+long-lived `sh -s` opened lazily over the master on the first OOB op, with
+all foreground `exec` and `file_*` traffic streamed through it
+(sentinel-framed, base64 for binary; results say `via: "channel"`). On
+hosts where each new ssh channel re-triggers MFA (Duo-style per-session
+push), this costs exactly one push per host per session instead of one per
+operation. A lost channel is never reopened silently: the failed call says
+so, and your retry is the consent for the (possibly push-triggering)
+reopen. Background `exec` tasks need a concurrent stream and use a
+dedicated channel each. Your interactive connection
 becomes the multiplexing master; file and exec tools open extra channels
 over it. If you pass your own `-S`/`-o Control*` options, the shim backs
 off entirely. Hosts without a usable channel degrade to in-band operation

@@ -5,9 +5,15 @@
 > started with `aish --oob`. Without it, `exec`/`file_*` run in-band
 > (visible in the shared terminal), upload/download and background exec
 > refuse, and the ssh shim doesn't inject ControlMaster at all — so no
-> extra channels exist to trigger MFA. The medium/long-term items
-> (consent-based OOB health probing, persistent single-channel OOB) remain
-> open.
+> extra channels exist to trigger MFA.
+>
+> **The long-term design is also implemented** (`sshmux/channel.go`): with
+> `--oob`, remote foreground exec and file operations share one persistent
+> `sh -s` channel per remote, opened lazily on the first OOB op — one MFA
+> push per host per session. Lost channels are never reopened silently; the
+> retry after the error is the consent. Background exec uses a dedicated
+> channel (concurrent stream). Remaining open item: consent-based OOB
+> health probing (medium term).
 
 ## Problem
 

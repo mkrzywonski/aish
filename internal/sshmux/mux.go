@@ -11,11 +11,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type Mux struct {
 	dir     string // session runtime dir
 	realSSH string
+
+	chMu     sync.Mutex
+	channels map[string]*channel // persistent OOB channels, keyed by master socket
 }
 
 func New(sessionDir string) *Mux {
@@ -23,7 +27,7 @@ func New(sessionDir string) *Mux {
 	if err != nil {
 		realSSH = "ssh"
 	}
-	return &Mux{dir: sessionDir, realSSH: realSSH}
+	return &Mux{dir: sessionDir, realSSH: realSSH, channels: map[string]*channel{}}
 }
 
 // Current returns the most recently started still-live ssh connection, or
@@ -92,6 +96,7 @@ func (m *Mux) Command(ctx context.Context, ci *ConnInfo, remoteCmd string) *exec
 // CloseAll asks every known master to exit (used at session teardown;
 // ControlPersist would reap them within 60s anyway).
 func (m *Mux) CloseAll() {
+	m.closeChannels()
 	evDir := filepath.Join(m.dir, "ssh")
 	entries, err := os.ReadDir(evDir)
 	if err != nil {
