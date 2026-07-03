@@ -32,6 +32,11 @@ type Core struct {
 	// OnClients, when set, is called with the number of connected MCP
 	// clients whenever it changes (drives the title-bar activity marker).
 	OnClients func(n int)
+
+	// OnRenamed, when set, is called after set_session_name persists a new
+	// name (drives the title-bar label; the prompt badge re-reads the name
+	// file on its own).
+	OnRenamed func(name string)
 }
 
 // Serve listens on socketPath until ctx is canceled. It removes any stale

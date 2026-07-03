@@ -9,58 +9,107 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"sort"
+	"strings"
 
 	"ai-ssh/internal/paths"
 )
 
-// Discover resolves the socket of the target session. Order: explicit id,
-// $AISH_SOCKET (set inside aish sessions), $AISH_SESSION, then scanning for
-// live sockets — a single live one wins; with several, the most recently
-// modified session dir wins. Stale sockets found while scanning are removed.
-func Discover(explicitID string) (string, error) {
-	if explicitID != "" {
-		return checkLive(paths.Socket(explicitID))
-	}
-	if s := os.Getenv("AISH_SOCKET"); s != "" {
-		return checkLive(s)
-	}
-	if id := os.Getenv("AISH_SESSION"); id != "" {
-		return checkLive(paths.Socket(id))
-	}
+// SessionInfo describes one live session found on this machine.
+type SessionInfo struct {
+	ID   string
+	Name string // "" when unnamed
+	Sock string
+}
 
+// Label renders the session for user-facing listings.
+func (s SessionInfo) Label() string {
+	if s.Name != "" {
+		return s.ID + " (" + s.Name + ")"
+	}
+	return s.ID
+}
+
+// List scans the runtime base dir for live sessions, sorted by id.
+// Stale sockets found while scanning are removed.
+func List() []SessionInfo {
 	entries, err := os.ReadDir(paths.Base())
 	if err != nil {
-		return "", fmt.Errorf("no aish sessions found (%s): is aish running?", paths.Base())
+		return nil
 	}
-	type cand struct {
-		sock  string
-		mtime int64
-	}
-	var live []cand
+	var live []SessionInfo
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		sock := filepath.Join(paths.Base(), e.Name(), "mcp.sock")
+		sock := paths.Socket(e.Name())
 		if err := ping(sock); err != nil {
 			// Stale leftover from a killed session; clean it up.
 			os.Remove(sock)
 			continue
 		}
-		info, _ := e.Info()
-		var mt int64
-		if info != nil {
-			mt = info.ModTime().UnixNano()
+		live = append(live, SessionInfo{ID: e.Name(), Name: paths.ReadName(e.Name()), Sock: sock})
+	}
+	sort.Slice(live, func(i, j int) bool { return live[i].ID < live[j].ID })
+	return live
+}
+
+// Discover resolves the socket of the target session. target (from --session
+// or $AISH_SESSION) may be a session id, a session name, or a unique id
+// prefix. Without a target: $AISH_SOCKET (set inside aish sessions) wins,
+// then a scan — a single live session is used; several is an error listing
+// them, so callers are never silently attached to the wrong terminal.
+func Discover(target string) (string, error) {
+	if target == "" {
+		if s := os.Getenv("AISH_SOCKET"); s != "" {
+			return checkLive(s)
 		}
-		live = append(live, cand{sock, mt})
+		target = os.Getenv("AISH_SESSION")
 	}
+	live := List()
 	if len(live) == 0 {
-		return "", fmt.Errorf("no live aish sessions found under %s", paths.Base())
+		return "", fmt.Errorf("no live aish sessions found under %s: is aish running?", paths.Base())
 	}
-	sort.Slice(live, func(i, j int) bool { return live[i].mtime > live[j].mtime })
-	return live[0].sock, nil
+
+	if target == "" {
+		if len(live) == 1 {
+			return live[0].Sock, nil
+		}
+		return "", fmt.Errorf("multiple aish sessions are live: %s — pick one with --session <id|name> or AISH_SESSION",
+			labels(live))
+	}
+
+	var byName, byPrefix []SessionInfo
+	for _, s := range live {
+		if s.ID == target {
+			return s.Sock, nil
+		}
+		if s.Name != "" && s.Name == target {
+			byName = append(byName, s)
+		}
+		if strings.HasPrefix(s.ID, target) {
+			byPrefix = append(byPrefix, s)
+		}
+	}
+	switch {
+	case len(byName) == 1:
+		return byName[0].Sock, nil
+	case len(byName) > 1:
+		return "", fmt.Errorf("several sessions are named %q: %s — use the id", target, labels(byName))
+	case len(byPrefix) == 1:
+		return byPrefix[0].Sock, nil
+	case len(byPrefix) > 1:
+		return "", fmt.Errorf("session %q is ambiguous: %s", target, labels(byPrefix))
+	}
+	return "", fmt.Errorf("no session matches %q; live sessions: %s", target, labels(live))
+}
+
+func labels(ss []SessionInfo) string {
+	parts := make([]string, len(ss))
+	for i, s := range ss {
+		parts[i] = s.Label()
+	}
+	return strings.Join(parts, ", ")
 }
 
 func checkLive(sock string) (string, error) {

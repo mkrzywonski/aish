@@ -49,9 +49,11 @@ One `aish` process per session. Everything hangs off a single data path in `cmd/
 - `internal/shellintegration` injects the OSC-emitting snippets via generated `--rcfile` (bash) / `ZDOTDIR` (zsh) that source the user's rc first, then re-prepend the ssh shim to PATH (user rcs reorder PATH).
 - `internal/sshmux` has two halves. Shim side: aish is exec'd AS `ssh` via a symlink (dispatch on `argv[0]` in main.go), uses `ssh -G` to resolve canonical host/user/port and detect user Control* config, writes a ConnInfo event file keyed by pid (pid survives the exec), injects ControlMaster options, execs real ssh. It backs off entirely for `-O/-G/-V/-Q/-W/-S` or explicit `-o Control*` (ssh's first-obtained-wins would make our prepended options beat the user's). Daemon side (`Mux`): discovers the current remote from event files (liveness = /proc/pid/comm == "ssh"), runs out-of-band commands via `ssh -S <sock>`.
 - `internal/mcpserver` serves MCP over the per-session Unix socket (each accepted conn = one MCP session via `mcp.IOTransport`). `tools_remote.go:route()` is the routing brain: controlmaster (live socket) → in_band (foreground is ssh but no socket; falls back to base64 through the terminal via the framing engine) → local. Every routed result carries `via` + `host`.
-- `internal/proxy` (`aish mcp-proxy`) is a dumb stdio↔socket byte pump — no MCP parsing; session discovery order: `--session` flag, `$AISH_SOCKET`/`$AISH_SESSION` (set inside sessions), single live socket, newest.
+- `internal/proxy` (`aish mcp-proxy`) is a dumb stdio↔socket byte pump — no MCP parsing. `Discover` resolves the target session: `--session`/`$AISH_SESSION` accept id, name, or unique id prefix; `$AISH_SOCKET` (set inside sessions) short-circuits; with no target and several live sessions it errors listing them (never guesses).
 
-Runtime state lives in `$XDG_RUNTIME_DIR/aish/<session-id>/` (`internal/paths`): MCP socket, `bin/ssh` shim symlink, `cm-*` ControlMaster sockets, `ssh/*.json` connection events. The dir is removed on exit/signal; ControlPersist=60s reaps orphaned masters after SIGKILL.
+Sessions have an immutable random id (keys the runtime dir, sockets, env) and an optional mutable name (`aish --name`, or the `set_session_name` tool) stored in `<session-dir>/name`. The prompt badge re-reads the name file each prompt via `$AISH_DIR`; the window-title label updates immediately through `TitleMarker.SetLabel`.
+
+Runtime state lives in `$XDG_RUNTIME_DIR/aish/<session-id>/` (`internal/paths`): MCP socket, `name`, `bin/ssh` shim symlink, `cm-*` ControlMaster sockets, `ssh/*.json` connection events. The dir is removed on exit/signal; ControlPersist=60s reaps orphaned masters after SIGKILL.
 
 ## Invariants to preserve
 

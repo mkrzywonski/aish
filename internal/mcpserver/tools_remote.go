@@ -27,29 +27,35 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "file_read",
 		Description: "Read a file from the host the shared session is currently on (remote when ssh'd, local otherwise). " +
-			"Out-of-band: does not disturb the interactive terminal when a multiplexed ssh channel is available.",
+			"Out-of-band: does not disturb the interactive terminal when a multiplexed ssh channel is available; " +
+			"without one it falls back to typing through the shared terminal (visible to the user, size-limited). " +
+			"Non-UTF-8 content is returned base64 (see encoding).",
 	}, c.fileRead)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "file_write",
 		Description: "Write (or append to) a file on the host the shared session is currently on. " +
-			"Content is UTF-8, or base64 with encoding=base64.",
+			"Content is UTF-8, or base64 with encoding=base64. Without a multiplexed ssh channel the fallback " +
+			"types base64 through the shared terminal (visible to the user) and is limited to 48KB.",
 	}, c.fileWrite)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "file_upload",
-		Description: "Copy a file from the local machine to the remote host of the current ssh session (multiplexed, no re-auth).",
+		Name: "file_upload",
+		Description: "Copy a file from the local machine to the remote host of the current ssh session (multiplexed, no re-auth). " +
+			"Errors when the session is local or no multiplexed channel is available — use file_write then.",
 	}, c.fileUpload)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "file_download",
-		Description: "Copy a file from the remote host of the current ssh session to the local machine (multiplexed, no re-auth).",
+		Name: "file_download",
+		Description: "Copy a file from the remote host of the current ssh session to the local machine (multiplexed, no re-auth). " +
+			"Errors when the session is local or no multiplexed channel is available — use file_read then.",
 	}, c.fileDownload)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "exec",
 		Description: "Run a command out-of-band on the host the shared session is currently on — it does NOT appear in the " +
-			"shared terminal. Use background=true for long-running commands, then poll exec_status. " +
+			"shared terminal. Use background=true for long-running commands, then poll exec_status " +
+			"(background requires an out-of-band channel: local or controlmaster). " +
 			"For commands the user should see, use run_command instead.",
 	}, c.execTool)
 

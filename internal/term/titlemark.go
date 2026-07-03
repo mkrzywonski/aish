@@ -19,6 +19,7 @@ type TitleMarker struct {
 	mu        sync.Mutex
 	out       io.Writer
 	connected atomic.Bool
+	label     string // session name or id, shown next to the marker glyph
 
 	// stream state machine
 	state     int
@@ -37,23 +38,30 @@ const (
 	tmInTitleEsc // inside title, saw ESC (possible ST)
 )
 
-const markerShared = "⧉ "
-const markerActive = "⧉⚡ "
-
 func NewTitleMarker(out io.Writer) *TitleMarker {
 	return &TitleMarker{out: out, state: tmGround}
 }
 
+// marker is called with t.mu held (both call sites hold it).
 func (t *TitleMarker) marker() string {
+	m := "⧉" + t.label
 	if t.connected.Load() {
-		return markerActive
+		m += "⚡"
 	}
-	return markerShared
+	return m + " "
 }
 
 // SetConnected updates the AI-attached state and re-asserts the title.
 func (t *TitleMarker) SetConnected(yes bool) {
 	t.connected.Store(yes)
+	t.Refresh()
+}
+
+// SetLabel updates the session label (name or id) and re-asserts the title.
+func (t *TitleMarker) SetLabel(label string) {
+	t.mu.Lock()
+	t.label = label
+	t.mu.Unlock()
 	t.Refresh()
 }
 

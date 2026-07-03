@@ -18,9 +18,11 @@ import (
 func registerTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "run_command",
-		Description: "Run a shell command in the shared terminal (visible to the user) and return its output and exit code. " +
-			"Works transparently whether the session is local or inside ssh. Errors if a full-screen app is active or the " +
-			"terminal is waiting for secret input.",
+		Description: "Run a shell command in the shared terminal (visible to the user) and return its output. " +
+			"Works transparently whether the session is local or inside ssh. An exact exit_code is included when " +
+			"shell integration is active (framing \"osc133\"); otherwise (framing \"idle\") completion is inferred " +
+			"from output quiescence and no exit code is available — judge success from the output, or run echo $? " +
+			"as a follow-up. Errors if a full-screen app is active or the terminal is waiting for secret input.",
 	}, c.runCommand)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -45,7 +47,8 @@ func registerTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "read_output",
 		Description: "Read the raw session output stream (scrollback) incrementally. Pass the next_cursor from the previous " +
-			"call to get only new output; omit cursor to get the most recent output. Escape sequences are stripped unless raw.",
+			"call to get only new output; omit cursor to get the most recent output. Escape sequences are stripped unless raw. " +
+			"dropped_bytes > 0 means the scrollback wrapped and that much output before the cursor is gone.",
 	}, c.readOutput)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -56,9 +59,17 @@ func registerTools(s *mcp.Server, c *Core) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "session_status",
-		Description: "Get the status of the shared terminal session: session id, screen size, alternate-screen flag, " +
-			"time since last output, and other live aish sessions on this machine.",
+		Description: "Get the status of the shared terminal session: current host and out-of-band route (local/controlmaster/in_band), " +
+			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
+			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions on this machine.",
 	}, c.sessionStatus)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "set_session_name",
+		Description: "Name this session after what it is being used for (e.g. \"deploy-web\", \"zoneminder-debug\"). " +
+			"The name appears in the user's prompt badge and window title and selects the session in multi-session " +
+			"setups, so set it once the session's purpose is clear. Short kebab-case; letters, digits, . _ -, max 32 chars.",
+	}, c.setSessionName)
 }
 
 // ---- run_command ----
@@ -232,9 +243,15 @@ func (c *Core) waitIdle(ctx context.Context, req *mcp.CallToolRequest, args wait
 
 type sessionStatusArgs struct{}
 
+type sessionRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 type sessionStatusResult struct {
 	SessionID     string            `json:"session_id"`
-	OtherSessions []string          `json:"other_sessions"`
+	SessionName   string            `json:"session_name,omitempty"`
+	OtherSessions []sessionRef      `json:"other_sessions"`
 	Mode          string            `json:"mode"`
 	Host          string            `json:"host"`
 	OobVia        string            `json:"oob_via"`
@@ -260,6 +277,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	}
 	res := sessionStatusResult{
 		SessionID:   c.Sess.ID,
+		SessionName: paths.ReadName(c.Sess.ID),
 		Mode:        string(c.Tracker.Mode(snap.AltScreen)),
 		Host:        rt.host,
 		OobVia:      rt.via,
@@ -281,10 +299,34 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		for _, e := range entries {
 			if e.IsDir() && e.Name() != c.Sess.ID {
 				if _, err := os.Stat(filepath.Join(paths.Base(), e.Name(), "mcp.sock")); err == nil {
-					res.OtherSessions = append(res.OtherSessions, e.Name())
+					res.OtherSessions = append(res.OtherSessions, sessionRef{ID: e.Name(), Name: paths.ReadName(e.Name())})
 				}
 			}
 		}
 	}
 	return nil, res, nil
+}
+
+// ---- set_session_name ----
+
+type setSessionNameArgs struct {
+	Name string `json:"name" jsonschema:"the new session name"`
+}
+
+type setSessionNameResult struct {
+	SessionID string `json:"session_id"`
+	Name      string `json:"name"`
+}
+
+func (c *Core) setSessionName(ctx context.Context, req *mcp.CallToolRequest, args setSessionNameArgs) (*mcp.CallToolResult, setSessionNameResult, error) {
+	if !paths.ValidName(args.Name) {
+		return nil, setSessionNameResult{}, fmt.Errorf("invalid name %q: letters, digits, . _ -, max 32 chars, must start alphanumeric", args.Name)
+	}
+	if err := paths.WriteName(c.Sess.ID, args.Name); err != nil {
+		return nil, setSessionNameResult{}, err
+	}
+	if c.OnRenamed != nil {
+		c.OnRenamed(args.Name)
+	}
+	return nil, setSessionNameResult{SessionID: c.Sess.ID, Name: args.Name}, nil
 }

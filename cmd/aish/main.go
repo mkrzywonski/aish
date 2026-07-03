@@ -28,10 +28,12 @@ import (
 const usage = `aish — AI-shareable terminal
 
 Usage:
-  aish [run]          start a shared shell session (default)
-  aish mcp-proxy [--session <id>]
+  aish [run] [--name <name>]
+                      start a shared shell session (default)
+  aish sessions       list live sessions (id, name)
+  aish mcp-proxy [--session <id|name>]
                       stdio<->socket MCP proxy for AI agents
-  aish client [--session <id>] <tool> [json-args]
+  aish client [--session <id|name>] <tool> [json-args]
                       call an MCP tool on a running session (debug)
   aish version
 `
@@ -47,7 +49,7 @@ func main() {
 
 	args := os.Args[1:]
 	sub := "run"
-	if len(args) > 0 {
+	if len(args) > 0 && args[0][0] != '-' {
 		sub = args[0]
 		args = args[1:]
 	}
@@ -55,6 +57,8 @@ func main() {
 	switch sub {
 	case "run":
 		os.Exit(runMain(args))
+	case "sessions":
+		os.Exit(sessionsMain())
 	case "mcp-proxy":
 		os.Exit(proxy.Main(args))
 	case "client":
@@ -70,6 +74,26 @@ func main() {
 }
 
 func runMain(args []string) int {
+	var name string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "aish: --name requires a value")
+				return 2
+			}
+			name = args[i+1]
+			i++
+		default:
+			fmt.Fprintf(os.Stderr, "aish: unknown option %q\n%s", args[i], usage)
+			return 2
+		}
+	}
+	if name != "" && !paths.ValidName(name) {
+		fmt.Fprintln(os.Stderr, "aish: invalid session name (letters, digits, . _ -, max 32 chars, must start alphanumeric)")
+		return 2
+	}
+
 	if os.Getenv("AISH_SESSION") != "" {
 		fmt.Fprintln(os.Stderr, "aish: already inside an aish session (AISH_SESSION is set)")
 		return 1
@@ -90,6 +114,12 @@ func runMain(args []string) int {
 	}
 	defer os.RemoveAll(dir)
 	sock := paths.Socket(id)
+	if name != "" {
+		if err := paths.WriteName(id, name); err != nil {
+			fmt.Fprintln(os.Stderr, "aish:", err)
+			return 1
+		}
+	}
 
 	argv, shellEnv, err := shellintegration.Setup(shell, dir)
 	if err != nil {
@@ -100,6 +130,7 @@ func runMain(args []string) int {
 	extraEnv := append([]string{
 		"AISH_SESSION=" + id,
 		"AISH_SOCKET=" + sock,
+		"AISH_DIR=" + dir,
 	}, shellEnv...)
 
 	// Install the ssh PATH shim: a symlink to this binary named "ssh",
@@ -119,7 +150,11 @@ func runMain(args []string) int {
 	sess := session.New(id, argv, extraEnv)
 	titles := term.NewTitleMarker(os.Stdout)
 	sess.Stdout = titles
-	titles.Refresh() // badge the title immediately, before any shell output
+	label := name
+	if label == "" {
+		label = id
+	}
+	titles.SetLabel(label) // also badges the title immediately, before any shell output
 	trm := term.NewTerminal(24, 80)
 	sess.AddTap(trm)
 	sess.OnResize(func(rows, cols uint16) {
@@ -144,6 +179,7 @@ func runMain(args []string) int {
 		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
 		Mux: mux, Tasks: sshmux.NewTable(), Version: version,
 		OnClients: func(n int) { titles.SetConnected(n > 0) },
+		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}
 	go func() {
 		if err := mcpserver.Serve(ctx, core, sock); err != nil {
@@ -168,6 +204,19 @@ func runMain(args []string) int {
 		fmt.Fprintln(os.Stderr, "aish:", err)
 	}
 	return code
+}
+
+// sessionsMain lists live sessions for humans picking a --session target.
+func sessionsMain() int {
+	live := proxy.List()
+	if len(live) == 0 {
+		fmt.Println("no live aish sessions")
+		return 0
+	}
+	for _, s := range live {
+		fmt.Printf("%-10s %s\n", s.ID, s.Name)
+	}
+	return 0
 }
 
 // sweepStaleSessions removes runtime dirs of sessions whose MCP socket no

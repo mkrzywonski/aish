@@ -14,8 +14,8 @@ import (
 	"ai-ssh/internal/proxy"
 )
 
-const usage = `usage: aish client [--session <id>] <tool> [json-args]
-       aish client [--session <id>] --list
+const usage = `usage: aish client [--session <id|name>] <tool> [json-args]
+       aish client [--session <id|name>] --list
 `
 
 func Main(version string, args []string) int {

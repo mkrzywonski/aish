@@ -31,6 +31,7 @@ nix-shell -p go --run "go build -o aish ./cmd/aish"   # or just: go build -o ais
 
 ```sh
 ./aish                       # start a shared session (wraps your $SHELL)
+./aish --name deploy-web     # ... with a meaningful name
 ```
 
 Register the MCP server with Claude Code once (any directory):
@@ -39,8 +40,18 @@ Register the MCP server with Claude Code once (any directory):
 claude mcp add aish -- /path/to/aish mcp-proxy
 ```
 
-Then run `claude` (in another window, or even inside the aish session —
-it auto-targets that session via $AISH_SESSION) and ask it to run commands.
+Then run `claude` in another window and ask it to run commands.
+
+With one session live, the proxy finds it automatically. With several, it
+refuses to guess: pick one per Claude launch with `AISH_SESSION=<id|name>
+claude`, or pin `--session <id|name>` in the proxy args. Each session has an
+immutable short id and an optional mutable name (`--name` at start, or the
+AI names it via `set_session_name`); both are shown in the prompt badge and
+accepted anywhere a session is selected.
+
+```sh
+./aish sessions              # list live sessions: id, name
+```
 
 Debug/poke without an AI:
 
@@ -48,7 +59,7 @@ Debug/poke without an AI:
 ./aish client --list
 ./aish client run_command '{"command":"uname -a"}'
 ./aish client read_screen
-./aish client --session <id> session_status    # pick among several sessions
+./aish client --session <id|name> session_status   # pick among several sessions
 ```
 
 ## MCP tools
@@ -60,7 +71,8 @@ Debug/poke without an AI:
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
-| `session_status` | mode, host, cwd, foreground process, echo-off, routing |
+| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
+| `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
@@ -69,9 +81,11 @@ Debug/poke without an AI:
 
 Every aish session is visibly marked as shared:
 
-- **Prompt badge**: a magenta `⧉` prefixes your shell prompt (bash/zsh).
+- **Prompt badge**: a magenta `⧉` plus the session's name (or id) prefixes
+  your shell prompt (bash/zsh), e.g. `⧉deploy-web`. Renames show up at the
+  next prompt.
 - **Window title**: any title set by your shell — or by a remote host over
-  ssh — is rewritten to start with `⧉ `, and switches to `⧉⚡ ` while an MCP
+  ssh — is rewritten to start with `⧉<label> `, gaining a `⚡` while an MCP
   client (an AI) is actually connected, reverting when it disconnects.
 
 ## How the ssh integration works
