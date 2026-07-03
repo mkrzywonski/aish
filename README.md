@@ -63,10 +63,32 @@ go build -o aish ./cmd/aish
 
 ### NixOS
 
+This repo is a flake exporting the package and an overlay:
+
 ```sh
-git clone https://github.com/mkrzywonski/aish.git
-cd aish
-nix-shell -p go --run "go build -o aish ./cmd/aish"
+nix run github:mkrzywonski/aish          # try it without installing
+nix build github:mkrzywonski/aish       # or build ./result/bin/aish
+nix develop                              # dev shell with Go (in a clone)
+```
+
+To install system-wide, consume it as a flake input in your NixOS config:
+
+```nix
+inputs.aish = {
+  url = "github:mkrzywonski/aish";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+# then add aish.overlays.default to nixpkgs.overlays
+# and pkgs.aish to environment.systemPackages
+```
+
+**Updating to the latest version** (the flake.lock in your NixOS config pins
+a commit; bump it and rebuild):
+
+```sh
+nix flake update aish --flake /path/to/your/nix-config
+sudo nixos-rebuild switch --flake /path/to/your/nix-config#<host>
+aish version   # prints the git revision it was built from
 ```
 
 ### Windows 11 — via WSL2
