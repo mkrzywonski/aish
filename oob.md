@@ -14,6 +14,10 @@
 > retry after the error is the consent. Background exec uses a dedicated
 > channel (concurrent stream). Remaining open item: consent-based OOB
 > health probing (medium term).
+>
+> **End-to-end confirmation (2026-07-03):** against the production Duo
+> host, a six-operation sequence (exec ×3, file_read ×2, file_write ×1,
+> all `via: "channel"`) triggered exactly one push, at channel open.
 
 ## Problem
 
