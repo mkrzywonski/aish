@@ -66,7 +66,7 @@ func main() {
 	case "sessions":
 		os.Exit(sessionsMain())
 	case "mcp-proxy":
-		os.Exit(proxy.Main(args))
+		os.Exit(proxy.Main(version, args))
 	case "client":
 		os.Exit(debugcli.Main(version, args))
 	case "version":

@@ -1,0 +1,288 @@
+// The aggregating proxy: a single, durable MCP server that Claude Code (or
+// any MCP client) talks to, which itself is a client to the individual aish
+// session servers. Its lifetime is the AI TUI's lifetime — it never depends
+// on any session existing, so sessions can come and go underneath it and the
+// AI never has to reconnect.
+//
+// Routing: every session tool carries a `session` argument (id or name). The
+// proxy resolves it, holds ONE authorized connection per session (opened
+// lazily on first use, kept alive), and forwards the call there. Because the
+// per-session y/n approval lives in the session server and fires on the first
+// tool call of a fresh connection, the user is prompted exactly once per
+// session per TUI lifetime — on that session's own terminal, which is the
+// positive identification of the target. Switching back to an
+// already-approved session reuses its connection: no prompt. Closing the
+// session (or the TUI) drops the connection and clears the approval.
+//
+// list_sessions is answered by the proxy directly (no session connection, no
+// prompt) so the AI can always enumerate what's live.
+package proxy
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const proxyVersion = "aish-proxy"
+
+type aggProxy struct {
+	client *mcp.Client
+
+	mu    sync.Mutex
+	conns map[string]*pooledConn // by session id
+}
+
+type pooledConn struct {
+	raw net.Conn
+	cs  *mcp.ClientSession
+}
+
+// Serve runs the aggregating proxy over stdio until the client disconnects.
+func Serve(version string) int {
+	p := &aggProxy{
+		client: mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
+		conns:  map[string]*pooledConn{},
+	}
+	ctx := context.Background()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: version}, &mcp.ServerOptions{
+		Instructions: "Drive one or more shared aish terminal sessions. Every tool takes a `session` " +
+			"argument (id or name); call list_sessions to see what's live. Name the target session in " +
+			"chat before the first substantial operation — the user is asked to approve each session once, " +
+			"on that session's own terminal.",
+	})
+
+	// list_sessions: answered locally, never gated.
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_sessions",
+		Description: "List the live aish sessions on this machine (id and name). Use a session's id or name as the `session` argument to other tools. Safe to call anytime; never prompts the user.",
+	}, p.listSessions)
+
+	// Mirror the session tools with a generic forwarding handler.
+	specs, err := p.toolSpecs(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "aish mcp-proxy:", err)
+		return 1
+	}
+	for _, t := range specs {
+		name := t.Name
+		server.AddTool(t, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return p.forward(ctx, name, req)
+		})
+	}
+
+	ss, err := server.Connect(ctx, &mcp.IOTransport{Reader: os.Stdin, Writer: os.Stdout}, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "aish mcp-proxy:", err)
+		return 1
+	}
+	ss.Wait()
+	p.closeAll()
+	return 0
+}
+
+// forward routes a tool call to the session named by its `session` argument
+// (or the sole live session), stripping the argument before forwarding.
+func (p *aggProxy) forward(ctx context.Context, tool string, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args map[string]any
+	if len(req.Params.Arguments) > 0 {
+		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+			return toolError("bad arguments: %v", err), nil
+		}
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	target, _ := args["session"].(string)
+	delete(args, "session")
+
+	info, err := p.resolve(target)
+	if err != nil {
+		return toolError("%v", err), nil
+	}
+
+	cs, err := p.conn(ctx, info)
+	if err != nil {
+		return toolError("connecting to session %s: %v", info.Label(), err), nil
+	}
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	if err != nil {
+		// Connection likely died with the session; drop it and report so the
+		// AI can re-list and retry.
+		p.drop(info.ID)
+		return toolError("session %s: %v", info.Label(), err), nil
+	}
+	return res, nil
+}
+
+// resolve picks the target session: the named one, or the sole live session
+// when unnamed. Ambiguity is an error — never a guess.
+func (p *aggProxy) resolve(target string) (SessionInfo, error) {
+	live := List()
+	if len(live) == 0 {
+		return SessionInfo{}, errors.New("no aish sessions are running; start one with `aish`")
+	}
+	if target == "" {
+		if len(live) == 1 {
+			return live[0], nil
+		}
+		return SessionInfo{}, fmt.Errorf("several sessions are live (%s); name one in the `session` argument", labels(live))
+	}
+	return Resolve(target, live)
+}
+
+// conn returns the pooled connection for a session, opening (and MCP-
+// handshaking) it on first use. The proxy does NOT present the session token,
+// so the session's own y/n approval prompt fires on first use.
+func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSession, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pc := p.conns[info.ID]; pc != nil {
+		return pc.cs, nil
+	}
+	raw, err := net.Dial("unix", info.Sock)
+	if err != nil {
+		return nil, err
+	}
+	cs, err := p.client.Connect(ctx, &mcp.IOTransport{Reader: raw, Writer: raw}, nil)
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+	p.conns[info.ID] = &pooledConn{raw: raw, cs: cs}
+	return cs, nil
+}
+
+func (p *aggProxy) drop(id string) {
+	p.mu.Lock()
+	pc := p.conns[id]
+	delete(p.conns, id)
+	p.mu.Unlock()
+	if pc != nil {
+		pc.cs.Close()
+		pc.raw.Close()
+	}
+}
+
+func (p *aggProxy) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pc := range p.conns {
+		pc.cs.Close()
+		pc.raw.Close()
+	}
+	p.conns = map[string]*pooledConn{}
+}
+
+// ---- list_sessions ----
+
+type listSessionsArgs struct{}
+
+type sessionEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+type listSessionsResult struct {
+	Sessions []sessionEntry `json:"sessions"`
+}
+
+func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, args listSessionsArgs) (*mcp.CallToolResult, listSessionsResult, error) {
+	var out listSessionsResult
+	for _, s := range List() {
+		out.Sessions = append(out.Sessions, sessionEntry{ID: s.ID, Name: s.Name})
+	}
+	return nil, out, nil
+}
+
+// ---- tool-list mirroring (schema cache) ----
+
+// toolSpecs returns the session tool set to advertise (all session tools
+// except the internal `authorize`). It mirrors a live session's schemas and
+// caches them to disk so it works even when no session is currently running.
+func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
+	if live := List(); len(live) > 0 {
+		if tools, err := p.fetchTools(ctx, live[0]); err == nil {
+			saveToolCache(tools)
+			return filterTools(tools), nil
+		}
+	}
+	if tools := loadToolCache(); tools != nil {
+		return filterTools(tools), nil
+	}
+	return nil, errors.New("no aish session is running and no cached tool list is available; start a session once (`aish`) so the proxy can learn the tools, then reconnect")
+}
+
+func (p *aggProxy) fetchTools(ctx context.Context, info SessionInfo) ([]*mcp.Tool, error) {
+	raw, err := net.Dial("unix", info.Sock)
+	if err != nil {
+		return nil, err
+	}
+	defer raw.Close()
+	cs, err := p.client.Connect(ctx, &mcp.IOTransport{Reader: raw, Writer: raw}, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer cs.Close()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return res.Tools, nil
+}
+
+func filterTools(tools []*mcp.Tool) []*mcp.Tool {
+	out := make([]*mcp.Tool, 0, len(tools))
+	for _, t := range tools {
+		if t.Name == "authorize" {
+			continue // internal token path; not for AI clients
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func toolCachePath() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "aish", "tools.json")
+}
+
+func saveToolCache(tools []*mcp.Tool) {
+	p := toolCachePath()
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	if b, err := json.Marshal(tools); err == nil {
+		_ = os.WriteFile(p, b, 0o600)
+	}
+}
+
+func loadToolCache() []*mcp.Tool {
+	b, err := os.ReadFile(toolCachePath())
+	if err != nil {
+		return nil
+	}
+	var tools []*mcp.Tool
+	if json.Unmarshal(b, &tools) != nil {
+		return nil
+	}
+	return tools
+}
+
+func toolError(format string, args ...any) *mcp.CallToolResult {
+	res := &mcp.CallToolResult{}
+	res.SetError(fmt.Errorf(format, args...))
+	return res
+}
+
+var _ = time.Second // reserved for future pool health checks

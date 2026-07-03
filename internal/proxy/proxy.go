@@ -1,12 +1,12 @@
-// Package proxy implements `aish mcp-proxy`: a dumb stdio<->Unix-socket byte
-// pump that lets stdio-only MCP clients (Claude Code, Codex) talk to a
-// running aish session. It does not parse MCP; framing is newline-delimited
-// JSON on both sides.
+// Package proxy implements `aish mcp-proxy`: a durable, session-aware MCP
+// server (aggregate.go) that lets stdio-only MCP clients (Claude Code, Codex)
+// reach any live aish session, routing each tool call to the session named in
+// its `session` argument. This file handles session enumeration/resolution;
+// aggregate.go is the MCP front end and connection pool.
 package proxy
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"sort"
@@ -147,39 +147,10 @@ func ping(sock string) error {
 	return nil
 }
 
-// Main runs the proxy until either side closes.
-func Main(args []string) int {
-	var sessionID string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session" && i+1 < len(args) {
-			sessionID = args[i+1]
-			i++
-		}
-	}
-	sock, err := Discover(sessionID)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "aish mcp-proxy:", err)
-		return 1
-	}
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "aish mcp-proxy:", err)
-		return 1
-	}
-	defer conn.Close()
-
-	done := make(chan struct{}, 2)
-	go func() {
-		io.Copy(conn, os.Stdin)
-		if uc, ok := conn.(*net.UnixConn); ok {
-			uc.CloseWrite()
-		}
-		done <- struct{}{}
-	}()
-	go func() {
-		io.Copy(os.Stdout, conn)
-		done <- struct{}{}
-	}()
-	<-done
-	return 0
+// Main runs the aggregating MCP proxy over stdio. It no longer binds to a
+// single session; it presents one durable endpoint and routes each tool call
+// to the session named in its `session` argument. `--session` is accepted for
+// backward compatibility but ignored (routing is per-call now).
+func Main(version string, args []string) int {
+	return Serve(version)
 }
