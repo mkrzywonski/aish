@@ -22,9 +22,8 @@ const (
 
 type connAuth struct {
 	mu      sync.Mutex
-	authed  bool
 	denied  bool
-	grantID string
+	grantID string // non-empty once the connection is authorized
 }
 
 type clientGrant struct {
@@ -97,7 +96,7 @@ func connAuthMiddleware(c *Core) mcp.Middleware {
 			}
 			st := c.connState(ss)
 			st.mu.Lock()
-			authed := st.authed
+			authed := st.grantID != ""
 			st.mu.Unlock()
 			if !authed {
 				return authError("client is not authorized; call request_access first"), nil
@@ -151,9 +150,16 @@ func (c *Core) requestAccess(ctx context.Context, req *mcp.CallToolRequest, args
 		return nil, authproto.RequestAccessResult{}, err
 	}
 	c.authMu.Lock()
+	// Revoke() may have run while we were blocked in the prompt (it takes
+	// authMu, not st.mu). It resets c.conns, so if our connAuth is no longer the
+	// live entry the connection was revoked (and closed) mid-approval — don't
+	// resurrect a grant in the freshly-cleared map.
+	if c.conns[req.Session] != st {
+		c.authMu.Unlock()
+		return nil, authproto.RequestAccessResult{}, errors.New("the connection was revoked or closed during approval; reconnect to request again")
+	}
 	c.grants[grantID] = clientGrant{publicKey: key, clientName: name}
 	c.authMu.Unlock()
-	st.authed = true
 	st.grantID = grantID
 	return nil, authproto.RequestAccessResult{GrantID: grantID}, nil
 }
@@ -199,7 +205,6 @@ func (c *Core) authenticate(ctx context.Context, req *mcp.CallToolRequest, args 
 	}
 	st := c.connState(req.Session)
 	st.mu.Lock()
-	st.authed = true
 	st.grantID = args.GrantID
 	st.mu.Unlock()
 	return nil, authproto.AuthenticateResult{Authorized: true}, nil

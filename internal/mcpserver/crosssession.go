@@ -48,9 +48,7 @@ func crossSession(c *Core) mcp.Middleware {
 			if err != nil {
 				// Tool-level error, not protocol-level, so the model sees it
 				// and can self-correct (e.g. list sessions and retry).
-				errRes := &mcp.CallToolResult{}
-				errRes.SetError(err)
-				return errRes, nil
+				return authError(err.Error()), nil
 			}
 			return res, nil
 		}
