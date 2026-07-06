@@ -91,3 +91,12 @@ func OOBGranted(id string) bool {
 func GrantOOB(id string) error {
 	return os.WriteFile(OOBFile(id), []byte("1\n"), 0o600)
 }
+
+// RevokeOOB clears the out-of-band authorization marker. A missing marker is
+// not an error (revoking an already-off session is a no-op).
+func RevokeOOB(id string) error {
+	if err := os.Remove(OOBFile(id)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}

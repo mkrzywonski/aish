@@ -75,6 +75,23 @@ func (c *Core) grantOOBAlways() {
 	_ = paths.GrantOOB(c.Sess.ID)
 }
 
+// OOBEnabled reports whether out-of-band operations are currently authorized.
+// Exported for the Ctrl-] menu (cmd/aish).
+func (c *Core) OOBEnabled() bool { return c.oobGranted() }
+
+// SetOOB enables or disables out-of-band authorization at runtime (the Ctrl-]
+// menu toggle), updating both the in-process flag and the persisted marker the
+// ssh shim reads. Disabling makes route() downgrade to visible in-band ops;
+// any idle ControlMaster channel already open is simply no longer used.
+func (c *Core) SetOOB(on bool) {
+	if on {
+		c.grantOOBAlways()
+		return
+	}
+	c.oobAlways.Store(false)
+	_ = paths.RevokeOOB(c.Sess.ID)
+}
+
 // Serve listens on socketPath until ctx is canceled. It removes any stale
 // socket first; callers own directory creation and cleanup.
 func Serve(ctx context.Context, core *Core, socketPath string) error {

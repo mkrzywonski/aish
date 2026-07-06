@@ -190,30 +190,6 @@ func runMain(args []string) int {
 	}
 	titles.SetLabel(label) // also badges the title immediately, before any shell output
 
-	// Ctrl-] opens the aish menu (currently: rename this session). The prompt
-	// badge re-reads the name file on the next prompt; SetLabel updates the
-	// window title immediately.
-	sess.SetMenu(func() {
-		choice, ok := sess.Prompt("aish menu — [r] rename session, Esc to cancel", "r", 30*time.Second)
-		if !ok || choice != 'r' {
-			return
-		}
-		newName, ok := sess.PromptLine("new session name:", 60*time.Second)
-		if !ok {
-			return
-		}
-		newName = strings.TrimSpace(newName)
-		if !paths.ValidName(newName) {
-			sess.Notify("invalid name (letters, digits, . _ -, max 32 chars, must start alphanumeric)")
-			return
-		}
-		if err := paths.WriteName(id, newName); err != nil {
-			sess.Notify("rename failed: %v", err)
-			return
-		}
-		titles.SetLabel(newName)
-		sess.Notify("session renamed to %q", newName)
-	})
 	trm := term.NewTerminal(24, 80)
 	sess.AddTap(trm)
 	sess.OnResize(func(rows, cols uint16) {
@@ -240,6 +216,50 @@ func runMain(args []string) int {
 		OnClients: func(n int) { titles.SetConnected(n > 0) },
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}
+
+	// Ctrl-] opens the aish menu: rename this session or toggle out-of-band
+	// operations. The prompt badge re-reads the name file on the next prompt;
+	// SetLabel updates the window title immediately. OOB toggling flips both
+	// the in-process grant and the persisted marker the ssh shim reads.
+	sess.SetMenu(func() {
+		oobState := "off"
+		if core.OOBEnabled() {
+			oobState = "on"
+		}
+		choice, ok := sess.Prompt(
+			fmt.Sprintf("aish menu — [r] rename session, [o] out-of-band ops (currently %s), Esc to cancel", oobState),
+			"ro", 30*time.Second)
+		if !ok {
+			return
+		}
+		switch choice {
+		case 'r':
+			newName, ok := sess.PromptLine("new session name:", 60*time.Second)
+			if !ok {
+				return
+			}
+			newName = strings.TrimSpace(newName)
+			if !paths.ValidName(newName) {
+				sess.Notify("invalid name (letters, digits, . _ -, max 32 chars, must start alphanumeric)")
+				return
+			}
+			if err := paths.WriteName(id, newName); err != nil {
+				sess.Notify("rename failed: %v", err)
+				return
+			}
+			titles.SetLabel(newName)
+			sess.Notify("session renamed to %q", newName)
+		case 'o':
+			on := !core.OOBEnabled()
+			core.SetOOB(on)
+			if on {
+				sess.Notify("out-of-band operations ENABLED — the AI may now act invisibly (ControlMaster channels, direct file/exec)")
+			} else {
+				sess.Notify("out-of-band operations DISABLED — AI activity stays visible in the shared terminal")
+			}
+		}
+	})
+
 	go func() {
 		if err := mcpserver.Serve(ctx, core, sock); err != nil {
 			fmt.Fprintln(os.Stderr, "aish: mcp server:", err)
