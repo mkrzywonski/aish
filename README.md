@@ -176,7 +176,6 @@ Debug/poke without an AI:
 | `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
-| `authorize` | Internal token bypass for same-uid helpers; AI clients are approved via the terminal y/n prompt instead |
 
 Every tool also takes an optional `session` (id or name) to run the call in
 another live session on the machine; forwarded calls are executed by the
@@ -244,26 +243,34 @@ byte-transparency, alongside the window-title marker.)
 When an MCP client first tries to use a tool, aish asks in your terminal:
 
 ```
-🔒 aish an AI client (claude-code) wants to control this session — allow? [y/n]
+claude wants to control this session — allow? [y/n]
 ```
 
-- **y** approves that client for the life of the connection.
+- **y** grants that client access until the aish session closes; reconnects
+  must prove possession of the approved private key.
 - **n** denies it — sticky, so a client can't re-prompt-spam you; reconnect to
   be asked again.
 - **No answer** fails closed (denied).
 
-The prompt names the connecting client (from its MCP `clientInfo`) so you know
-what's asking. This guarantees you're aware of every client driving the
-session and prevents accidental attachments; it is *not* a barrier against
-same-uid code (which is out of scope, above).
+The prompt names the connecting client from its MCP `clientInfo` — shown as
+`claude` or `codex` for the bundled TUIs (the proxy relays the real client's
+identity), or the raw client name otherwise — so you know what's asking.
+Approval records that client's ephemeral Ed25519 public key for
+the life of the aish session. If the connection drops, the client proves it
+still holds the matching private key by signing a single-use challenge, so it
+can reconnect without another prompt. Different clients receive independent
+grants and each prompts once. Client keys and grants are memory-only;
+restarting a client makes it a new client that must be approved again.
 
 - **`--no-auth`** starts a session that never prompts — zero friction when you
   don't want to approve each connection.
-- **Internal helpers** — cross-session forwarding and the debug CLI (`aish
-  client`) — authenticate with a per-session token file (`token`, `0600`, in
-  the session dir) and are never prompted. The token is same-uid convenience,
-  not a security control: any process that could read it could already do
-  worse.
+- **`--auto-approve`** keeps the authorization handshake in force but
+  auto-answers the prompt (you're notified in the terminal, not blocked). It's
+  meant for one-shot testing — e.g. the debug CLI, which is a fresh client on
+  every run — without disabling the gate or storing a secret on disk.
+- **Every controlling client prompts**, including cross-session forwarding and
+  the debug CLI (`aish client`). Cross-session helpers cache their approved
+  key and grant in memory; the one-shot debug CLI is a new client on every run.
 
 ### Out-of-band operation authorization
 
@@ -281,7 +288,7 @@ Out-of-band (invisible) operation is opt-in, two ways:
   attempts an out-of-band-capable operation aish asks:
 
   ```
-  🔒 aish the AI wants out-of-band (invisible) access on <host> — allow? [y/n/a]
+  the AI wants out-of-band (invisible) access on <host> — allow? [y/n/a]
   ```
 
   **y** allows that one operation; **a** grants it for the rest of the session
@@ -307,8 +314,8 @@ you, and your retry is the consent.
 - **The AI's visibility is the default.** Invisible file/exec activity
   requires `--oob` or an explicit y/n/a grant; without it, everything is in
   the one shared scrollback.
-- **You approve every client** (unless `--no-auth`), and the approval is
-  per-connection.
+- **You approve every client** (unless `--no-auth`). Grants last for the aish
+  session, are bound to a client key, and support authenticated reconnects.
 
 ## Visual indicators
 
@@ -324,12 +331,22 @@ Every aish session is visibly marked as shared:
 ## The aish menu
 
 Press **`Ctrl-]`** at the shell to open the aish menu (the keypress is caught
-by aish and never reaches the shell). Currently it offers **rename this
-session** — press `r`, type a new name, Enter. The rename shows up in the
-prompt badge on the next prompt and in the window title immediately, and the
-session is thereafter selectable by the new name. `Esc` cancels the menu at
-any point. (This is the same rename the AI can do with `set_session_name`;
-the menu is for when you want to do it yourself.)
+by aish and never reaches the shell). `Esc` cancels the menu at any point. It
+offers:
+
+- **`r` — rename this session.** Type a new name, Enter. The rename shows up in
+  the prompt badge on the next prompt and in the window title immediately, and
+  the session is thereafter selectable by the new name. (Same as the AI's
+  `set_session_name`; the menu is for when you want to do it yourself.)
+- **`o` — toggle out-of-band ops.** Flips invisible operation on/off for the
+  running session (the menu shows the current state). Turning it off downgrades
+  the AI to visible, in-terminal operation; turning it on is the same grant as
+  `--oob` or answering `a` to an out-of-band prompt. See *Out-of-band operation
+  authorization* above.
+- **`k` — revoke client access.** Disconnects every connected client and clears
+  all grants for this session, so the next client to act must be approved again
+  from scratch. Useful if you approved something you didn't mean to, or want to
+  force re-approval. (No effect under `--no-auth`, which never prompts.)
 
 When a session is renamed — by you or the AI — the proxy notices the change
 and tells the AI on its next tool call (a notice riding the result, plus an
