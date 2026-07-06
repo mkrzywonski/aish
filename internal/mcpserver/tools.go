@@ -18,7 +18,8 @@ import (
 
 func registerTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "run_command",
+		Name:        "run_command",
+		Annotations: commandTool("Run visible command"),
 		Description: "Run a shell command in the shared terminal (visible to the user) and return its output. " +
 			"Works transparently whether the session is local or inside ssh. An exact exit_code is included when " +
 			"shell integration is active (framing \"osc133\"); otherwise (framing \"idle\") completion is inferred " +
@@ -27,39 +28,45 @@ func registerTools(s *mcp.Server, c *Core) {
 	}, c.runCommand)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "send_input",
+		Name:        "send_input",
+		Annotations: commandTool("Type terminal input"),
 		Description: "Type raw text into the shared terminal exactly as if the user typed it. " +
 			"No newline is added; include \\r to submit a command line. " +
 			"Prefer run_command for running commands and capturing their output.",
 	}, c.sendInput)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "send_keys",
+		Name:        "send_keys",
+		Annotations: commandTool("Press terminal keys"),
 		Description: "Press named keys in the shared terminal. Supported: enter, tab, esc, space, backspace, delete, insert, " +
 			"up, down, left, right, home, end, page_up, page_down, f1-f12, ctrl_a..ctrl_z (e.g. ctrl_c).",
 	}, c.sendKeys)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "read_screen",
+		Name:        "read_screen",
+		Annotations: readOnlyTool("Read terminal screen"),
 		Description: "Read the currently visible terminal screen as rendered plain text, " +
 			"with cursor position and whether a full-screen app (alternate screen) is active.",
 	}, c.readScreen)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "read_output",
+		Name:        "read_output",
+		Annotations: readOnlyTool("Read terminal output"),
 		Description: "Read the raw session output stream (scrollback) incrementally. Pass the next_cursor from the previous " +
 			"call to get only new output; omit cursor to get the most recent output. Escape sequences are stripped unless raw. " +
 			"dropped_bytes > 0 means the scrollback wrapped and that much output before the cursor is gone.",
 	}, c.readOutput)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "wait_idle",
+		Name:        "wait_idle",
+		Annotations: readOnlyTool("Wait for terminal idle"),
 		Description: "Wait until the terminal has produced no output for idle_ms milliseconds (default 1500), " +
 			"or until timeout_ms (default 30000) elapses. Useful after sending input that triggers slow output.",
 	}, c.waitIdle)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "session_status",
+		Name:        "session_status",
+		Annotations: readOnlyTool("Inspect aish session"),
 		Description: "Get the status of the shared terminal session: current host and out-of-band route (local/controlmaster/in_band), " +
 			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
 			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
@@ -67,7 +74,8 @@ func registerTools(s *mcp.Server, c *Core) {
 	}, c.sessionStatus)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "set_session_name",
+		Name:        "set_session_name",
+		Annotations: mutatingTool("Name aish session", false, true),
 		Description: "Name this session after what it is being used for (e.g. \"deploy-web\", \"zoneminder-debug\"). " +
 			"The name appears in the user's prompt badge and window title and selects the session in multi-session " +
 			"setups, so set it once the session's purpose is clear. Short kebab-case; letters, digits, . _ -, max 32 chars.",

@@ -52,6 +52,16 @@ type pooledConn struct {
 	cs  *mcp.ClientSession
 }
 
+const serverInstructions = "Aish gives you access to human-owned shared terminal sessions and to the current host " +
+	"inside each session, including a remote host reached by SSH. Your native shell and filesystem tools " +
+	"remain local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
+	"SSH'd into there, use aish tools instead. Start with list_sessions, choose the intended session, then " +
+	"call session_status; recheck status after SSH transitions. Every session tool accepts `session` (id or " +
+	"name). Use run_command for commands the human should see. Use exec, file_*, and directory_list for " +
+	"native-like work on the session's current host when OOB is authorized. Never send passwords or other " +
+	"secrets; if echo_off is true, wait for the human. Name the target session and host in chat before the " +
+	"first substantial or destructive operation. The user approves each session on its own terminal."
+
 // Serve runs the aggregating proxy over stdio until the client disconnects.
 func Serve(version string) int {
 	identity, err := clientauth.New()
@@ -69,16 +79,14 @@ func Serve(version string) int {
 	ctx := context.Background()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: version}, &mcp.ServerOptions{
-		Instructions: "Drive one or more shared aish terminal sessions. Every tool takes a `session` " +
-			"argument (id or name); call list_sessions to see what's live. Name the target session in " +
-			"chat before the first substantial operation — the user is asked to approve each session once, " +
-			"on that session's own terminal.",
+		Instructions: serverInstructions,
 	})
 
 	// list_sessions: answered locally, never gated.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_sessions",
 		Description: "List the live aish sessions on this machine (id and name). Use a session's id or name as the `session` argument to other tools. Safe to call anytime; never prompts the user.",
+		Annotations: &mcp.ToolAnnotations{Title: "List aish sessions", ReadOnlyHint: true},
 	}, p.listSessions)
 
 	// Mirror the session tools with a generic forwarding handler.

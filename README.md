@@ -173,18 +173,31 @@ Debug/poke without an AI:
 | `wait_idle` | Wait for output to go quiet |
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
-| `file_read` / `file_write` | Files on the *current* host (local, or remote via multiplexed channel, or size-capped in-band fallback) |
+| `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback) |
+| `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only |
+| `file_stat` / `directory_list` | Native-style path metadata and directory browsing on the current host; OOB only |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
-| `exec` / `exec_status` | Out-of-band (invisible) commands on the current host; background tasks with incremental polling |
+| `exec` / `exec_status` | Commands on the current host, with optional `cwd`; OOB background tasks with incremental polling |
 
 Every tool also takes an optional `session` (id or name) to run the call in
 another live session on the machine; forwarded calls are executed by the
 target session's own server, so its safety guards apply unchanged.
 
-Out-of-band (invisible) operation of `exec`/`file_*` requires the session to
-have been started with `--oob`; otherwise those tools run in-band — typed
-visibly through the shared terminal, size-capped — and `file_upload`/
-`file_download`/background `exec` refuse with guidance. See
+The MCP proxy also advertises a short operating guide to the model: native
+client shell/filesystem tools stay local, while aish tools target the shared
+session's current host (including the first SSH hop). It directs the model to
+list sessions, check `session_status`, recheck after SSH transitions, and keep
+secret input with the human. Tool schemas include read-only/destructive hints
+to improve planning and approval UI; the server still enforces the real safety
+boundaries.
+
+Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
+(`--oob`, the Ctrl-] runtime toggle, or an interactive grant). Without one,
+`file_read`/`file_write` and foreground `exec` can fall back in-band — typed
+visibly through the shared terminal, size-capped — while `file_edit`,
+`file_stat`, `directory_list`, `file_upload`/`file_download`, and background
+`exec` refuse with guidance. For remote OOB access, grant it before starting
+the SSH connection so the shim can create the ControlMaster. See
 [Security](#security).
 
 ## Security
@@ -274,11 +287,12 @@ restarting a client makes it a new client that must be approved again.
 
 ### Out-of-band operation authorization
 
-By default the AI **cannot act invisibly**. `file_read`/`file_write`/`exec`
-work by typing through the shared terminal, visibly, where you watch them
-happen; `file_upload`/`file_download` and background `exec` (which have no
-visible form) simply refuse. No ControlMaster multiplexing is set up at all,
-so no hidden channel to a remote host even exists.
+By default the AI **cannot act invisibly**. `file_read`/`file_write`/foreground
+`exec` can work by typing through the shared terminal, visibly, where you
+watch them happen. Native-style OOB-only operations (`file_edit`, `file_stat`,
+`directory_list`, upload/download, and background exec) refuse with guidance.
+No ControlMaster multiplexing is set up at all, so no hidden channel to a
+remote host even exists.
 
 Out-of-band (invisible) operation is opt-in, two ways:
 
@@ -365,8 +379,10 @@ ssh untouched — no multiplexing, no extra channels.)
 
 Remote OOB operations share **one persistent channel** per remote: a
 long-lived `sh -s` opened lazily over the master on the first OOB op, with
-all foreground `exec` and `file_*` traffic streamed through it
-(sentinel-framed, base64 for binary; results say `via: "channel"`). On
+all foreground `exec` and `file_*` traffic streamed through it. The private
+channel protocol uses nonce-delimited responses and base64 for binary data;
+none of that framing is typed into the shared terminal (results say
+`via: "channel"`). On
 hosts where each new ssh channel re-triggers MFA (Duo-style per-session
 push), this costs exactly one push per host per session instead of one per
 operation. A lost channel is never reopened silently: the failed call says
@@ -394,4 +410,5 @@ a hard kill.
   are in-band. (`ProxyJump` channel reuse is the planned fix.)
 - Only ssh sessions started *inside* aish are multiplexed; existing
   connections elsewhere can't be adopted.
-- bash and zsh get OSC 133 integration; fish falls back to sentinel framing.
+- bash and zsh get OSC 133 integration; fish and other unsupported shells
+  fall back to idle detection, with commands typed bare and no exit code.

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -9,6 +10,21 @@ import (
 	"ai-ssh/internal/authproto"
 	"ai-ssh/internal/paths"
 )
+
+func TestServerInstructionsLeadWithRoutingModel(t *testing.T) {
+	if len(serverInstructions) > 2000 {
+		t.Fatalf("server instructions are %d bytes; Claude truncates at 2KB", len(serverInstructions))
+	}
+	lead := serverInstructions
+	if len(lead) > 512 {
+		lead = lead[:512]
+	}
+	for _, phrase := range []string{"native shell", "remain local", "use aish tools", "list_sessions", "session_status"} {
+		if !strings.Contains(lead, phrase) {
+			t.Errorf("critical phrase %q is missing from first 512 bytes", phrase)
+		}
+	}
+}
 
 func TestListDoesNotRemoveUnreachableSocket(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())

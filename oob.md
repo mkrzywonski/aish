@@ -219,9 +219,9 @@ answered open question above):
 - remains fully local in deployment model
 - installs nothing on remote hosts
 - minimizes MFA prompts by avoiding repeated SSH channel/session creation
-- one long-lived `sh -s` over the mux; sentinel-framed command RPC and
-  base64 file transfer over its stdin/stdout (the in-band engine already
-  implements both — this is that machinery pointed at a hidden channel)
+- one long-lived `sh -s` over the mux; nonce-delimited command RPC and
+  base64 file transfer over its stdin/stdout, entirely inside the hidden
+  channel and never typed into the human's terminal
 - open lazily on first OOB op; never reopen silently (a reopen costs a
   push, so surface it)
 
