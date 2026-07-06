@@ -31,8 +31,9 @@ func (s SessionInfo) Label() string {
 	return s.ID
 }
 
-// List scans the runtime base dir for live sessions, sorted by id.
-// Stale sockets found while scanning are removed.
+// List scans the runtime base dir for live sessions, sorted by id. Discovery
+// is read-only: a failed ping may be caused by a transient sandbox or namespace
+// boundary, so cleanup belongs to the session startup sweeper.
 func List() []SessionInfo {
 	entries, err := os.ReadDir(paths.Base())
 	if err != nil {
@@ -45,8 +46,6 @@ func List() []SessionInfo {
 		}
 		sock := paths.Socket(e.Name())
 		if err := ping(sock); err != nil {
-			// Stale leftover from a killed session; clean it up.
-			os.Remove(sock)
 			continue
 		}
 		info, _ := e.Info()

@@ -30,12 +30,16 @@ import (
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"ai-ssh/internal/authproto"
+	"ai-ssh/internal/clientauth"
 )
 
 type aggProxy struct {
-	client  *mcp.Client
-	version string
-	frontSS *mcp.ServerSession // the connection to the AI client, for log notices
+	client   *mcp.Client
+	identity *clientauth.Identity
+	version  string
+	frontSS  *mcp.ServerSession // the connection to the AI client, for log notices
 
 	mu         sync.Mutex
 	identified bool                   // downstream client renamed to match the upstream TUI
@@ -50,8 +54,14 @@ type pooledConn struct {
 
 // Serve runs the aggregating proxy over stdio until the client disconnects.
 func Serve(version string) int {
+	identity, err := clientauth.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "aish mcp-proxy: generating client identity:", err)
+		return 1
+	}
 	p := &aggProxy{
 		client:    mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
+		identity:  identity,
 		version:   version,
 		conns:     map[string]*pooledConn{},
 		lastNames: map[string]string{},
@@ -191,9 +201,9 @@ func (p *aggProxy) resolve(target string) (SessionInfo, error) {
 	return Resolve(target, live)
 }
 
-// conn returns the pooled connection for a session, opening (and MCP-
-// handshaking) it on first use. The proxy does NOT present the session token,
-// so the session's own y/n approval prompt fires on first use.
+// conn returns the pooled connection for a session, opening, MCP-handshaking,
+// and authorizing it on first use. The proxy keeps its private key and grants
+// in memory, so reconnects prove possession without prompting again.
 func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSession, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -216,6 +226,11 @@ func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSessi
 	}
 	cs, err := p.client.Connect(ctx, &mcp.IOTransport{Reader: raw, Writer: raw}, nil)
 	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+	if err := p.identity.Authorize(ctx, cs, info.ID); err != nil {
+		cs.Close()
 		raw.Close()
 		return nil, err
 	}
@@ -294,7 +309,7 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 // ---- tool-list mirroring (schema cache) ----
 
 // toolSpecs returns the session tool set to advertise (all session tools
-// except the internal `authorize`). It mirrors a live session's schemas and
+// except the internal authentication tools). It mirrors a live session's schemas and
 // caches them to disk so it works even when no session is currently running.
 func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 	if live := List(); len(live) > 0 {
@@ -330,8 +345,8 @@ func (p *aggProxy) fetchTools(ctx context.Context, info SessionInfo) ([]*mcp.Too
 func filterTools(tools []*mcp.Tool) []*mcp.Tool {
 	out := make([]*mcp.Tool, 0, len(tools))
 	for _, t := range tools {
-		if t.Name == "authorize" {
-			continue // internal token path; not for AI clients
+		if authproto.InternalTools[t.Name] {
+			continue // private client authorization protocol
 		}
 		out = append(out, t)
 	}

@@ -61,20 +61,6 @@ func WriteName(id, name string) error {
 	return os.WriteFile(NameFile(id), []byte(name+"\n"), 0o600)
 }
 
-// TokenFile holds a per-session secret that lets same-uid internal clients
-// (cross-session forwarding, the debug CLI) skip the interactive connection
-// challenge. 0600 in a 0700 dir.
-func TokenFile(id string) string { return filepath.Join(SessionDir(id), "token") }
-
-// ReadToken returns the session's internal token, or "" if unreadable.
-func ReadToken(id string) string {
-	b, err := os.ReadFile(TokenFile(id))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
 // OOBFile marks that out-of-band operations are authorized for the session.
 // Its presence is read by the ssh shim (deciding whether to inject
 // ControlMaster) and by the MCP server (deciding whether to act invisibly).

@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ai-ssh/internal/clientauth"
 	"ai-ssh/internal/paths"
 	"ai-ssh/internal/proxy"
 )
@@ -73,12 +74,26 @@ func (c *Core) callInSession(ctx context.Context, target, tool string, args map[
 		return nil, fmt.Errorf("session %s: %v", info.Label(), err)
 	}
 	defer cs.Close()
-	// Authenticate this internal connection with the target session's token
-	// so it isn't blocked by the connection challenge.
-	if tok := paths.ReadToken(info.ID); tok != "" {
-		if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"token": tok}}); err != nil {
-			return nil, fmt.Errorf("session %s: authorize: %v", info.Label(), err)
-		}
+	identity, err := c.crossIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("session %s: generating client identity: %v", info.Label(), err)
+	}
+	if err := identity.Authorize(ctx, cs, info.ID); err != nil {
+		return nil, fmt.Errorf("session %s: authorize: %v", info.Label(), err)
 	}
 	return cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+}
+
+func (c *Core) crossIdentity() (*clientauth.Identity, error) {
+	c.crossAuthMu.Lock()
+	defer c.crossAuthMu.Unlock()
+	if c.crossAuth != nil {
+		return c.crossAuth, nil
+	}
+	identity, err := clientauth.New()
+	if err != nil {
+		return nil, err
+	}
+	c.crossAuth = identity
+	return identity, nil
 }

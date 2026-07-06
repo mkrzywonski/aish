@@ -9,10 +9,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ai-ssh/internal/clientauth"
 	"ai-ssh/internal/proxy"
 )
 
@@ -65,15 +65,6 @@ func Main(version string, args []string) int {
 	}
 	defer cs.Close()
 
-	// Authenticate with the session token (same dir as the socket) so the
-	// debug CLI isn't blocked by the interactive connection challenge.
-	if tok, terr := os.ReadFile(filepath.Join(filepath.Dir(sock), "token")); terr == nil {
-		if _, aerr := cs.CallTool(ctx, &mcp.CallToolParams{Name: "authorize", Arguments: map[string]any{"token": strings.TrimSpace(string(tok))}}); aerr != nil {
-			fmt.Fprintln(os.Stderr, "aish client: authorize:", aerr)
-			return 1
-		}
-	}
-
 	if list {
 		res, err := cs.ListTools(ctx, nil)
 		if err != nil {
@@ -84,6 +75,17 @@ func Main(version string, args []string) int {
 			fmt.Printf("%-16s %s\n", t.Name, t.Description)
 		}
 		return 0
+	}
+
+	identity, err := clientauth.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "aish client: generating client identity:", err)
+		return 1
+	}
+	resolvedID := filepath.Base(filepath.Dir(sock))
+	if err := identity.Authorize(ctx, cs, resolvedID); err != nil {
+		fmt.Fprintln(os.Stderr, "aish client: authorize:", err)
+		return 1
 	}
 
 	tool := rest[0]

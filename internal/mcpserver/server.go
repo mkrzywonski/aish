@@ -10,9 +10,11 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ai-ssh/internal/clientauth"
 	"ai-ssh/internal/framing"
 	"ai-ssh/internal/paths"
 	"ai-ssh/internal/session"
@@ -31,14 +33,18 @@ type Core struct {
 	Tasks   *sshmux.Table
 	Version string
 
-	// Token is the per-session secret that lets internal same-uid clients
-	// (cross-session forwarding, debug CLI) skip the connection prompt.
-	Token string
-
 	// NoAuth disables the interactive connection-approval prompt (--no-auth):
 	// any client that connects can drive the session immediately. For
 	// zero-friction sessions where the user doesn't want to approve clients.
 	NoAuth bool
+
+	// AutoApprove (--auto-approve) keeps the full authorization handshake in
+	// force but auto-answers the approval prompt "yes" (with a Notify, so the
+	// approval is still visible) instead of blocking on a human. Unlike NoAuth
+	// it doesn't disable the gate — clients still run request_access and prove
+	// possession on reconnect — which makes it the realistic path for one-shot
+	// testing (e.g. the debug CLI) without an on-disk secret.
+	AutoApprove bool
 
 	// oobAlways records a runtime "always" grant of out-of-band access (the
 	// 'a' answer). The persistent marker is the OOB file (also written), but
@@ -46,10 +52,21 @@ type Core struct {
 	oobAlways atomic.Bool
 
 	// authMu guards conns: per-connection authorization state, so a new MCP
-	// client must present the 6-digit code shown in the terminal (or the
-	// internal token) before its tool calls are honored.
-	authMu sync.Mutex
-	conns  map[*mcp.ServerSession]*connAuth
+	// client must obtain an interactive grant or prove possession of an
+	// already-approved client key before its tool calls are honored.
+	authMu     sync.Mutex
+	conns      map[*mcp.ServerSession]*connAuth
+	grants     map[string]clientGrant
+	challenges map[string]authChallenge
+
+	// ApprovalPrompt, ApprovalTimeout, and ChallengeTTL are overridable for
+	// tests. Production uses Sess.Prompt, 120 seconds, and 30 seconds.
+	ApprovalPrompt  func(string, string, time.Duration) (byte, bool)
+	ApprovalTimeout time.Duration
+	ChallengeTTL    time.Duration
+
+	crossAuthMu sync.Mutex
+	crossAuth   *clientauth.Identity
 
 	// OnClients, when set, is called with the number of connected MCP
 	// clients whenever it changes (drives the title-bar activity marker).
@@ -103,6 +120,12 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 
 	if core.conns == nil {
 		core.conns = map[*mcp.ServerSession]*connAuth{}
+	}
+	if core.grants == nil {
+		core.grants = map[string]clientGrant{}
+	}
+	if core.challenges == nil {
+		core.challenges = map[string]authChallenge{}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)

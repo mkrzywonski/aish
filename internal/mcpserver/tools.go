@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ai-ssh/internal/authproto"
 	"ai-ssh/internal/framing"
 	"ai-ssh/internal/paths"
 	"ai-ssh/internal/state"
@@ -72,12 +73,12 @@ func registerTools(s *mcp.Server, c *Core) {
 			"setups, so set it once the session's purpose is clear. Short kebab-case; letters, digits, . _ -, max 32 chars.",
 	}, c.setSessionName)
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name: "authorize",
-		Description: "Internal: same-uid helpers (cross-session forwarding, the debug CLI) present the per-session " +
-			"token to bypass the connection-approval prompt. AI clients don't call this — the user approves new " +
-			"connections with a y/n prompt in the terminal instead.",
-	}, c.authorize)
+	mcp.AddTool(s, &mcp.Tool{Name: authproto.RequestAccessTool,
+		Description: "Internal: request interactive approval for a client public key."}, c.requestAccess)
+	mcp.AddTool(s, &mcp.Tool{Name: authproto.ChallengeTool,
+		Description: "Internal: request a single-use proof-of-possession challenge."}, c.authChallenge)
+	mcp.AddTool(s, &mcp.Tool{Name: authproto.AuthenticateTool,
+		Description: "Internal: authenticate an approved client by signing its challenge."}, c.authenticate)
 }
 
 // ---- run_command ----

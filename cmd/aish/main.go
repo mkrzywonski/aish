@@ -30,13 +30,16 @@ import (
 const usage = `aish — AI-shareable terminal
 
 Usage:
-  aish [run] [--name <name>] [--oob] [--no-auth]
+  aish [run] [--name <name>] [--oob] [--no-auth] [--auto-approve]
                       start a shared shell session (default)
                       --oob authorizes out-of-band (invisible) file/exec
                       operations; without it every AI action goes through
                       the shared terminal where you can see it
                       --no-auth skips the y/n prompt on each new client
                       connection (zero-friction; you won't be asked)
+                      --auto-approve keeps the auth handshake but auto-answers
+                      the approval prompt (for one-shot testing; you're
+                      notified but not blocked)
   aish sessions       list live sessions (id, name)
   aish install [claude|codex|all]
                       register the aish MCP server with an AI TUI (default: all found)
@@ -91,6 +94,7 @@ func runMain(args []string) int {
 	var name string
 	var oob bool
 	var noAuth bool
+	var autoApprove bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--name":
@@ -104,6 +108,8 @@ func runMain(args []string) int {
 			oob = true
 		case "--no-auth":
 			noAuth = true
+		case "--auto-approve":
+			autoApprove = true
 		default:
 			fmt.Fprintf(os.Stderr, "aish: unknown option %q\n%s", args[i], usage)
 			return 2
@@ -141,13 +147,6 @@ func runMain(args []string) int {
 		}
 	}
 
-	// Per-session token for internal same-uid clients (cross-session
-	// forwarding, debug CLI) to bypass the interactive connection challenge.
-	token := session.NewID() + session.NewID() // 16 random hex bytes
-	if err := os.WriteFile(paths.TokenFile(id), []byte(token), 0o600); err != nil {
-		fmt.Fprintln(os.Stderr, "aish:", err)
-		return 1
-	}
 	if oob {
 		if err := paths.GrantOOB(id); err != nil {
 			fmt.Fprintln(os.Stderr, "aish:", err)
@@ -212,7 +211,7 @@ func runMain(args []string) int {
 	defer cancel()
 	core := &mcpserver.Core{
 		Sess: sess, Term: trm, Tracker: tracker, Engine: engine,
-		Mux: mux, Tasks: sshmux.NewTable(), Version: version, Token: token, NoAuth: noAuth,
+		Mux: mux, Tasks: sshmux.NewTable(), Version: version, NoAuth: noAuth, AutoApprove: autoApprove,
 		OnClients: func(n int) { titles.SetConnected(n > 0) },
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}
@@ -227,8 +226,8 @@ func runMain(args []string) int {
 			oobState = "on"
 		}
 		choice, ok := sess.Prompt(
-			fmt.Sprintf("aish menu — [r] rename session, [o] out-of-band ops (currently %s), Esc to cancel", oobState),
-			"ro", 30*time.Second)
+			fmt.Sprintf("aish menu — [r] rename session, [o] out-of-band ops (currently %s), [k] revoke client access, Esc to cancel", oobState),
+			"rok", 30*time.Second)
 		if !ok {
 			return
 		}
@@ -256,6 +255,12 @@ func runMain(args []string) int {
 				sess.Notify("out-of-band operations ENABLED — the AI may now act invisibly (ControlMaster channels, direct file/exec)")
 			} else {
 				sess.Notify("out-of-band operations DISABLED — AI activity stays visible in the shared terminal")
+			}
+		case 'k':
+			n := core.Revoke()
+			sess.Notify("revoked client access — %d connection(s) dropped; all clients cleared and must be re-approved", n)
+			if noAuth {
+				sess.Notify("note: this session runs with --no-auth, so reconnecting clients are NOT prompted for approval")
 			}
 		}
 	})
