@@ -26,7 +26,7 @@ mkfifo $SCRATCH/stdin.fifo
 script -qec "./aish --auto-approve" /dev/null < $SCRATCH/stdin.fifo > $SCRATCH/session.log 2>&1
 ```
 
-Use `--auto-approve` for test sessions: the one-shot debug client now runs the full Ed25519 approval handshake (it no longer bypasses consent with a token), so without it every `./aish client …` call blocks on a y/n prompt on the session's terminal — which for a FIFO-driven session means `printf y > $SCRATCH/stdin.fifo` before each command. `--auto-approve` auto-answers that prompt while still exercising the real handshake (request_access → challenge → authenticate), so it's the faithful test path; `--no-auth` (which disables the gate entirely) also works if you don't care about the auth path. Then exercise it from another shell:
+Use `--auto-approve` for test sessions: the one-shot debug client now runs the full Ed25519 approval handshake (it no longer bypasses consent with a token), so without it every `./aish client …` call blocks on a y/n prompt on the session's terminal — which for a FIFO-driven session means `printf y > $SCRATCH/stdin.fifo` before each command. `--auto-approve` auto-answers that prompt while still exercising the real handshake (request_access → auth_challenge → authenticate), so it's the faithful test path; `--no-auth` (which disables the gate entirely) also works if you don't care about the auth path. Then exercise it from another shell:
 
 ```sh
 ./aish client --list

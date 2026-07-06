@@ -331,8 +331,10 @@ Every aish session is visibly marked as shared:
 ## The aish menu
 
 Press **`Ctrl-]`** at the shell to open the aish menu (the keypress is caught
-by aish and never reaches the shell). `Esc` cancels the menu at any point. It
-offers:
+by aish and doesn't reach the shell). `Esc` cancels the menu at any point. So
+does a second **`Ctrl-]`** — which additionally passes one literal `Ctrl-]`
+through to the shell, so you can still send the key to a program (e.g. `telnet`)
+by pressing it twice. The menu offers:
 
 - **`r` — rename this session.** Type a new name, Enter. The rename shows up in
   the prompt badge on the next prompt and in the window title immediately, and
