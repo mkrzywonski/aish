@@ -34,11 +34,13 @@ import (
 
 type aggProxy struct {
 	client  *mcp.Client
+	version string
 	frontSS *mcp.ServerSession // the connection to the AI client, for log notices
 
-	mu        sync.Mutex
-	conns     map[string]*pooledConn // by session id
-	lastNames map[string]string      // last-seen name per session id, for rename detection
+	mu         sync.Mutex
+	identified bool                   // downstream client renamed to match the upstream TUI
+	conns      map[string]*pooledConn // by session id
+	lastNames  map[string]string      // last-seen name per session id, for rename detection
 }
 
 type pooledConn struct {
@@ -50,6 +52,7 @@ type pooledConn struct {
 func Serve(version string) int {
 	p := &aggProxy{
 		client:    mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
+		version:   version,
 		conns:     map[string]*pooledConn{},
 		lastNames: map[string]string{},
 	}
@@ -194,6 +197,16 @@ func (p *aggProxy) resolve(target string) (SessionInfo, error) {
 func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSession, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Adopt the upstream TUI's identity (claude/codex) for downstream
+	// connections the first time we open one, so the session's approval prompt
+	// names the real client instead of "aish-proxy". Done lazily because the
+	// upstream initialize handshake has completed by the first tool call.
+	if !p.identified {
+		if name := friendlyClientName(p.frontSS); name != "" {
+			p.client = mcp.NewClient(&mcp.Implementation{Name: name, Version: p.version}, nil)
+		}
+		p.identified = true
+	}
 	if pc := p.conns[info.ID]; pc != nil {
 		return pc.cs, nil
 	}
@@ -208,6 +221,29 @@ func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSessi
 	}
 	p.conns[info.ID] = &pooledConn{raw: raw, cs: cs}
 	return cs, nil
+}
+
+// friendlyClientName maps the upstream MCP client's self-reported name to a
+// short label for the session's approval prompt: "claude" or "codex" for the
+// known TUIs, otherwise the raw name (e.g. a custom client). Returns "" when
+// the upstream identity isn't known yet.
+func friendlyClientName(ss *mcp.ServerSession) string {
+	if ss == nil {
+		return ""
+	}
+	ip := ss.InitializeParams()
+	if ip == nil || ip.ClientInfo == nil {
+		return ""
+	}
+	name := ip.ClientInfo.Name
+	switch {
+	case strings.Contains(strings.ToLower(name), "claude"):
+		return "claude"
+	case strings.Contains(strings.ToLower(name), "codex"):
+		return "codex"
+	default:
+		return name
+	}
 }
 
 func (p *aggProxy) drop(id string) {

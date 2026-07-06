@@ -63,7 +63,7 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 	// scroll under the prompt; draw the question.
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	fmt.Fprintf(os.Stdout, "\r\n%s🔒 aish%s %s [%s] ", promptColor, promptReset, question, keyHint(accept))
+	fmt.Fprintf(os.Stdout, "\r\n%s%s [%s]%s ", promptColor, question, keyHint(accept), promptReset)
 
 	deadline := time.After(timeout)
 	for {
@@ -97,7 +97,7 @@ func (s *Session) PromptLine(question string, timeout time.Duration) (string, bo
 
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	fmt.Fprintf(os.Stdout, "\r\n%s🔒 aish%s %s ", promptColor, promptReset, question)
+	fmt.Fprintf(os.Stdout, "\r\n%s%s%s ", promptColor, question, promptReset)
 
 	var line []byte
 	deadline := time.After(timeout)

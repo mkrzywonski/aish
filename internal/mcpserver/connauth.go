@@ -104,7 +104,7 @@ func (c *Core) ensureApproved(ss *mcp.ServerSession) error {
 
 func clientName(ss *mcp.ServerSession) string {
 	if ip := ss.InitializeParams(); ip != nil && ip.ClientInfo != nil && ip.ClientInfo.Name != "" {
-		return "an AI client (" + ip.ClientInfo.Name + ")"
+		return ip.ClientInfo.Name
 	}
 	return "an AI client"
 }
