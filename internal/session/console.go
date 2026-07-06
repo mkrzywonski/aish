@@ -33,19 +33,36 @@ func (s *Session) Notify(format string, args ...any) {
 	fmt.Fprintf(os.Stdout, "\r\n%s🔒 aish%s %s\r\n", promptColor, promptReset, msg)
 }
 
-// beginCapture diverts stdin from the shell to a fresh channel and returns it
-// with a cleanup func. Callers hold promptMu.
-func (s *Session) beginCapture() (chan byte, func()) {
-	ch := make(chan byte, 256)
+// beginCapture diverts stdin from the shell to a fresh channel and returns it,
+// a cancel channel (closed by cancelCapture to abort the prompt out of band),
+// and a cleanup func. Callers hold promptMu.
+func (s *Session) beginCapture() (ch chan byte, cancel <-chan struct{}, done func()) {
+	c := make(chan byte, 256)
+	cc := make(chan struct{})
 	s.capMu.Lock()
-	s.capCh = ch
+	s.capCh = c
+	s.capCancel = cc
 	s.capMu.Unlock()
 	s.capturing.Store(true)
-	return ch, func() {
+	return c, cc, func() {
 		s.capturing.Store(false)
 		s.capMu.Lock()
 		s.capCh = nil
+		s.capCancel = nil
 		s.capMu.Unlock()
+	}
+}
+
+// cancelCapture aborts the active prompt (if any) by closing its cancel
+// channel — used by the input pump when a second menu key arrives. Safe to
+// call when no prompt is active.
+func (s *Session) cancelCapture() {
+	s.capMu.Lock()
+	cc := s.capCancel
+	s.capCancel = nil // clear so the close happens at most once
+	s.capMu.Unlock()
+	if cc != nil {
+		close(cc)
 	}
 }
 
@@ -56,7 +73,7 @@ func (s *Session) beginCapture() (chan byte, func()) {
 func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, bool) {
 	s.promptMu.Lock()
 	defer s.promptMu.Unlock()
-	ch, done := s.beginCapture()
+	ch, cancel, done := s.beginCapture()
 	defer done()
 
 	// Hold output for the whole interaction so the frozen screen doesn't
@@ -79,6 +96,9 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 				return lb, true
 			}
 			// ignore anything else (stray Enter, arrow keys, etc.)
+		case <-cancel: // a second menu key aborted the prompt
+			fmt.Fprintf(os.Stdout, "(cancelled)\r\n")
+			return 0, false
 		case <-deadline:
 			fmt.Fprintf(os.Stdout, "(timed out)\r\n")
 			return 0, false
@@ -92,7 +112,7 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 func (s *Session) PromptLine(question string, timeout time.Duration) (string, bool) {
 	s.promptMu.Lock()
 	defer s.promptMu.Unlock()
-	ch, done := s.beginCapture()
+	ch, cancel, done := s.beginCapture()
 	defer done()
 
 	s.outMu.Lock()
@@ -120,6 +140,9 @@ func (s *Session) PromptLine(question string, timeout time.Duration) (string, bo
 				line = append(line, b)
 				fmt.Fprintf(os.Stdout, "%c", b)
 			}
+		case <-cancel: // a second menu key aborted the prompt
+			fmt.Fprint(os.Stdout, "\r\n")
+			return "", false
 		case <-deadline:
 			fmt.Fprint(os.Stdout, "\r\n")
 			return "", false

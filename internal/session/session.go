@@ -45,12 +45,14 @@ type Session struct {
 	// Console (console.go): out-of-band interaction with the user that does
 	// not touch the PTY. outMu gates the output pump while a prompt is on
 	// screen; promptMu serializes prompts; capturing/capCh divert stdin from
-	// the shell to an active prompt.
+	// the shell to an active prompt; capCancel lets the input pump cancel the
+	// active prompt out of band (a second menu key).
 	outMu     sync.Mutex
 	promptMu  sync.Mutex
 	capturing atomic.Bool
 	capMu     sync.Mutex
 	capCh     chan byte
+	capCancel chan struct{}
 
 	// menuKey (default Ctrl-]) opened the aish menu when typed at the shell;
 	// onMenu runs the menu. Swallowed from the shell input when triggered.
@@ -156,12 +158,15 @@ func (s *Session) Run() (int, error) {
 			if n > 0 {
 				if s.capturing.Load() {
 					// A prompt/menu is up: the keypress answers aish, not the
-					// shell. A second menu key cancels the prompt (like Esc) and
-					// passes one literal menu key through to the shell — so you
-					// can still send Ctrl-] to a program by pressing it twice.
+					// shell. A second menu key cancels the prompt and passes one
+					// literal menu key through to the shell — so you can still
+					// send Ctrl-] to a program by pressing it twice.
 					if i := bytes.IndexByte(buf[:n], s.menuKey); i >= 0 {
-						s.deliverCaptured(buf[:i]) // bytes before it still answer the prompt
-						s.deliverCaptured([]byte{0x1b}) // Esc: cancel the active prompt
+						// Cancel unconditionally: don't deliver the bytes before
+						// the menu key, or they could answer the prompt (e.g.
+						// "o"+Ctrl-] toggling out-of-band ops) before the cancel
+						// lands.
+						s.cancelCapture()
 						// The menu key and anything typed after it go to the
 						// shell now that the menu is dismissed.
 						s.WriteInput(append([]byte{s.menuKey}, buf[i+1:n]...))
