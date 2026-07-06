@@ -5,6 +5,7 @@
 package session
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -155,8 +156,18 @@ func (s *Session) Run() (int, error) {
 			if n > 0 {
 				if s.capturing.Load() {
 					// A prompt/menu is up: the keypress answers aish, not the
-					// shell.
-					s.deliverCaptured(buf[:n])
+					// shell. A second menu key cancels the prompt (like Esc) and
+					// passes one literal menu key through to the shell — so you
+					// can still send Ctrl-] to a program by pressing it twice.
+					if i := bytes.IndexByte(buf[:n], s.menuKey); i >= 0 {
+						s.deliverCaptured(buf[:i]) // bytes before it still answer the prompt
+						s.deliverCaptured([]byte{0x1b}) // Esc: cancel the active prompt
+						// The menu key and anything typed after it go to the
+						// shell now that the menu is dismissed.
+						s.WriteInput(append([]byte{s.menuKey}, buf[i+1:n]...))
+					} else {
+						s.deliverCaptured(buf[:n])
+					}
 				} else if i := s.menuTrigger(buf[:n]); i >= 0 {
 					// Swallow the menu key, forward the rest to the shell,
 					// open the menu on its own goroutine.
