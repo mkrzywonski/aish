@@ -120,32 +120,36 @@ func (p *aggProxy) forward(ctx context.Context, tool string, req *mcp.CallToolRe
 	target, _ := args["session"].(string)
 	delete(args, "session")
 
-	info, err := p.resolve(target)
+	// One session snapshot for the whole call: resolve the target and detect
+	// renames from the same list (each List() does a readdir plus a per-session
+	// socket ping and name read, so we don't want it twice per forward).
+	live := List()
+
+	info, err := p.resolve(target, live)
 	if err != nil {
 		// Annotate so a lookup that failed *because* of a rename carries the
 		// explanation, not just "no such session".
-		return p.annotate(ctx, toolError("%v", err)), nil
+		return p.annotate(ctx, toolError("%v", err), live), nil
 	}
 
 	cs, err := p.conn(ctx, info)
 	if err != nil {
-		return p.annotate(ctx, toolError("connecting to session %s: %v", info.Label(), err)), nil
+		return p.annotate(ctx, toolError("connecting to session %s: %v", info.Label(), err), live), nil
 	}
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		// Connection likely died with the session; drop it and report so the
 		// AI can re-list and retry.
 		p.drop(info.ID)
-		return p.annotate(ctx, toolError("session %s: %v", info.Label(), err)), nil
+		return p.annotate(ctx, toolError("session %s: %v", info.Label(), err), live), nil
 	}
-	return p.annotate(ctx, res), nil
+	return p.annotate(ctx, res, live), nil
 }
 
 // renameNotices reports sessions whose name changed since the proxy last
 // observed them, and refreshes the record. This is how the AI learns a
 // session was renamed out from under the name it's been using.
-func (p *aggProxy) renameNotices() []string {
-	live := List()
+func (p *aggProxy) renameNotices(live []SessionInfo) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var notices []string
@@ -169,8 +173,8 @@ func quoteName(n string) string {
 
 // annotate prepends a rename notice to a result (the channel the model
 // reliably sees) and also emits a logging notification.
-func (p *aggProxy) annotate(ctx context.Context, res *mcp.CallToolResult) *mcp.CallToolResult {
-	notices := p.renameNotices()
+func (p *aggProxy) annotate(ctx context.Context, res *mcp.CallToolResult, live []SessionInfo) *mcp.CallToolResult {
+	notices := p.renameNotices(live)
 	if len(notices) == 0 {
 		return res
 	}
@@ -187,8 +191,7 @@ func (p *aggProxy) annotate(ctx context.Context, res *mcp.CallToolResult) *mcp.C
 
 // resolve picks the target session: the named one, or the sole live session
 // when unnamed. Ambiguity is an error — never a guess.
-func (p *aggProxy) resolve(target string) (SessionInfo, error) {
-	live := List()
+func (p *aggProxy) resolve(target string, live []SessionInfo) (SessionInfo, error) {
 	if len(live) == 0 {
 		return SessionInfo{}, errors.New("no aish sessions are running; start one with `aish`")
 	}
@@ -206,25 +209,37 @@ func (p *aggProxy) resolve(target string) (SessionInfo, error) {
 // in memory, so reconnects prove possession without prompting again.
 func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSession, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	// Adopt the upstream TUI's identity (claude/codex) for downstream
 	// connections the first time we open one, so the session's approval prompt
-	// names the real client instead of "aish-proxy". Done lazily because the
-	// upstream initialize handshake has completed by the first tool call.
+	// names the real client instead of "aish-proxy". Cheap and local, so it's
+	// safe under the lock; the upstream initialize handshake has completed by
+	// the first tool call.
 	if !p.identified {
+		// Only latch once a real name is applied; if the upstream identity
+		// isn't known yet (empty name), leave it unlatched so a later conn()
+		// retries rather than pinning the generic "aish-proxy" for good.
 		if name := friendlyClientName(p.frontSS); name != "" {
 			p.client = mcp.NewClient(&mcp.Implementation{Name: name, Version: p.version}, nil)
+			p.identified = true
 		}
-		p.identified = true
 	}
 	if pc := p.conns[info.ID]; pc != nil {
+		p.mu.Unlock()
 		return pc.cs, nil
 	}
+	client := p.client
+	p.mu.Unlock()
+
+	// Dial, MCP-handshake, and authorize WITHOUT holding p.mu. Authorize runs
+	// the approval handshake, which on first access blocks on the target's y/n
+	// terminal prompt for up to defaultApprovalTimeout (120s); holding the pool
+	// lock across it would freeze every routed call to every other session
+	// (including list_sessions) until that unrelated approval resolves.
 	raw, err := net.Dial("unix", info.Sock)
 	if err != nil {
 		return nil, err
 	}
-	cs, err := p.client.Connect(ctx, &mcp.IOTransport{Reader: raw, Writer: raw}, nil)
+	cs, err := client.Connect(ctx, &mcp.IOTransport{Reader: raw, Writer: raw}, nil)
 	if err != nil {
 		raw.Close()
 		return nil, err
@@ -234,7 +249,20 @@ func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSessi
 		raw.Close()
 		return nil, err
 	}
+
+	p.mu.Lock()
+	// A concurrent first-touch call for the same session (e.g. parallel tool
+	// calls naming a not-yet-connected session) may have pooled a connection
+	// while we were authorizing. If so, keep theirs and discard ours rather
+	// than leaking a second connection.
+	if existing := p.conns[info.ID]; existing != nil {
+		p.mu.Unlock()
+		cs.Close()
+		raw.Close()
+		return existing.cs, nil
+	}
 	p.conns[info.ID] = &pooledConn{raw: raw, cs: cs}
+	p.mu.Unlock()
 	return cs, nil
 }
 
@@ -297,12 +325,13 @@ type listSessionsResult struct {
 
 func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, args listSessionsArgs) (*mcp.CallToolResult, listSessionsResult, error) {
 	var out listSessionsResult
-	for _, s := range List() {
+	live := List()
+	for _, s := range live {
 		out.Sessions = append(out.Sessions, sessionEntry{ID: s.ID, Name: s.Name})
 	}
 	// Refresh the rename baseline so list_sessions establishes ground truth
 	// without also flagging its own results (the AI is already looking here).
-	p.renameNotices()
+	p.renameNotices(live)
 	return nil, out, nil
 }
 

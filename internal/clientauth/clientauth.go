@@ -42,14 +42,29 @@ func New() (*Identity, error) {
 // Authorize authorizes cs for targetSession. It proves possession of a
 // cached grant when possible and otherwise requests interactive approval.
 func (i *Identity) Authorize(ctx context.Context, cs *mcp.ClientSession, targetSession string) error {
+	// i.mu guards only the i.grants map. The RPC round-trips run WITHOUT it:
+	// request_access can block on the server's approval prompt for up to ~120s,
+	// and a single Identity is shared across targets (the proxy pool, cross-
+	// session forwarding), so holding the lock across the handshake would
+	// serialize authorizations to unrelated sessions. i.private/i.public are
+	// immutable after New(), so signing needs no lock.
 	i.mu.Lock()
-	defer i.mu.Unlock()
-	if grantID := i.grants[targetSession]; grantID != "" {
+	grantID := i.grants[targetSession]
+	i.mu.Unlock()
+
+	if grantID != "" {
 		if err := i.authenticate(ctx, cs, grantID); err == nil {
 			return nil
 		}
-		delete(i.grants, targetSession)
+		// Stale or rejected grant: forget it (unless another goroutine already
+		// replaced it) and fall through to request a fresh one.
+		i.mu.Lock()
+		if i.grants[targetSession] == grantID {
+			delete(i.grants, targetSession)
+		}
+		i.mu.Unlock()
 	}
+
 	var result authproto.RequestAccessResult
 	if err := call(ctx, cs, authproto.RequestAccessTool, authproto.RequestAccessArgs{PublicKey: i.public}, &result); err != nil {
 		return fmt.Errorf("requesting session access: %w", err)
@@ -57,7 +72,9 @@ func (i *Identity) Authorize(ctx context.Context, cs *mcp.ClientSession, targetS
 	if result.GrantID == "" {
 		return errors.New("requesting session access: server returned an empty grant")
 	}
+	i.mu.Lock()
 	i.grants[targetSession] = result.GrantID
+	i.mu.Unlock()
 	return nil
 }
 
