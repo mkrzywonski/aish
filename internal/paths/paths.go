@@ -7,14 +7,23 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 // Base returns the directory that holds all session runtime dirs.
-// Prefers XDG_RUNTIME_DIR (0700 tmpfs, cleaned at logout).
+// Prefers XDG_RUNTIME_DIR (0700 tmpfs, cleaned at logout). When that env var
+// is missing, use /run/user/$UID if it exists so subprocesses launched without
+// the full login environment still discover the active sessions.
 func Base() string {
 	if x := os.Getenv("XDG_RUNTIME_DIR"); x != "" {
 		return filepath.Join(x, "aish")
+	}
+	if uid := os.Getuid(); uid >= 0 {
+		runUser := filepath.Join("/run/user", strconv.Itoa(uid))
+		if info, err := os.Stat(runUser); err == nil && info.IsDir() {
+			return filepath.Join(runUser, "aish")
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
