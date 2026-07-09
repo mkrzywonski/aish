@@ -346,8 +346,11 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 // ---- tool-list mirroring (schema cache) ----
 
 // toolSpecs returns the session tool set to advertise (all session tools
-// except the internal authentication tools). It mirrors a live session's schemas and
-// caches them to disk so it works even when no session is currently running.
+// except the internal authentication tools). It mirrors a live session's
+// schemas and caches them to disk so it works even when no session is
+// currently running. On a first run with no session and no cache yet, the
+// proxy still starts with only its local tools; reconnect after starting a
+// session to advertise the mirrored session tools.
 func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 	if live := List(); len(live) > 0 {
 		if tools, err := p.fetchTools(ctx, live[0]); err == nil {
@@ -358,7 +361,8 @@ func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 	if tools := loadToolCache(); tools != nil {
 		return filterTools(tools), nil
 	}
-	return nil, errors.New("no aish session is running and no cached tool list is available; start a session once (`aish`) so the proxy can learn the tools, then reconnect")
+	fmt.Fprintln(os.Stderr, "aish mcp-proxy: no aish session is running and no cached tool list is available; exposing list_sessions only until a session exists and the client reconnects")
+	return nil, nil
 }
 
 func (p *aggProxy) fetchTools(ctx context.Context, info SessionInfo) ([]*mcp.Tool, error) {
