@@ -10,10 +10,12 @@
 > **The long-term design is also implemented** (`sshmux/channel.go`): with
 > `--oob`, remote foreground exec and file operations share one persistent
 > `sh -s` channel per remote, opened lazily on the first OOB op — one MFA
-> push per host per session. Lost channels are never reopened silently; the
-> retry after the error is the consent. Background exec uses a dedicated
-> channel (concurrent stream). Remaining open item: consent-based OOB
-> health probing (medium term).
+> push per host per session. `--oob` must be enabled before starting the SSH
+> hop you want to multiplex; turning OOB on after SSH is already running does
+> not retrofit the existing connection. Lost channels are never reopened
+> silently; the retry after the error is the consent. Background exec uses a
+> dedicated channel (concurrent stream). Remaining open item: consent-based
+> OOB health probing (medium term).
 >
 > **End-to-end confirmation (2026-07-03):** against the production Duo
 > host, a six-operation sequence (exec ×3, file_read ×2, file_write ×1,

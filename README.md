@@ -3,28 +3,19 @@
 A terminal wrapper that lets you and an AI agent (Claude Code, Codex, or any
 MCP client) drive **one shared shell session**: both of you type into it,
 both of you see everything. When you `ssh` somewhere inside the session, the
-AI comes along — no installation on the remote host, ever.
+AI follows the session onto that host. No software needs to be installed on
+the remote host.
 
-## Why
+## What it does
 
-- **No remote installs**: the AI types into the same PTY you do, so an ssh
-  session is transparent — its commands run on whatever host the terminal
-  is on.
-- **sudo without sharing your password**: the AI runs `sudo ...`, sudo
-  prompts in the shared terminal, *you* type the password. Echo is off, so
-  the password never enters anything the AI can read (and aish refuses to
-  inject commands while a secret prompt is active).
-- **Shared visibility, by default total**: everything either of you runs is
-  in one scrollback. Out of the box the AI *cannot* act invisibly — file and
-  exec tools work by typing through the shared terminal where you see them.
-- **Opt-in remote superpowers via ControlMaster** (`aish --oob`): `ssh`
-  invoked inside the session is transparently multiplexed. The AI gets
-  invisible file read/write and background command execution on the remote
-  over the already-authenticated connection — without touching your
-  interactive shell and without re-auth. Starting with `--oob` is your
-  explicit authorization for that behind-the-scenes activity (it also
-  avoids surprise MFA prompts on hosts where extra ssh channels re-trigger
-  Duo-style push authentication).
+- The AI types into the same PTY you do, so it operates on whatever host the
+  terminal is currently on.
+- `sudo` prompts stay in the shared terminal. You type the password there;
+  aish does not inject commands while secret input is active.
+- By default, file and exec operations are visible in the shared terminal.
+- If the session starts with `--oob`, SSH connections opened inside that
+  session are multiplexed and remote file/exec operations can use the
+  out-of-band channel.
 
 ## Build
 
@@ -34,7 +25,7 @@ AI comes along — no installation on the remote host, ever.
   this; when in doubt install from [go.dev/dl](https://go.dev/dl/).
 - **git** — to clone this repo.
 - **OpenSSH client** (`ssh`) — runtime, for the ControlMaster remote
-  features. Already present on virtually every Linux.
+  features.
 - **bash or zsh** as your shell for OSC 133 integration (other shells work
   with degraded output framing).
 
@@ -87,8 +78,7 @@ inputs.aish = {
 # and pkgs.aish to environment.systemPackages
 ```
 
-**Updating to the latest version** (the flake.lock in your NixOS config pins
-a commit; bump it and rebuild):
+To update a pinned NixOS config, bump the flake input and rebuild:
 
 ```sh
 nix flake update aish --flake /path/to/your/nix-config
@@ -112,8 +102,8 @@ session's Unix socket.
 
 ### macOS
 
-Not yet supported: the build fails on Linux-only termios constants, and
-process tracking uses `/proc`. Port contributions welcome.
+Not supported currently: the build fails on Linux-only termios constants, and
+process tracking uses `/proc`.
 
 ## Use
 
@@ -123,9 +113,7 @@ process tracking uses `/proc`. Port contributions welcome.
 ./aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
-Register the MCP server with your AI TUI once — aish does it for you (it
-shells out to the tool's own `mcp add`, so you don't have to remember the
-syntax):
+Register the MCP server with your AI TUI once:
 
 ```sh
 aish install            # register with every AI TUI found (Claude Code, Codex)
@@ -133,21 +121,16 @@ aish install claude     # ... or just one
 aish uninstall          # remove it again
 ```
 
-`install` registers the server as `aish mcp-proxy` at user/global scope (so
-it's available in every project), replacing any previous entry. Then run
-`claude` (or `codex`) in another window and ask it to work in a session.
+`install` registers the server as `aish mcp-proxy` at user/global scope,
+replacing any previous entry. Then run `claude` or `codex` in another window
+and point it at the session.
 
-Equivalent by hand, if you prefer: `claude mcp add aish --scope user -- aish mcp-proxy`.
+Equivalent manual command: `claude mcp add aish --scope user -- aish mcp-proxy`.
 
-**The AI can reach every live session**: every tool accepts a `session`
-argument (id or name) to run that call in another session; `session_status`
-lists the others. The proxy attaches to one session by default — the most
-recently active, or pick explicitly with `AISH_SESSION=<id|name> claude` or
-`--session <id|name>` in the proxy args — but attachment is just the
-default target, not a boundary. Each session has an immutable short id and
-an optional mutable name (`--name` at start, or the AI names it via
-`set_session_name`); both are shown in the prompt badge and accepted
-anywhere a session is selected.
+Every tool accepts a `session` argument (id or name). `session_status` lists
+other live sessions. The proxy attaches to one session by default, but that is
+only the default target, not a boundary. Use `AISH_SESSION=<id|name>` or
+`--session <id|name>` in the proxy args to pick a default explicitly.
 
 ```sh
 ./aish sessions              # list live sessions: id, name
@@ -179,17 +162,8 @@ Debug/poke without an AI:
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Commands on the current host, with optional `cwd`; OOB background tasks with incremental polling |
 
-Every tool also takes an optional `session` (id or name) to run the call in
-another live session on the machine; forwarded calls are executed by the
-target session's own server, so its safety guards apply unchanged.
-
-The MCP proxy also advertises a short operating guide to the model: native
-client shell/filesystem tools stay local, while aish tools target the shared
-session's current host (including the first SSH hop). It directs the model to
-list sessions, check `session_status`, recheck after SSH transitions, and keep
-secret input with the human. Tool schemas include read-only/destructive hints
-to improve planning and approval UI; the server still enforces the real safety
-boundaries.
+Every tool also takes an optional `session` (id or name) to target another
+live session on the machine.
 
 Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
 (`--oob`, the Ctrl-] runtime toggle, or an interactive grant). Without one,
@@ -197,61 +171,22 @@ Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
 visibly through the shared terminal, size-capped — while `file_edit`,
 `file_stat`, `directory_list`, `file_upload`/`file_download`, and background
 `exec` refuse with guidance. For remote OOB access, grant it before starting
-the SSH connection so the shim can create the ControlMaster. See
+the SSH connection so the shim can create the ControlMaster. Enabling OOB
+after SSH is already running does not retrofit multiplexing onto that existing
+SSH process; it only affects later SSH connections. See
 [Security](#security).
 
 ## Security
 
-### Threat model
+This is mainly a visibility/consent tool, not a sandbox. The MCP endpoint is a
+Unix socket under `$XDG_RUNTIME_DIR/aish/<id>/` (mode `0700`), not a TCP port.
+Do not expose it over localhost TCP/HTTP/WebSocket. If code is already
+running as your uid, aish does not try to defend against it.
 
-aish's job is to keep the AI's activity **visible and consented** and to keep
-untrusted *network* actors out — not to sandbox code that is already running
-as you.
+Prompts are shown and answered outside the shell input stream, so the response
+does not go through the shell or land in scrollback.
 
-- **In scope.** Untrusted code with no local foothold — above all a malicious
-  web page running JavaScript/WASM in your browser, the one place untrusted
-  code executes on your machine routinely. Also: accidental or unintended
-  clients (a misconfigured MCP client, attaching to the wrong session), and
-  keeping every AI action either visible in the shared terminal or explicitly
-  authorized.
-- **Out of scope.** Any code already executing under your uid. If an attacker
-  can run commands as you, they can read your files, `ptrace` your shell, and
-  scrape your terminal directly — your shared tty is the least of your
-  worries, and no in-process control could stop them. aish does not pretend
-  to defend against this.
-
-**The load-bearing decision is the transport.** aish's MCP endpoint is a
-**Unix-domain socket** under `$XDG_RUNTIME_DIR/aish/<id>/` (mode `0700`), not
-a TCP port. That single choice is what excludes the browser: JavaScript has
-no API that can open a Unix socket — `fetch`, `WebSocket`, `WebRTC`, and
-`WebTransport` all speak TCP/UDP to host:port and nothing else. A page cannot
-reach the socket, full stop. The `0700` directory additionally blocks other
-local users, so the only party that can even connect is your own uid.
-
-> **Corollary — never bind a TCP port.** If aish ever exposed MCP over
-> localhost TCP/HTTP/WebSocket, a malicious page could reach it via DNS
-> rebinding / CORS attacks — and because MCP calls have side effects (running
-> commands), even *write-only* access with no readable response would be
-> catastrophic. Remote access, if ever wanted, must be an SSH-forwarded Unix
-> socket, not a bound port. Likewise, nothing a browser can talk to (a
-> localhost HTTP relay, a browser extension with native messaging) should be
-> able to talk to the aish socket.
-
-Everything below is layered *on top of* that transport boundary. Because the
-only connecting party is already same-uid, the connection and OOB prompts are
-**consent and awareness controls** — they ensure you know about and approved
-what the AI does — rather than hard boundaries against a hostile local
-process.
-
-### How aish asks you
-
-aish talks to you directly through the terminal — writing to your screen and
-reading your keypress **out of band from the shell**, so nothing it asks ever
-lands at your prompt or in the scrollback, and the shell never sees the
-keystroke that answers. (This is the one sanctioned exception to aish's
-byte-transparency, alongside the window-title marker.)
-
-### MCP connection authorization
+### Client authorization
 
 When an MCP client first tries to use a tool, aish asks in your terminal:
 
@@ -266,38 +201,27 @@ claude wants to control this session — allow? [y/n]
 - **No answer** fails closed (denied).
 
 The prompt names the connecting client from its MCP `clientInfo` — shown as
-`claude` or `codex` for the bundled TUIs (the proxy relays the real client's
-identity), or the raw client name otherwise — so you know what's asking.
-Approval records that client's ephemeral Ed25519 public key for
-the life of the aish session. If the connection drops, the client proves it
-still holds the matching private key by signing a single-use challenge, so it
-can reconnect without another prompt. Different clients receive independent
-grants and each prompts once. Client keys and grants are memory-only;
-restarting a client makes it a new client that must be approved again.
+`claude` or `codex` for the bundled TUIs, or the raw client name otherwise.
+Approvals are per client for the life of the aish session. Reconnects use a
+challenge/response check so an already-approved client can reconnect without a
+new prompt. Client keys and grants are memory-only.
 
-- **`--no-auth`** starts a session that never prompts — zero friction when you
-  don't want to approve each connection.
-- **`--auto-approve`** keeps the authorization handshake in force but
-  auto-answers the prompt (you're notified in the terminal, not blocked). It's
-  meant for one-shot testing — e.g. the debug CLI, which is a fresh client on
-  every run — without disabling the gate or storing a secret on disk.
-- **Every controlling client prompts**, including cross-session forwarding and
-  the debug CLI (`aish client`). Cross-session helpers cache their approved
-  key and grant in memory; the one-shot debug CLI is a new client on every run.
+- `--no-auth`: never prompt for client approval.
+- `--auto-approve`: keep the handshake, but auto-answer prompts. Useful for testing.
+- `aish client`: treated as a client too, so it also goes through approval unless disabled.
 
 ### Out-of-band operation authorization
 
-By default the AI **cannot act invisibly**. `file_read`/`file_write`/foreground
-`exec` can work by typing through the shared terminal, visibly, where you
-watch them happen. Native-style OOB-only operations (`file_edit`, `file_stat`,
+By default the AI does not use invisible operations. `file_read`/`file_write`/
+foreground `exec` can work by typing through the shared terminal. Native-style
+OOB-only operations (`file_edit`, `file_stat`,
 `directory_list`, upload/download, and background exec) refuse with guidance.
 No ControlMaster multiplexing is set up at all, so no hidden channel to a
 remote host even exists.
 
 Out-of-band (invisible) operation is opt-in, two ways:
 
-- **`aish --oob`** authorizes it up front for the whole session — you've
-  decided this session may act behind the scenes, so nothing prompts.
+- **`aish --oob`** authorizes it up front for the whole session.
 - **Interactive grant.** In a session *without* `--oob`, the first time the AI
   attempts an out-of-band-capable operation aish asks:
 
@@ -306,34 +230,17 @@ Out-of-band (invisible) operation is opt-in, two ways:
   ```
 
   **y** allows that one operation; **a** grants it for the rest of the session
-  (and enables ControlMaster for future `ssh`, so remote work multiplexes);
-  **n** or a timeout does the operation *visibly* through the shared terminal
-  instead. The grant is remembered so you're not re-asked once you've said
-  **a**.
+  (and enables ControlMaster for future `ssh`, so later remote work can
+  multiplex); it does not attach OOB to an SSH connection that is already
+  running;
+  **n** or a timeout does the operation visibly through the shared terminal
+  instead. The grant is remembered once you've said **a**.
 
-Beyond visibility, `--oob` also has an MFA benefit: aish routes all remote OOB
-work through **one persistent ssh channel** per host (see
-[How the ssh integration works](#how-the-ssh-integration-works)). On hosts
-where each new ssh session re-triggers a Duo-style push, that means a single
-push per host per session instead of one per operation — and aish never
-silently reopens a dropped channel (which would cost another push); it tells
-you, and your retry is the consent.
-
-### What's protected, concretely
-
-- **Your password** never reaches the AI: `sudo`/ssh password prompts turn
-  terminal echo off, aish detects that and refuses to inject `run_command`
-  while it's active, and echo-off input never enters the scrollback the AI can
-  read.
-- **The AI's visibility is the default.** Invisible file/exec activity
-  requires `--oob` or an explicit y/n/a grant; without it, everything is in
-  the one shared scrollback.
-- **You approve every client** (unless `--no-auth`). Grants last for the aish
-  session, are bound to a client key, and support authenticated reconnects.
+For hosts with MFA on new SSH channels, `--oob` uses one persistent SSH
+channel per host. That usually means one MFA prompt per host per session
+instead of one per OOB operation. Lost channels are not reopened silently.
 
 ## Visual indicators
-
-Every aish session is visibly marked as shared:
 
 - **Prompt badge**: a magenta `⧉` plus the session's name (or id) prefixes
   your shell prompt (bash/zsh), e.g. `⧉deploy-web`. Renames show up at the
@@ -348,26 +255,16 @@ Press **`Ctrl-]`** at the shell to open the aish menu (the keypress is caught
 by aish and doesn't reach the shell). `Esc` cancels the menu at any point. So
 does a second **`Ctrl-]`** — which additionally passes one literal `Ctrl-]`
 through to the shell, so you can still send the key to a program (e.g. `telnet`)
-by pressing it twice. The menu offers:
+by pressing it twice.
 
 - **`r` — rename this session.** Type a new name, Enter. The rename shows up in
-  the prompt badge on the next prompt and in the window title immediately, and
-  the session is thereafter selectable by the new name. (Same as the AI's
-  `set_session_name`; the menu is for when you want to do it yourself.)
+  the prompt badge on the next prompt and in the window title immediately.
 - **`o` — toggle out-of-band ops.** Flips invisible operation on/off for the
-  running session (the menu shows the current state). Turning it off downgrades
-  the AI to visible, in-terminal operation; turning it on is the same grant as
-  `--oob` or answering `a` to an out-of-band prompt. See *Out-of-band operation
-  authorization* above.
+  running session. Turning it on is the same grant as `--oob` or answering
+  `a` to an out-of-band prompt.
 - **`k` — revoke client access.** Disconnects every connected client and clears
-  all grants for this session, so the next client to act must be approved again
-  from scratch. Useful if you approved something you didn't mean to, or want to
-  force re-approval. (No effect under `--no-auth`, which never prompts.)
-
-When a session is renamed — by you or the AI — the proxy notices the change
-and tells the AI on its next tool call (a notice riding the result, plus an
-MCP log message), so it doesn't keep addressing a session by a name that has
-moved. Session **ids** never change, so routing by id is always stable.
+  all grants for this session, so the next client to act must be approved
+  again. (No effect under `--no-auth`.)
 
 ## How the ssh integration works
 
@@ -376,6 +273,11 @@ aish itself, which injects `-oControlMaster=auto
 -oControlPath=<session>/cm-<hash> -oControlPersist=60s` and execs the real
 ssh. (Without `--oob` the shim only records which host you're on and execs
 ssh untouched — no multiplexing, no extra channels.)
+
+That injection happens when the `ssh` process starts. If you enable OOB only
+after an SSH session is already open, that existing SSH process stays
+untouched: aish can still track the host, but remote OOB tools will not have a
+ControlMaster route until you reconnect SSH after enabling OOB.
 
 Remote OOB operations share **one persistent channel** per remote: a
 long-lived `sh -s` opened lazily over the master on the first OOB op, with
@@ -386,19 +288,17 @@ none of that framing is typed into the shared terminal (results say
 hosts where each new ssh channel re-triggers MFA (Duo-style per-session
 push), this costs exactly one push per host per session instead of one per
 operation. A lost channel is never reopened silently: the failed call says
-so, and your retry is the consent for the (possibly push-triggering)
-reopen. Background `exec` tasks need a concurrent stream and use a
-dedicated channel each. Your interactive connection
-becomes the multiplexing master; file and exec tools open extra channels
-over it. If you pass your own `-S`/`-o Control*` options, the shim backs
-off entirely. Hosts without a usable channel degrade to in-band operation
-through the shared terminal (marked `via: "in_band"` in results).
+so, and your retry is the consent for the reopen. Background `exec` tasks need
+a concurrent stream and use a dedicated channel each. Your interactive
+connection becomes the multiplexing master; file and exec tools open extra
+channels over it. If you pass your own `-S`/`-o Control*` options, the shim
+backs off entirely. Hosts without a usable channel degrade to in-band
+operation through the shared terminal (marked `via: "in_band"` in results).
 
 Shell integration (OSC 133/7) is injected via `--rcfile` (bash) / `ZDOTDIR`
 (zsh), sourcing your own rc first. Shells without integration (plain
 remotes, fish) still work: `run_command` types the command bare and infers
-completion from output quiescence — no exit code on that path, and add the
-aish snippet to the remote's shell rc if you want exact framing there.
+completion from output quiescence. There is no exact exit code on that path.
 
 Session runtime state lives in `$XDG_RUNTIME_DIR/aish/<session-id>/` and is
 removed on exit; ControlPersist reaps orphaned masters within 60s even after
