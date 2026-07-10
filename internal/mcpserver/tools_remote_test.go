@@ -145,6 +145,35 @@ func TestDivergencePolicy(t *testing.T) {
 	}
 }
 
+func TestClassifyConfidence(t *testing.T) {
+	const local = "mjk-desktop"
+	cases := []struct {
+		name                           string
+		ttyHost, localHost, remoteHost string
+		want                           string
+	}{
+		// The bug this fixes: remote shell emits no OSC7, so ttyHost is the stale
+		// local host. Must be "unknown" (confirm once), never a false "mismatch".
+		{"stale-local no remote osc7", local, local, "debian", "unknown"},
+		// Remote emits OSC7 matching the probed host → verified same.
+		{"remote osc7 matches", "debian", local, "debian", "same"},
+		// No tty host at all → can't verify.
+		{"empty tty host", "", local, "debian", "unknown"},
+		// Genuine divergence: remote DOES emit OSC7 for a different host.
+		{"true jump-box mismatch", "prod", local, "bastion", "mismatch"},
+		// ssh to a host with the same name as local (e.g. localhost) → same.
+		{"same-named host", local, local, local, "same"},
+		// Probe hasn't resolved a hostname yet.
+		{"no remote hostname", local, local, "", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := classifyConfidence(tc.ttyHost, tc.localHost, tc.remoteHost); got != tc.want {
+			t.Errorf("%s: classifyConfidence(%q,%q,%q) = %q, want %q",
+				tc.name, tc.ttyHost, tc.localHost, tc.remoteHost, got, tc.want)
+		}
+	}
+}
+
 func TestLocalWriteVersioning(t *testing.T) {
 	c := localOOBCore(t)
 	dir := t.TempDir()

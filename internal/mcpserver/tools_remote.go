@@ -218,13 +218,31 @@ func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, confidence st
 		return interactiveHost, oobHost, "unknown"
 	}
 	oobHost = caps.Hostname
+	return interactiveHost, oobHost, classifyConfidence(ttyHost, c.Tracker.LocalHost(), caps.Hostname)
+}
+
+// classifyConfidence is the pure host comparison behind hostConfidence,
+// isolated for testing. ttyHost is the OSC7-reported interactive host, which
+// aish only receives when the shell emits OSC7 — locally always, remotely only
+// when the remote shell has integration. remoteHostname is the probed OOB host.
+//
+// The subtle case is a remote whose shell emits no OSC7 (a lean server, an
+// image without vte.sh, a restricted shell): the tracker then still holds the
+// stale *local* host from before the ssh. Comparing that against the probed
+// remote hostname would read as a false "mismatch" and fail-close every write.
+// So an empty or stale-local ttyHost is treated as "unknown" (can't verify —
+// the caller confirms once), never "mismatch". A genuine divergence (the remote
+// DOES emit OSC7 for a different host) still reads as "mismatch".
+func classifyConfidence(ttyHost, localHost, remoteHostname string) string {
 	switch {
-	case ttyHost == "":
-		return interactiveHost, oobHost, "unknown"
-	case ttyHost == caps.Hostname:
-		return interactiveHost, oobHost, "same"
+	case remoteHostname == "":
+		return "unknown"
+	case ttyHost == remoteHostname:
+		return "same"
+	case ttyHost == "" || ttyHost == localHost:
+		return "unknown"
 	default:
-		return interactiveHost, oobHost, "mismatch"
+		return "mismatch"
 	}
 }
 
