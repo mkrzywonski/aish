@@ -56,6 +56,16 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	}, c.fileEdit)
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "file_patch",
+		Annotations: mutatingTool("Patch file on session host", true, false),
+		Description: "Apply a unified diff to a UTF-8 text file on the session's current host, one file per call. Hunks are " +
+			"applied inside aish (no remote patch tool needed) and written back atomically. Use file_edit for a single " +
+			"exact-text replacement; use file_patch for multi-hunk changes. Optionally pass if_match (a version from " +
+			"file_read/file_stat) to apply only if the file is unchanged; otherwise staleness is checked automatically when " +
+			"the host has a sha256 tool. Requires an authorized local or remote OOB route.",
+	}, c.filePatch)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_stat",
 		Annotations: readOnlyTool("Inspect path on session host"),
 		Description: "Inspect an absolute path on the session's current host. Returns its type, size, permissions, and " +
