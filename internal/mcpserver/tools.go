@@ -12,6 +12,7 @@ import (
 	"ai-ssh/internal/authproto"
 	"ai-ssh/internal/framing"
 	"ai-ssh/internal/paths"
+	"ai-ssh/internal/sshmux"
 	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
 )
@@ -274,23 +275,29 @@ type sessionRef struct {
 }
 
 type sessionStatusResult struct {
-	SessionID     string            `json:"session_id"`
-	SessionName   string            `json:"session_name,omitempty"`
-	OtherSessions []sessionRef      `json:"other_sessions"`
-	Mode          string            `json:"mode"`
-	Host          string            `json:"host"`
-	OobVia        string            `json:"oob_via"`
-	OobEnabled    bool              `json:"oob_enabled"`
-	SSHUser       string            `json:"ssh_user,omitempty"`
-	Cwd           string            `json:"cwd,omitempty"`
-	PromptReady   bool              `json:"prompt_ready"`
-	EchoOff       bool              `json:"echo_off"`
-	Foreground    *state.Foreground `json:"foreground,omitempty"`
-	Rows          int               `json:"rows"`
-	Cols          int               `json:"cols"`
-	AltScreen     bool              `json:"alt_screen"`
-	LastOutputMs  int64             `json:"last_output_ms_ago"`
-	Ended         bool              `json:"ended"`
+	SessionID     string       `json:"session_id"`
+	SessionName   string       `json:"session_name,omitempty"`
+	OtherSessions []sessionRef `json:"other_sessions"`
+	Mode          string       `json:"mode"`
+	Host          string       `json:"host"`
+	OobVia        string       `json:"oob_via"`
+	OobEnabled    bool         `json:"oob_enabled"`
+	// Host-targeting awareness for the jump-box case: where the interactive tty
+	// is (OSC7), where an OOB op would land (probed), and whether they agree.
+	InteractiveHost  string               `json:"interactive_host,omitempty"`
+	OobHost          string               `json:"oob_host,omitempty"`
+	TargetConfidence string               `json:"target_confidence"`
+	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
+	SSHUser          string               `json:"ssh_user,omitempty"`
+	Cwd              string               `json:"cwd,omitempty"`
+	PromptReady      bool                 `json:"prompt_ready"`
+	EchoOff          bool                 `json:"echo_off"`
+	Foreground       *state.Foreground    `json:"foreground,omitempty"`
+	Rows             int                  `json:"rows"`
+	Cols             int                  `json:"cols"`
+	AltScreen        bool                 `json:"alt_screen"`
+	LastOutputMs     int64                `json:"last_output_ms_ago"`
+	Ended            bool                 `json:"ended"`
 }
 
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
@@ -301,25 +308,32 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	if rt.ci != nil {
 		sshUser = rt.ci.User
 	}
+	interactiveHost, oobHost, confidence := c.hostConfidence(rt)
 	res := sessionStatusResult{
-		SessionID:   c.Sess.ID,
-		SessionName: paths.ReadName(c.Sess.ID),
-		Mode:        string(c.Tracker.Mode(snap.AltScreen)),
-		Host:        rt.host,
-		OobVia:      rt.via,
-		OobEnabled:  c.oobGranted(),
-		SSHUser:     sshUser,
-		Cwd:         cwd,
-		PromptReady: c.Tracker.PromptReady(),
-		EchoOff:     c.Tracker.EchoOff(),
-		Foreground:  c.Tracker.Foreground(),
-		Rows:        snap.Rows,
-		Cols:        snap.Cols,
-		AltScreen:   snap.AltScreen,
-		Ended:       c.Sess.Closed(),
+		SessionID:        c.Sess.ID,
+		SessionName:      paths.ReadName(c.Sess.ID),
+		Mode:             string(c.Tracker.Mode(snap.AltScreen)),
+		Host:             rt.host,
+		OobVia:           rt.via,
+		OobEnabled:       c.oobGranted(),
+		InteractiveHost:  interactiveHost,
+		OobHost:          oobHost,
+		TargetConfidence: confidence,
+		SSHUser:          sshUser,
+		Cwd:              cwd,
+		PromptReady:      c.Tracker.PromptReady(),
+		EchoOff:          c.Tracker.EchoOff(),
+		Foreground:       c.Tracker.Foreground(),
+		Rows:             snap.Rows,
+		Cols:             snap.Cols,
+		AltScreen:        snap.AltScreen,
+		Ended:            c.Sess.Closed(),
 	}
 	if n := c.Sess.LastOutputNanos(); n > 0 {
 		res.LastOutputMs = time.Since(time.Unix(0, n)).Milliseconds()
+	}
+	if caps, ok := c.Mux.CachedCapabilities(rt.ci); ok {
+		res.RemoteHost = &caps
 	}
 	entries, err := os.ReadDir(paths.Base())
 	if err == nil {

@@ -163,6 +163,47 @@ func (c *Core) route() route {
 	}
 }
 
+// hostConfidence compares where the interactive tty appears to be (the OSC7
+// host of the shell) against where an out-of-band op on rt would land. It is
+// the targeting-confidence signal reported by session_status and (in a later
+// phase) enforced by the write path:
+//
+//	same     — a local session, or the OSC7 host matches the probed OOB host
+//	mismatch — OSC7 host is known and differs from the probed OOB host
+//	unknown  — OSC7 host unreported, or the OOB host not yet probed (can't verify)
+//
+// Remote comparison is against the *probed* hostname, never the ssh target in
+// ci.Host: that target may be an alias ("ssh web") whose real hostname differs,
+// which would read as a false mismatch. When caps aren't probed yet we report
+// unknown rather than guess.
+func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, confidence string) {
+	ttyHost, _ := c.Tracker.Cwd()
+	interactiveHost = ttyHost
+
+	if rt.via == "local" {
+		lh := c.Tracker.LocalHost()
+		if interactiveHost == "" {
+			interactiveHost = lh
+		}
+		return interactiveHost, lh, "same"
+	}
+
+	oobHost = rt.host
+	caps, ok := c.Mux.CachedCapabilities(rt.ci)
+	if !ok || caps.Hostname == "" {
+		return interactiveHost, oobHost, "unknown"
+	}
+	oobHost = caps.Hostname
+	switch {
+	case ttyHost == "":
+		return interactiveHost, oobHost, "unknown"
+	case ttyHost == caps.Hostname:
+		return interactiveHost, oobHost, "same"
+	default:
+		return interactiveHost, oobHost, "mismatch"
+	}
+}
+
 // downgrade turns an OOB-capable route into its visible in-band equivalent
 // (used when the user declines out-of-band access).
 func (c *Core) downgrade(cap route) route {

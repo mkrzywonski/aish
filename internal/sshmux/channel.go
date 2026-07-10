@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,6 +54,10 @@ type channel struct {
 	stdin io.WriteCloser
 	lines chan []byte
 	dead  bool
+	// caps holds the host capabilities probed once on first use. Stored via an
+	// atomic pointer so session_status can read it without taking ch.mu (which
+	// a long-running op holds for its whole duration).
+	caps atomic.Pointer[Capabilities]
 }
 
 func (m *Mux) openChannel(ci *ConnInfo) (*channel, error) {
@@ -193,8 +198,13 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 	}
 	m.chMu.Unlock()
 
-	if opened && timeout < minOpenTimeout {
-		timeout = minOpenTimeout
+	if opened {
+		// The first op on a fresh channel may sit behind an MFA push (it opens a
+		// new session on the master). Run the capability probe as that first op:
+		// it absorbs the push wait with the long open timeout and caches host
+		// facts for session_status. Best-effort — a failure just leaves caps
+		// unset and the real op below surfaces any hard channel error.
+		m.probeChannel(ch)
 	}
 	res, err := ch.run(script, timeout)
 	if errors.Is(err, errChannelDead) {
