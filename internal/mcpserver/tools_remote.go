@@ -326,15 +326,20 @@ const (
 
 type fileReadArgs struct {
 	SessionArg
-	Path     string `json:"path" jsonschema:"absolute or ~-relative path on the current host"`
-	MaxBytes int    `json:"max_bytes,omitempty" jsonschema:"cap returned content (default 262144)"`
-	Offset   int64  `json:"offset,omitempty" jsonschema:"byte offset to start reading from"`
+	Path        string `json:"path" jsonschema:"absolute or ~-relative path on the current host"`
+	MaxBytes    int    `json:"max_bytes,omitempty" jsonschema:"cap returned content (default 262144)"`
+	Offset      int64  `json:"offset,omitempty" jsonschema:"byte offset to start reading from"`
+	LineNumbers bool   `json:"line_numbers,omitempty" jsonschema:"also return numbered_content (line-numbered, from offset 0 only); content stays raw for file_edit"`
 }
 
 type fileReadResult struct {
 	Content  string `json:"content"`
 	Encoding string `json:"encoding"` // utf8 | base64
 	Eof      bool   `json:"eof"`
+	// NumberedContent is content with 1-based line numbers, provided only when
+	// line_numbers is set and the read started at offset 0. It is for reading
+	// and citing lines — never feed it to file_edit/file_patch; use content.
+	NumberedContent string `json:"numbered_content,omitempty"`
 	// Version is a token for the whole file's current contents (only when the
 	// entire file was read); pass it as file_write's if_match to write only if
 	// the file hasn't changed since. VersionKind is "sha256".
@@ -425,10 +430,28 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 	}
 	if utf8.Valid(data) {
 		res.Content, res.Encoding = string(data), "utf8"
+		if args.LineNumbers && args.Offset == 0 {
+			res.NumberedContent = numberLines(data)
+		}
 	} else {
 		res.Content, res.Encoding = base64.StdEncoding.EncodeToString(data), "base64"
 	}
 	return nil, res, nil
+}
+
+// numberLines renders content with 1-based line numbers (cat -n style), kept
+// separate from raw content so line numbers never leak into an edit's old_text.
+func numberLines(data []byte) string {
+	lines := strings.Split(string(data), "\n")
+	// A trailing newline yields a final empty element; don't number it.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	var b strings.Builder
+	for i, line := range lines {
+		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
+	}
+	return b.String()
 }
 
 // ---- file_write ----

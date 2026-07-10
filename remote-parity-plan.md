@@ -1,5 +1,12 @@
 # Plan: native-tool parity for aish remote hosts (v2)
 
+> Status: implemented on branch `remote-parity` (phases 0–5). Probe + host
+> awareness, three-way divergence enforcement, atomic conditional writes with
+> version tokens, `file_patch`, `file_grep`/`file_search`, and line-numbered
+> `file_read` are landed and tested. The optional Claude skill (phase 5) is not
+> built.
+
+
 Goal: when the shared session is inside SSH, give the AI tools that behave like
 its native local file/exec tools — search, atomic edits, patch, staleness
 safety, host awareness — running on the remote's own coreutils over the

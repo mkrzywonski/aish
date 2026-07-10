@@ -154,10 +154,12 @@ Debug/poke without an AI:
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
-| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions |
+| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus interactive/OOB host, target confidence, and probed remote capabilities |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
-| `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback) |
-| `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only |
+| `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
+| `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only. Atomic, with automatic staleness protection |
+| `file_patch` | Apply a unified diff (multi-hunk) to a text file on the current host; applied in aish, written atomically; OOB only |
+| `file_grep` / `file_search` | Regex content search and name-glob file finding on the current host (ripgrep/grep/find, best-effort); OOB only |
 | `file_stat` / `directory_list` | Native-style path metadata and directory browsing on the current host; OOB only |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Commands on the current host, with optional `cwd`; OOB background tasks with incremental polling |
@@ -169,11 +171,12 @@ Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
 (`--oob`, the Ctrl-] runtime toggle, or an interactive grant). Without one,
 `file_read`/`file_write` and foreground `exec` can fall back in-band — typed
 visibly through the shared terminal, size-capped — while `file_edit`,
-`file_stat`, `directory_list`, `file_upload`/`file_download`, and background
-`exec` refuse with guidance. For remote OOB access, grant it before starting
-the SSH connection so the shim can create the ControlMaster. Enabling OOB
-after SSH is already running does not retrofit multiplexing onto that existing
-SSH process; it only affects later SSH connections. See
+`file_patch`, `file_grep`/`file_search`, `file_stat`, `directory_list`,
+`file_upload`/`file_download`, and background `exec` refuse with guidance. For
+remote OOB access, grant it before starting the SSH connection so the shim can
+create the ControlMaster. Enabling OOB after SSH is already running does not
+retrofit multiplexing onto that existing SSH process; it only affects later SSH
+connections. See
 [Security](#security).
 
 ## Security
@@ -214,8 +217,9 @@ new prompt. Client keys and grants are memory-only.
 
 By default the AI does not use invisible operations. `file_read`/`file_write`/
 foreground `exec` can work by typing through the shared terminal. Native-style
-OOB-only operations (`file_edit`, `file_stat`,
-`directory_list`, upload/download, and background exec) refuse with guidance.
+OOB-only operations (`file_edit`, `file_patch`, `file_grep`/`file_search`,
+`file_stat`, `directory_list`, upload/download, and background exec) refuse with
+guidance.
 No ControlMaster multiplexing is set up at all, so no hidden channel to a
 remote host even exists.
 
@@ -239,6 +243,24 @@ Out-of-band (invisible) operation is opt-in, two ways:
 For hosts with MFA on new SSH channels, `--oob` uses one persistent SSH
 channel per host. That usually means one MFA prompt per host per session
 instead of one per OOB operation. Lost channels are not reopened silently.
+
+### Wrong-host protection
+
+When you use one host as a jump box (`ssh a`, then `ssh b` from there), the
+interactive shell can be on **b** while the out-of-band channel still points at
+**a**. aish guards against writing to the wrong host: on the first probe it
+records the OOB host and compares it to where the shell reports it is
+(`session_status` shows `interactive_host`, `oob_host`, and `target_confidence`).
+On a **detected mismatch** an OOB *write* (`file_write`/`file_edit`/`file_patch`/
+`file_upload`) fails closed and a *read* is flagged with a warning; when the
+host **can't be verified** (no shell host reporting) a write asks for a one-time
+confirmation per host. This is an initial policy, not a final UX.
+
+Out-of-band writes are also **atomic** (temp file + rename, preserving mode and
+refusing to follow a symlink) and support optimistic concurrency: `file_read`
+and `file_stat` return a `version` token you can pass back as `if_match` so a
+write lands only if the file hasn't changed since — and `file_edit`/`file_patch`
+do this automatically.
 
 ## Visual indicators
 

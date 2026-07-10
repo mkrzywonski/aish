@@ -242,3 +242,15 @@ func TestLocalEditClosesTOCTOU(t *testing.T) {
 		t.Fatalf("stale edit clobbered concurrent write: %q", got)
 	}
 }
+
+func TestNumberLines(t *testing.T) {
+	got := numberLines([]byte("first\nsecond\nthird\n"))
+	want := "     1\tfirst\n     2\tsecond\n     3\tthird\n"
+	if got != want {
+		t.Fatalf("numberLines =\n%q\nwant\n%q", got, want)
+	}
+	// No trailing newline: last line still numbered, no spurious empty line.
+	if got := numberLines([]byte("a\nb")); got != "     1\ta\n     2\tb\n" {
+		t.Fatalf("no-final-newline numberLines = %q", got)
+	}
+}
