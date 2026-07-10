@@ -225,9 +225,20 @@ func runMain(args []string) int {
 		if core.OOBEnabled() {
 			oobState = "on"
 		}
-		choice, ok := sess.Prompt(
-			fmt.Sprintf("aish menu — [r] rename session, [o] out-of-band ops (currently %s), [k] revoke client access, Esc to cancel", oobState),
-			"rok", 30*time.Second)
+		accept := "rok"
+		lines := []string{
+			"aish menu:",
+			"  [r] rename session",
+			fmt.Sprintf("  [o] out-of-band ops (currently %s)", oobState),
+			"  [k] revoke client access",
+		}
+		// Offer host tracking only on a remote whose host aish can't yet verify.
+		if trackHost, ok := core.RemoteTrackingApplicable(); ok {
+			accept += "t"
+			lines = append(lines, fmt.Sprintf("  [t] set up host tracking on %s", trackHost))
+		}
+		lines = append(lines, "  Esc to cancel")
+		choice, ok := sess.Prompt(strings.Join(lines, "\r\n"), accept, 30*time.Second)
 		if !ok {
 			return
 		}
@@ -262,6 +273,8 @@ func runMain(args []string) int {
 			if noAuth {
 				sess.Notify("note: this session runs with --no-auth, so reconnecting clients are NOT prompted for approval")
 			}
+		case 't':
+			core.ProvisionRemoteTracking()
 		}
 	})
 
