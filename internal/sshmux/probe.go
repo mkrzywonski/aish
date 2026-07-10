@@ -7,34 +7,75 @@ import "strings"
 // opened, then cached for the channel's lifetime. session_status reports the
 // cached value and never triggers a probe of its own (a probe opens a channel,
 // which can cost an MFA push).
+//
+// The Ok* fields are behavioral tests, not presence checks: BusyBox `stat`
+// exists but lacks `--printf`, macOS `base64` wants `-D` not `-d`, so we run
+// each tricky option once and record whether it actually worked.
 type Capabilities struct {
-	OS         string `json:"os,omitempty"`
-	Arch       string `json:"arch,omitempty"`
-	Hostname   string `json:"hostname,omitempty"`
-	User       string `json:"user,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	HasRg      bool   `json:"has_rg"`
-	Hasher     string `json:"hasher"`      // sha256sum | shasum | none
-	GrepFlavor string `json:"grep_flavor"` // gnu | other
-	HasMktemp  bool   `json:"has_mktemp"`
-	// Unsupported marks a host whose shell isn't POSIX enough to probe (empty
-	// uname): the native-style primitives should refuse rather than emit
-	// garbage. Covers Windows/appliance targets reached over ssh.
+	OS       string `json:"os,omitempty"`
+	Arch     string `json:"arch,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+	User     string `json:"user,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
+
+	HasRg     bool   `json:"has_rg"`
+	HasGrep   bool   `json:"has_grep"`
+	HasFind   bool   `json:"has_find"`
+	Hasher    string `json:"hasher"` // sha256sum | shasum | none
+	HasMktemp bool   `json:"has_mktemp"`
+	PkgMgr    string `json:"pkg_mgr,omitempty"` // apt-get | dnf | yum | apk | pkg | brew | pacman | zypper
+
+	// Behavioral capability tests (see above).
+	HasBase64 bool `json:"has_base64"` // base64 exists (encode works)
+	Base64D   bool `json:"base64_d"`   // `base64 -d` decodes (GNU/BusyBox)
+	Base64Dup bool `json:"base64_dup"` // `base64 -D` decodes (BSD/macOS)
+	StatC     bool `json:"stat_c"`     // `stat -c` works (GNU/BusyBox)
+	StatF     bool `json:"stat_f"`     // `stat -f` works (BSD/macOS)
+	FindPrint bool `json:"find_printf"`
+	HeadZ     bool `json:"head_z"`
+	GrepNull  bool `json:"grep_null"`
+
+	// Unsupported marks a host whose shell isn't POSIX enough to run the probe.
+	// Set by the channel handshake when the shell never returns our sentinel.
 	Unsupported bool `json:"unsupported"`
+}
+
+// Base64Decode returns the flag this host's base64 uses to decode, or "" when
+// no base64 (or no working decode flag) is available.
+func (c Capabilities) Base64Decode() string {
+	switch {
+	case c.Base64D:
+		return "-d"
+	case c.Base64Dup:
+		return "-D"
+	default:
+		return ""
+	}
 }
 
 // probeScript emits one labeled key=value line per fact. Labels (not position)
 // keep parsing stable when a command is missing: an absent tool yields an empty
-// value, never a dropped line that shifts everything after it.
+// value, never a dropped line that shifts everything after it. Each behavioral
+// test runs the real option against a harmless target and echoes 1 on success.
 const probeScript = `printf 'uname=%s\n' "$(uname -sm 2>/dev/null)"
 printf 'user=%s\n' "$(id -un 2>/dev/null)"
 printf 'hostname=%s\n' "$(hostname 2>/dev/null)"
 printf 'pwd=%s\n' "$(pwd 2>/dev/null)"
 printf 'rg=%s\n' "$(command -v rg 2>/dev/null)"
+printf 'grep=%s\n' "$(command -v grep 2>/dev/null)"
+printf 'find=%s\n' "$(command -v find 2>/dev/null)"
 printf 'sha256sum=%s\n' "$(command -v sha256sum 2>/dev/null)"
 printf 'shasum=%s\n' "$(command -v shasum 2>/dev/null)"
 printf 'mktemp=%s\n' "$(command -v mktemp 2>/dev/null)"
-printf 'grep_version=%s\n' "$(grep --version 2>/dev/null | head -1)"`
+printf 'pkg=%s\n' "$(command -v apt-get dnf yum apk pkg brew pacman zypper 2>/dev/null | head -n1)"
+printf 'base64=%s\n' "$(printf hi | base64 >/dev/null 2>&1 && echo 1)"
+printf 'base64d=%s\n' "$(printf aGk= | base64 -d >/dev/null 2>&1 && echo 1)"
+printf 'base64D=%s\n' "$(printf aGk= | base64 -D >/dev/null 2>&1 && echo 1)"
+printf 'statc=%s\n' "$(stat -c %s / >/dev/null 2>&1 && echo 1)"
+printf 'statf=%s\n' "$(stat -f %z / >/dev/null 2>&1 && echo 1)"
+printf 'findprintf=%s\n' "$(find / -maxdepth 0 -printf '' >/dev/null 2>&1 && echo 1)"
+printf 'headz=%s\n' "$(printf 'a\n' | head -z -n1 >/dev/null 2>&1 && echo 1)"
+printf 'grepnull=%s\n' "$(printf x | grep --null -o x >/dev/null 2>&1 && echo 1)"`
 
 func parseCapabilities(out []byte) Capabilities {
 	kv := map[string]string{}
@@ -54,7 +95,10 @@ func parseCapabilities(out []byte) Capabilities {
 	c.User = kv["user"]
 	c.Cwd = kv["pwd"]
 	c.HasRg = kv["rg"] != ""
+	c.HasGrep = kv["grep"] != ""
+	c.HasFind = kv["find"] != ""
 	c.HasMktemp = kv["mktemp"] != ""
+	c.PkgMgr = basename(kv["pkg"])
 	switch {
 	case kv["sha256sum"] != "":
 		c.Hasher = "sha256sum"
@@ -63,30 +107,25 @@ func parseCapabilities(out []byte) Capabilities {
 	default:
 		c.Hasher = "none"
 	}
-	// Match "GNU grep" specifically: GNU prints "grep (GNU grep) 3.7", while BSD
-	// prints "grep (BSD grep, GNU compatible)" — and BSD find lacks -printf, so
-	// treating it as non-GNU (no -Z / find -printf) is the conservative choice.
-	// BusyBox prints nothing useful for --version, so it falls here too.
-	if strings.Contains(kv["grep_version"], "GNU grep") {
-		c.GrepFlavor = "gnu"
-	} else {
-		c.GrepFlavor = "other"
-	}
+	c.HasBase64 = kv["base64"] == "1"
+	c.Base64D = kv["base64d"] == "1"
+	c.Base64Dup = kv["base64D"] == "1"
+	c.StatC = kv["statc"] == "1"
+	c.StatF = kv["statf"] == "1"
+	c.FindPrint = kv["findprintf"] == "1"
+	c.HeadZ = kv["headz"] == "1"
+	c.GrepNull = kv["grepnull"] == "1"
 	if c.OS == "" {
 		c.Unsupported = true
 	}
 	return c
 }
 
-// probeChannel runs the capability probe as the first op on a freshly opened
-// channel and caches the result. Best-effort: on any failure caps stays unset.
-func (m *Mux) probeChannel(ch *channel) {
-	res, err := ch.run(probeScript, minOpenTimeout)
-	if err != nil || res == nil || res.TimedOut {
-		return
+func basename(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
 	}
-	c := parseCapabilities(res.Output)
-	ch.caps.Store(&c)
+	return p
 }
 
 // EnsureProbed makes sure ci's channel is open and its capability probe has

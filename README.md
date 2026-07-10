@@ -179,6 +179,36 @@ retrofit multiplexing onto that existing SSH process; it only affects later SSH
 connections. See
 [Security](#security).
 
+### Remote prerequisites
+
+The OOB file/exec tools run **stock commands on the target over one persistent
+`/bin/sh`** — nothing is installed or deployed. When the channel opens, aish
+probes the host and reports per-tool availability in `session_status`
+(`oob_tools`); a tool whose prerequisite is missing is disabled and returns a
+clear error (with an install suggestion) instead of failing silently. A target
+that isn't a POSIX shell at all (Windows, a network device, a restricted shell)
+is detected in seconds and the tools refuse with guidance — use `run_command`
+to drive it visibly instead.
+
+Commands used (POSIX/coreutils):
+
+- **Core (all content tools):** `sh`, `base64`, `tail`, `head`, `mv`, `chmod`,
+  `dirname` — universal on Linux.
+- **Per tool:** `stat` (file_stat), `find` (directory_list, file_search),
+  `grep` or `ripgrep` (file_grep), `sha256sum`/`shasum` (optional, for
+  `if_match` staleness checks).
+
+aish adapts to the flavor it finds (GNU vs BusyBox vs BSD `stat`/`find`/`grep`,
+`base64 -d` vs `-D`, `ripgrep` vs `grep`), so Debian/RHEL/Arch/Raspberry Pi OS
+work fully; Alpine/BusyBox, BSD, and macOS work with best-effort fallbacks;
+Windows and network devices are cleanly refused.
+
+| Platform | OOB file/exec tools |
+|---|---|
+| Debian/Ubuntu, RHEL family, Arch, Raspberry Pi OS | full |
+| Alpine/BusyBox, FreeBSD/OpenBSD, macOS | best-effort (some tools may need a package) |
+| Windows, Cisco IOS / network devices | not supported (refused fast); use `run_command` |
+
 ## Security
 
 This is mainly a visibility/consent tool, not a sandbox. The MCP endpoint is a

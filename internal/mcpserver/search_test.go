@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"ai-ssh/internal/sshmux"
 )
 
 func TestParseGrep(t *testing.T) {
@@ -126,5 +129,39 @@ func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseGrepColon(t *testing.T) {
+	// Plain grep fallback: path:line:text.
+	out := "/etc/nginx.conf:12:listen 443\n/etc/nginx.conf:20:  listen 80;\n"
+	matches, truncated := parseGrepColon([]byte(out), 10)
+	if truncated || len(matches) != 2 {
+		t.Fatalf("got %d matches truncated=%v", len(matches), truncated)
+	}
+	if matches[0].Path != "/etc/nginx.conf" || matches[0].Line != 12 || matches[0].Text != "listen 443" {
+		t.Fatalf("match0 = %+v", matches[0])
+	}
+	if matches[1].Line != 20 || matches[1].Text != "  listen 80;" {
+		t.Fatalf("match1 = %+v", matches[1])
+	}
+}
+
+func TestGrepCommandBackends(t *testing.T) {
+	args := fileGrepArgs{Path: "/etc", Pattern: "x", Include: "*.conf", IgnoreCase: true}
+	// ripgrep preferred, NUL-framed.
+	cmd, null := grepCommand(sshmux.Capabilities{HasRg: true, HasGrep: true, GrepNull: true}, args)
+	if !null || !strings.Contains(cmd, "rg ") || !strings.Contains(cmd, "-g '*.conf'") {
+		t.Fatalf("rg backend: %q null=%v", cmd, null)
+	}
+	// grep --null when no rg.
+	cmd, null = grepCommand(sshmux.Capabilities{HasGrep: true, GrepNull: true}, args)
+	if !null || !strings.Contains(cmd, "grep -rnI --null") {
+		t.Fatalf("grep --null backend: %q null=%v", cmd, null)
+	}
+	// plain grep (BusyBox): colon-framed.
+	cmd, null = grepCommand(sshmux.Capabilities{HasGrep: true}, args)
+	if null || !strings.Contains(cmd, "grep -rnI") || strings.Contains(cmd, "--null") {
+		t.Fatalf("plain grep backend: %q null=%v", cmd, null)
 	}
 }

@@ -39,14 +39,26 @@ type ChanResult struct {
 	TimedOut bool
 }
 
-var errChannelDead = errors.New("channel dead")
+var (
+	errChannelDead     = errors.New("channel dead")
+	errNoShellResponse = errors.New("no response from the remote shell")
+	errNotPosixShell   = errors.New("the remote did not present a POSIX shell")
+)
 
 const chanOutputCap = 64 << 20 // hard cap on one op's collected output
 
 // minOpenTimeout: the first op on a fresh channel may sit behind a human
 // approving an MFA push; killing the channel too early would burn the push
 // and cost another on retry.
-const minOpenTimeout = 120 * time.Second
+const minOpenTimeout = 60 * time.Second
+
+// Two-phase probe timeouts: wait the long window only for the *first byte* (the
+// MFA/network wait), then a short window for the sentinel. A shell that answers
+// but never returns our sentinel isn't POSIX — fail fast instead of hanging.
+const (
+	probeFirstByteTimeout = 60 * time.Second
+	probeCompleteTimeout  = 8 * time.Second
+)
 
 type channel struct {
 	mu    sync.Mutex
@@ -176,6 +188,94 @@ func (ch *channel) run(script string, timeout time.Duration) (*ChanResult, error
 	}
 }
 
+// runProbe runs the capability probe as the first op on a fresh channel, using
+// a two-phase timeout so a non-POSIX shell (Windows, a network device, a
+// restricted shell) fails in seconds rather than blocking the full MFA window.
+// A returned sentinel proves the remote ran our printf, i.e. it is a POSIX
+// shell; the collected key=value lines are parsed into Capabilities.
+func (ch *channel) runProbe() (Capabilities, error) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if ch.dead {
+		return Capabilities{}, errChannelDead
+	}
+	nb := make([]byte, 8)
+	rand.Read(nb)
+	sent := "@AISH@" + hex.EncodeToString(nb) + "@"
+	full := probeScript + "\nprintf '\\n" + sent + "%s@\\n' \"$?\"\n"
+	if _, err := io.WriteString(ch.stdin, full); err != nil {
+		ch.kill()
+		return Capabilities{}, errChannelDead
+	}
+
+	first := time.NewTimer(probeFirstByteTimeout)
+	defer first.Stop()
+	var complete *time.Timer
+	gotFirst := false
+	var out bytes.Buffer
+	for {
+		var tch <-chan time.Time
+		if gotFirst {
+			tch = complete.C
+		} else {
+			tch = first.C
+		}
+		select {
+		case line, ok := <-ch.lines:
+			if !ok {
+				ch.kill()
+				return Capabilities{}, errChannelDead
+			}
+			if !gotFirst {
+				gotFirst = true
+				first.Stop()
+				complete = time.NewTimer(probeCompleteTimeout)
+				defer complete.Stop()
+			}
+			trimmed := strings.TrimRight(string(line), "\r\n")
+			if _, found := strings.CutPrefix(trimmed, sent); found {
+				return parseCapabilities(out.Bytes()), nil
+			}
+			out.Write(line)
+			if out.Len() > 1<<20 {
+				ch.kill()
+				return Capabilities{}, errNotPosixShell
+			}
+		case <-tch:
+			ch.kill()
+			if !gotFirst {
+				return Capabilities{}, errNoShellResponse
+			}
+			return Capabilities{}, errNotPosixShell
+		}
+	}
+}
+
+// probeChannel runs runProbe and caches the result, or returns the failure so
+// the caller can drop the channel and report a clear error.
+func (m *Mux) probeChannel(ch *channel) error {
+	caps, err := ch.runProbe()
+	if err != nil {
+		return err
+	}
+	ch.caps.Store(&caps)
+	return nil
+}
+
+// probeOpenError turns a probe failure into guidance for the model.
+func probeOpenError(host string, err error) error {
+	switch {
+	case errors.Is(err, errNotPosixShell):
+		return fmt.Errorf("the host at %s did not present a POSIX shell over ssh; native file/exec tools need /bin/sh, so this looks like a non-Unix target (Windows, a network device, or a restricted shell). Use run_command to drive it visibly instead", host)
+	case errors.Is(err, errChannelDead):
+		return fmt.Errorf("the oob channel to %s closed immediately (the remote may not allow a shell session or lacks /bin/sh); use run_command instead", host)
+	case errors.Is(err, errNoShellResponse):
+		return fmt.Errorf("the oob channel to %s did not respond in time; the host may be slow or may not be a POSIX shell", host)
+	default:
+		return fmt.Errorf("opening the oob channel to %s failed: %v", host, err)
+	}
+}
+
 // ChannelRun runs script over the persistent channel for ci, opening it on
 // first use. A dead channel is removed and reported — the caller's retry is
 // the consent for a fresh open (which may trigger an MFA push).
@@ -200,11 +300,18 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 
 	if opened {
 		// The first op on a fresh channel may sit behind an MFA push (it opens a
-		// new session on the master). Run the capability probe as that first op:
-		// it absorbs the push wait with the long open timeout and caches host
-		// facts for session_status. Best-effort — a failure just leaves caps
-		// unset and the real op below surfaces any hard channel error.
-		m.probeChannel(ch)
+		// new session on the master). The probe runs as that first op with a
+		// two-phase timeout, caching host facts and confirming a POSIX shell. A
+		// probe failure is fatal for this channel: drop it and return a clear
+		// error rather than letting the real op below hang or fail opaquely.
+		if perr := m.probeChannel(ch); perr != nil {
+			m.chMu.Lock()
+			if m.channels[ci.Sock] == ch {
+				delete(m.channels, ci.Sock)
+			}
+			m.chMu.Unlock()
+			return nil, probeOpenError(ci.Host, perr)
+		}
 	}
 	res, err := ch.run(script, timeout)
 	if errors.Is(err, errChannelDead) {
@@ -239,14 +346,18 @@ func (m *Mux) closeChannels() {
 }
 
 // WriteScript builds the heredoc script that writes data to path over a
-// channel. base64's alphabet cannot contain '@', so the static marker is
-// collision-free.
-func WriteScript(path string, data []byte, appendMode bool, mode string) string {
+// channel (the non-atomic append path). base64's alphabet cannot contain '@',
+// so the static marker is collision-free. decodeFlag is this host's base64
+// decode flag ("-d" or "-D"); empty defaults to "-d".
+func WriteScript(path string, data []byte, appendMode bool, mode, decodeFlag string) string {
 	redir := ">"
 	if appendMode {
 		redir = ">>"
 	}
-	cmd := fmt.Sprintf("base64 -d %s %s 2>&1 <<'@AISH_EOF@'", redir, Quote(path))
+	if decodeFlag != "-d" && decodeFlag != "-D" {
+		decodeFlag = "-d"
+	}
+	cmd := fmt.Sprintf("base64 %s %s %s 2>&1 <<'@AISH_EOF@'", decodeFlag, redir, Quote(path))
 	if mode != "" {
 		cmd += fmt.Sprintf(" && chmod %s %s 2>&1", mode, Quote(path))
 	}

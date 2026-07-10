@@ -3,68 +3,72 @@ package sshmux
 import "testing"
 
 func TestParseCapabilities(t *testing.T) {
-	cases := []struct {
-		name string
-		out  string
-		want Capabilities
-	}{
-		{
-			name: "gnu linux with rg and sha256sum",
-			out: "uname=Linux x86_64\nuser=mike\nhostname=web01\npwd=/home/mike\n" +
-				"rg=/usr/bin/rg\nsha256sum=/usr/bin/sha256sum\nshasum=\nmktemp=/usr/bin/mktemp\n" +
-				"grep_version=grep (GNU grep) 3.7\n",
-			want: Capabilities{
-				OS: "Linux", Arch: "x86_64", Hostname: "web01", User: "mike", Cwd: "/home/mike",
-				HasRg: true, Hasher: "sha256sum", GrepFlavor: "gnu", HasMktemp: true,
-			},
-		},
-		{
-			name: "busybox: no rg, no sha256sum, shasum absent, empty grep version",
-			out: "uname=Linux armv7l\nuser=root\nhostname=pi\npwd=/root\n" +
-				"rg=\nsha256sum=\nshasum=\nmktemp=/bin/mktemp\ngrep_version=\n",
-			want: Capabilities{
-				OS: "Linux", Arch: "armv7l", Hostname: "pi", User: "root", Cwd: "/root",
-				HasRg: false, Hasher: "none", GrepFlavor: "other", HasMktemp: true,
-			},
-		},
-		{
-			name: "bsd/macos: shasum fallback, non-GNU grep",
-			out: "uname=Darwin arm64\nuser=mike\nhostname=mac\npwd=/Users/mike\n" +
-				"rg=\nsha256sum=\nshasum=/usr/bin/shasum\nmktemp=/usr/bin/mktemp\n" +
-				"grep_version=grep (BSD grep, GNU compatible) 2.6.0-FreeBSD\n",
-			want: Capabilities{
-				OS: "Darwin", Arch: "arm64", Hostname: "mac", User: "mike", Cwd: "/Users/mike",
-				HasRg: false, Hasher: "shasum", GrepFlavor: "other", HasMktemp: true,
-			},
-		},
-		{
-			name: "non-posix: empty uname marks unsupported",
-			out:  "uname=\nuser=\nhostname=\npwd=\nrg=\nsha256sum=\nshasum=\nmktemp=\ngrep_version=\n",
-			want: Capabilities{Hasher: "none", GrepFlavor: "other", Unsupported: true},
-		},
+	out := "uname=Linux x86_64\nuser=mike\nhostname=web01\npwd=/home/mike\n" +
+		"rg=/usr/bin/rg\ngrep=/bin/grep\nfind=/usr/bin/find\nsha256sum=/usr/bin/sha256sum\nshasum=\nmktemp=/usr/bin/mktemp\n" +
+		"pkg=/usr/bin/apt-get\n" +
+		"base64=1\nbase64d=1\nbase64D=\nstatc=1\nstatf=\nfindprintf=1\nheadz=1\ngrepnull=1\n"
+	c := parseCapabilities([]byte(out))
+	want := Capabilities{
+		OS: "Linux", Arch: "x86_64", Hostname: "web01", User: "mike", Cwd: "/home/mike",
+		HasRg: true, HasGrep: true, HasFind: true, Hasher: "sha256sum", HasMktemp: true, PkgMgr: "apt-get",
+		HasBase64: true, Base64D: true, StatC: true, FindPrint: true, HeadZ: true, GrepNull: true,
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseCapabilities([]byte(tc.out))
-			if got != tc.want {
-				t.Fatalf("parseCapabilities:\n got  %+v\n want %+v", got, tc.want)
-			}
-		})
+	if c != want {
+		t.Fatalf("gnu host:\n got  %+v\n want %+v", c, want)
+	}
+	if c.Base64Decode() != "-d" {
+		t.Fatalf("Base64Decode = %q, want -d", c.Base64Decode())
+	}
+}
+
+func TestParseCapabilitiesBSD(t *testing.T) {
+	// macOS/BSD: base64 decodes with -D, stat uses -f, no GNU find -printf/head -z,
+	// hasher is shasum, package manager is brew.
+	out := "uname=Darwin arm64\nuser=mike\nhostname=mac\npwd=/Users/mike\n" +
+		"rg=\nsha256sum=\nshasum=/usr/bin/shasum\nmktemp=/usr/bin/mktemp\n" +
+		"pkg=/opt/homebrew/bin/brew\n" +
+		"base64=1\nbase64d=\nbase64D=1\nstatc=\nstatf=1\nfindprintf=\nheadz=\ngrepnull=1\n"
+	c := parseCapabilities([]byte(out))
+	if c.OS != "Darwin" || c.Hasher != "shasum" || c.PkgMgr != "brew" {
+		t.Fatalf("unexpected: %+v", c)
+	}
+	if c.StatC || !c.StatF || c.FindPrint || c.HeadZ {
+		t.Fatalf("BSD flavor flags wrong: %+v", c)
+	}
+	if c.Base64Decode() != "-D" {
+		t.Fatalf("Base64Decode = %q, want -D", c.Base64Decode())
+	}
+}
+
+func TestParseCapabilitiesBusyBox(t *testing.T) {
+	// Alpine/BusyBox: stat -c works, but no find -printf / head -z / grep --null.
+	out := "uname=Linux aarch64\nuser=root\nhostname=pi\npwd=/root\n" +
+		"rg=\nsha256sum=/usr/bin/sha256sum\nshasum=\nmktemp=/bin/mktemp\n" +
+		"pkg=/sbin/apk\n" +
+		"base64=1\nbase64d=1\nbase64D=\nstatc=1\nstatf=\nfindprintf=\nheadz=\ngrepnull=\n"
+	c := parseCapabilities([]byte(out))
+	if !c.StatC || c.FindPrint || c.HeadZ || c.GrepNull {
+		t.Fatalf("busybox flags wrong: %+v", c)
+	}
+	if c.PkgMgr != "apk" || c.Hasher != "sha256sum" {
+		t.Fatalf("unexpected: %+v", c)
+	}
+}
+
+func TestParseCapabilitiesNonPosix(t *testing.T) {
+	c := parseCapabilities([]byte("garbage output, not key=value\n"))
+	if !c.Unsupported {
+		t.Fatalf("empty uname should mark Unsupported: %+v", c)
+	}
+	if c.Base64Decode() != "" {
+		t.Fatalf("no base64 → Base64Decode should be empty, got %q", c.Base64Decode())
 	}
 }
 
 func TestParseCapabilitiesMissingLineDoesNotDrift(t *testing.T) {
-	// A missing tool yields an empty value; a dropped line must not shift the
-	// remaining keys. Here 'shasum' line is absent entirely.
 	out := "uname=Linux x86_64\nsha256sum=/usr/bin/sha256sum\nmktemp=/usr/bin/mktemp\n"
-	got := parseCapabilities([]byte(out))
-	if got.Hasher != "sha256sum" {
-		t.Fatalf("hasher = %q, want sha256sum", got.Hasher)
-	}
-	if !got.HasMktemp {
-		t.Fatalf("HasMktemp = false, want true")
-	}
-	if got.HasRg {
-		t.Fatalf("HasRg = true, want false (rg line absent)")
+	c := parseCapabilities([]byte(out))
+	if c.Hasher != "sha256sum" || !c.HasMktemp || c.HasRg {
+		t.Fatalf("drift: %+v", c)
 	}
 }

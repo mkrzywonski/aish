@@ -356,6 +356,9 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 		max = maxFileRead
 	}
 	rt := c.route()
+	if err := c.requireTool(rt, "file_read"); err != nil {
+		return nil, fileReadResult{}, err
+	}
 	warning, _ := c.guardTarget(rt, opRead)
 	var data []byte
 	var eof bool
@@ -487,6 +490,9 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, fileWriteResult{}, err
 	}
+	if err := c.requireTool(rt, "file_write"); err != nil {
+		return nil, fileWriteResult{}, err
+	}
 
 	// Non-append writes over an OOB route go through the atomic replace path
 	// (temp+rename, mode preserved, symlink-refusing, optional if_match CAS).
@@ -521,7 +527,8 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		}
 
 	case "controlmaster":
-		res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.Path, data, true, args.Mode), 60*time.Second)
+		caps, _ := c.Mux.CachedCapabilities(rt.ci)
+		res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.Path, data, true, args.Mode, caps.Base64Decode()), 60*time.Second)
 		if err != nil {
 			return nil, fileWriteResult{}, err
 		}
@@ -589,6 +596,9 @@ func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args file
 		return nil, fileEditResult{}, oobPrimitiveError("file_edit", rt.host)
 	}
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
+		return nil, fileEditResult{}, err
+	}
+	if err := c.requireTool(rt, "file_edit"); err != nil {
 		return nil, fileEditResult{}, err
 	}
 
@@ -672,6 +682,9 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 	if rt.via == "in_band" {
 		return nil, fileStatResult{}, oobPrimitiveError("file_stat", rt.host)
 	}
+	if err := c.requireTool(rt, "file_stat"); err != nil {
+		return nil, fileStatResult{}, err
+	}
 	warning, _ := c.guardTarget(rt, opRead)
 
 	res := fileStatResult{Path: args.Path, Via: resultVia(rt), Host: rt.host, Warning: warning}
@@ -688,7 +701,19 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 		return nil, res, nil
 	}
 
-	cmd := "stat --printf='%a\\t%s\\t%Y\\t%F' -- " + sshmux.Quote(args.Path)
+	caps, _ := c.Mux.CachedCapabilities(rt.ci)
+	// GNU/BusyBox stat use -c; BSD/macOS use -f. Both are asked for the same
+	// fields in the same order (mode, size, mtime, type), so one parse handles
+	// all; only the type strings differ (remoteFileType normalizes them).
+	var cmd string
+	switch {
+	case caps.StatC:
+		cmd = "stat -c '%a\t%s\t%Y\t%F' -- " + sshmux.Quote(args.Path)
+	case caps.StatF:
+		cmd = "stat -f '%Lp\t%z\t%m\t%HT' " + sshmux.Quote(args.Path)
+	default:
+		cmd = "stat -c '%a\t%s\t%Y\t%F' -- " + sshmux.Quote(args.Path)
+	}
 	out, err := c.channelOutput(rt.ci, cmd, 30*time.Second)
 	if err != nil {
 		return nil, fileStatResult{}, err
@@ -749,6 +774,9 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 	if rt.via == "in_band" {
 		return nil, directoryListResult{}, oobPrimitiveError("directory_list", rt.host)
 	}
+	if err := c.requireTool(rt, "directory_list"); err != nil {
+		return nil, directoryListResult{}, err
+	}
 	warning, _ := c.guardTarget(rt, opRead)
 
 	res := directoryListResult{Via: resultVia(rt), Host: rt.host, Warning: warning}
@@ -773,38 +801,90 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 		return nil, res, nil
 	}
 
-	// GNU find/head are available on the Linux hosts aish supports. NUL fields
-	// keep names containing tabs or newlines unambiguous.
-	fieldLimit := (max + 1) * 4
-	cmd := fmt.Sprintf("test -d %s && find %s -mindepth 1 -maxdepth 1 -printf '%%f\\0%%y\\0%%s\\0%%T@\\0' | head -z -n %d",
-		sshmux.Quote(args.Path), sshmux.Quote(args.Path), fieldLimit)
-	out, err := c.channelOutput(rt.ci, cmd, 60*time.Second)
+	caps, _ := c.Mux.CachedCapabilities(rt.ci)
+	var entries []directoryEntry
+	var err error
+	if caps.FindPrint && caps.HeadZ {
+		entries, err = c.dirListGNU(rt.ci, args.Path, max)
+	} else {
+		entries, err = c.dirListPortable(rt.ci, args.Path, caps, max)
+	}
 	if err != nil {
 		return nil, directoryListResult{}, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	res.Truncated = len(entries) > max
+	if len(entries) > max {
+		entries = entries[:max]
+	}
+	res.Entries = entries
+	return nil, res, nil
+}
+
+// dirListGNU uses GNU find -printf with NUL fields, which keep names containing
+// tabs or newlines unambiguous.
+func (c *Core) dirListGNU(ci *sshmux.ConnInfo, path string, max int) ([]directoryEntry, error) {
+	fieldLimit := (max + 1) * 4
+	cmd := fmt.Sprintf("test -d %s && find %s -mindepth 1 -maxdepth 1 -printf '%%f\\0%%y\\0%%s\\0%%T@\\0' | head -z -n %d",
+		sshmux.Quote(path), sshmux.Quote(path), fieldLimit)
+	out, err := c.channelOutput(ci, cmd, 60*time.Second)
+	if err != nil {
+		return nil, err
 	}
 	parts := bytes.Split(out, []byte{0})
 	if len(parts) > 0 && len(parts[len(parts)-1]) == 0 {
 		parts = parts[:len(parts)-1]
 	}
 	if len(parts)%4 != 0 {
-		return nil, directoryListResult{}, errors.New("unexpected directory listing response")
+		return nil, errors.New("unexpected directory listing response")
 	}
+	var entries []directoryEntry
 	for i := 0; i < len(parts); i += 4 {
 		size, serr := strconv.ParseInt(string(parts[i+2]), 10, 64)
 		mtime, merr := strconv.ParseFloat(string(parts[i+3]), 64)
 		if serr != nil || merr != nil {
-			return nil, directoryListResult{}, fmt.Errorf("invalid directory entry metadata for %q", parts[i])
+			return nil, fmt.Errorf("invalid directory entry metadata for %q", parts[i])
 		}
-		res.Entries = append(res.Entries, directoryEntry{
+		entries = append(entries, directoryEntry{
 			Name: string(parts[i]), Type: findFileType(string(parts[i+1])), Size: size, ModifiedUnix: int64(mtime),
 		})
 	}
-	sort.Slice(res.Entries, func(i, j int) bool { return res.Entries[i].Name < res.Entries[j].Name })
-	res.Truncated = len(res.Entries) > max
-	if len(res.Entries) > max {
-		res.Entries = res.Entries[:max]
+	return entries, nil
+}
+
+// dirListPortable works without GNU find -printf: it drives `find … -exec stat`
+// with the host's stat flavor. Output is one tab-separated line per entry
+// (path, type, size, mtime); newline/tab framing is best-effort (names with
+// those bytes are ambiguous — the GNU path avoids that).
+func (c *Core) dirListPortable(ci *sshmux.ConnInfo, path string, caps sshmux.Capabilities, max int) ([]directoryEntry, error) {
+	var statExpr string
+	if caps.StatF {
+		statExpr = "stat -f '%N\t%HT\t%z\t%m'"
+	} else {
+		statExpr = "stat -c '%n\t%F\t%s\t%Y'"
 	}
-	return nil, res, nil
+	cmd := fmt.Sprintf("test -d %s && find %s -mindepth 1 -maxdepth 1 -exec %s {} + | head -n %d",
+		sshmux.Quote(path), sshmux.Quote(path), statExpr, max+1)
+	out, err := c.channelOutput(ci, cmd, 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	var entries []directoryEntry
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.SplitN(line, "\t", 4)
+		if len(f) != 4 {
+			continue
+		}
+		size, _ := strconv.ParseInt(f[2], 10, 64)
+		mtime, _ := strconv.ParseInt(f[3], 10, 64)
+		entries = append(entries, directoryEntry{
+			Name: filepath.Base(f[0]), Type: remoteFileType(f[1]), Size: size, ModifiedUnix: mtime,
+		})
+	}
+	return entries, nil
 }
 
 // ---- file_upload / file_download ----
@@ -829,6 +909,9 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, transferResult{}, err
 	}
+	if err := c.requireTool(rt, "file_upload"); err != nil {
+		return nil, transferResult{}, err
+	}
 	data, err := os.ReadFile(expandLocal(args.LocalPath))
 	if err != nil {
 		return nil, transferResult{}, err
@@ -843,6 +926,9 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 	rt := c.route()
 	if rt.via != "controlmaster" {
 		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_read instead")
+	}
+	if err := c.requireTool(rt, "file_download"); err != nil {
+		return nil, transferResult{}, err
 	}
 	warning, _ := c.guardTarget(rt, opRead)
 	out, err := c.channelOutput(rt.ci, "base64 < "+sshmux.Quote(args.RemotePath), 120*time.Second)
@@ -1087,14 +1173,15 @@ func (c *Core) writeFileAtomic(rt route, path string, data []byte, mode, ifMatch
 	case "local":
 		return atomicWriteLocal(expandLocal(path), data, mode, ifMatch)
 	case "controlmaster":
-		hasher := ""
-		if caps, ok := c.Mux.CachedCapabilities(rt.ci); ok {
-			hasher = caps.Hasher
-		}
+		caps, _ := c.Mux.CachedCapabilities(rt.ci)
+		hasher := caps.Hasher
 		if strings.HasPrefix(ifMatch, "sha256:") && (hasher == "" || hasher == "none") {
 			return fmt.Errorf("cannot verify a sha256 if_match on %s (no sha256 tool); get an mtime-size version from file_stat, or omit if_match", rt.host)
 		}
-		script := sshmux.AtomicWriteScript(sshmux.WriteRequest{Path: path, Data: data, Mode: mode, IfMatch: ifMatch, Hasher: hasher})
+		script := sshmux.AtomicWriteScript(sshmux.WriteRequest{
+			Path: path, Data: data, Mode: mode, IfMatch: ifMatch,
+			Hasher: hasher, Base64Decode: caps.Base64Decode(),
+		})
 		res, err := c.Mux.ChannelRun(rt.ci, script, 60*time.Second)
 		if err != nil {
 			return err
@@ -1226,21 +1313,23 @@ func localFileType(mode os.FileMode) string {
 	}
 }
 
+// remoteFileType normalizes the type string from GNU stat %F ("regular file",
+// "symbolic link", …) or BSD stat %HT ("Regular File", "Symbolic Link", …).
 func remoteFileType(kind string) string {
-	switch strings.TrimSpace(kind) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "regular file", "regular empty file":
 		return "file"
 	case "directory":
 		return "directory"
 	case "symbolic link":
 		return "symlink"
-	case "fifo":
+	case "fifo", "fifo file":
 		return "fifo"
 	case "socket":
 		return "socket"
-	case "character special file":
+	case "character special file", "character device":
 		return "char_device"
-	case "block special file":
+	case "block special file", "block device":
 		return "block_device"
 	default:
 		return strings.TrimSpace(kind)

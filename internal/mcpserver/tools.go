@@ -288,6 +288,7 @@ type sessionStatusResult struct {
 	OobHost          string               `json:"oob_host,omitempty"`
 	TargetConfidence string               `json:"target_confidence"`
 	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
+	OobTools         map[string]toolAvail `json:"oob_tools,omitempty"`
 	SSHUser          string               `json:"ssh_user,omitempty"`
 	Cwd              string               `json:"cwd,omitempty"`
 	PromptReady      bool                 `json:"prompt_ready"`
@@ -335,6 +336,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	if caps, ok := c.Mux.CachedCapabilities(rt.ci); ok {
 		res.RemoteHost = &caps
 	}
+	res.OobTools = c.oobToolAvailability(rt)
 	entries, err := os.ReadDir(paths.Base())
 	if err == nil {
 		for _, e := range entries {

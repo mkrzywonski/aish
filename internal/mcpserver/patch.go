@@ -50,6 +50,9 @@ func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args fil
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, filePatchResult{}, err
 	}
+	if err := c.requireTool(rt, "file_patch"); err != nil {
+		return nil, filePatchResult{}, err
+	}
 
 	data, err := c.readOOBFile(rt, args.Path, maxFileEdit)
 	if err != nil {

@@ -92,6 +92,9 @@ func (c *Core) fileGrep(ctx context.Context, req *mcp.CallToolRequest, args file
 	if rt.via == "in_band" {
 		return nil, fileGrepResult{}, oobPrimitiveError("file_grep", rt.host)
 	}
+	if err := c.requireTool(rt, "file_grep"); err != nil {
+		return nil, fileGrepResult{}, err
+	}
 	warning, _ := c.guardTarget(rt, opRead)
 
 	var (
@@ -110,41 +113,60 @@ func (c *Core) fileGrep(ctx context.Context, req *mcp.CallToolRequest, args file
 	return nil, fileGrepResult{Matches: matches, Truncated: truncated, Via: resultVia(rt), Host: rt.host, Warning: warning}, nil
 }
 
-// grepRemote runs ripgrep (preferred) or grep over the OOB channel. Both are
-// asked to emit "path\0line:text" per match (NUL after the path so a colon in
-// the path can't be confused with the line separator), newline-terminated, and
-// the pipeline is bounded by result count and bytes.
+// grepRemote runs ripgrep (preferred), grep --null, or plain grep over the OOB
+// channel, chosen from the probe. It classifies the producer's real exit —
+// 0 (matches) / 1 (none) are fine; ≥2 is a tool error surfaced to the model —
+// so a missing/incompatible grep never reads as a silent "no matches".
 func (c *Core) grepRemote(rt route, args fileGrepArgs, max int) ([]grepMatch, bool, error) {
 	caps, _ := c.Mux.CachedCapabilities(rt.ci)
-	p := sshmux.Quote(args.Path)
-	pat := sshmux.Quote(args.Pattern)
-	var tool string
-	if caps.HasRg {
-		tool = "rg --no-heading --null -n --color never"
-		if args.IgnoreCase {
-			tool += " -i"
-		}
-		if args.Include != "" {
-			tool += " -g " + sshmux.Quote(args.Include)
-		}
-		tool += " -e " + pat + " -- " + p
-	} else {
-		tool = "grep -rnI --null"
-		if args.IgnoreCase {
-			tool += " -i"
-		}
-		if args.Include != "" {
-			tool += " --include=" + sshmux.Quote(args.Include)
-		}
-		tool += " -e " + pat + " -- " + p
-	}
-	// head -n caps records (one extra to detect truncation); head -c caps bytes.
-	cmd := fmt.Sprintf("%s | head -n %d | head -c %d", tool, max+1, grepScanCap)
-	out, err := c.channelPipe(rt.ci, cmd, 60*time.Second)
+	producer, nullFramed := grepCommand(caps, args)
+	out, exit, capped, err := c.channelClassified(rt.ci, producer, grepScanCap, 60*time.Second)
 	if err != nil {
 		return nil, false, err
 	}
-	return parseGrep(out, max)
+	if exit >= 2 { // grep/rg: 0 = matches, 1 = none, ≥2 = error
+		return nil, false, fmt.Errorf("file_grep failed on %s (exit %d): %.200s", rt.host, exit, out)
+	}
+	var matches []grepMatch
+	var truncated bool
+	if nullFramed {
+		matches, truncated, _ = parseGrep(out, max)
+	} else {
+		matches, truncated = parseGrepColon(out, max)
+	}
+	return matches, truncated || capped, nil
+}
+
+// grepCommand builds the remote grep/ripgrep command and reports whether its
+// output is NUL-framed ("path\0line:text", unambiguous) or plain colon-framed
+// ("path:line:text", the last-resort fallback for grep without --null).
+func grepCommand(caps sshmux.Capabilities, args fileGrepArgs) (string, bool) {
+	p := sshmux.Quote(args.Path)
+	pat := sshmux.Quote(args.Pattern)
+	ic := ""
+	if args.IgnoreCase {
+		ic = " -i"
+	}
+	switch {
+	case caps.HasRg:
+		cmd := "rg --no-heading --null -n --color never" + ic
+		if args.Include != "" {
+			cmd += " -g " + sshmux.Quote(args.Include)
+		}
+		return cmd + " -e " + pat + " -- " + p, true
+	case caps.GrepNull:
+		cmd := "grep -rnI --null" + ic
+		if args.Include != "" {
+			cmd += " --include=" + sshmux.Quote(args.Include)
+		}
+		return cmd + " -e " + pat + " -- " + p, true
+	default:
+		cmd := "grep -rnI" + ic
+		if args.Include != "" {
+			cmd += " --include=" + sshmux.Quote(args.Include)
+		}
+		return cmd + " -e " + pat + " -- " + p, false
+	}
 }
 
 // parseGrep turns "path\0line:text\n" records into matches, capping at max.
@@ -156,7 +178,7 @@ func parseGrep(out []byte, max int) ([]grepMatch, bool, error) {
 		}
 		nul := strings.IndexByte(rec, 0)
 		if nul < 0 {
-			continue // partial/truncated record
+			continue // partial/truncated record (or a stderr warning line)
 		}
 		path := rec[:nul]
 		rest := rec[nul+1:]
@@ -174,6 +196,30 @@ func parseGrep(out []byte, max int) ([]grepMatch, bool, error) {
 		matches = append(matches, grepMatch{Path: path, Line: line, Text: capText(rest[colon+1:])})
 	}
 	return matches, false, nil
+}
+
+// parseGrepColon parses plain "path:line:text" (grep without --null). A colon
+// in the path is ambiguous here — best-effort, as documented for this fallback.
+func parseGrepColon(out []byte, max int) ([]grepMatch, bool) {
+	var matches []grepMatch
+	for _, rec := range strings.Split(string(out), "\n") {
+		if rec == "" {
+			continue
+		}
+		f := strings.SplitN(rec, ":", 3)
+		if len(f) != 3 {
+			continue
+		}
+		line, convErr := strconv.Atoi(f[1])
+		if convErr != nil {
+			continue
+		}
+		if len(matches) >= max {
+			return matches, true
+		}
+		matches = append(matches, grepMatch{Path: f[0], Line: line, Text: capText(f[2])})
+	}
+	return matches, false
 }
 
 func grepLocal(root, pattern, include string, ignoreCase bool, max int) ([]grepMatch, bool, error) {
@@ -265,6 +311,9 @@ func (c *Core) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fi
 	if rt.via == "in_band" {
 		return nil, fileSearchResult{}, oobPrimitiveError("file_search", rt.host)
 	}
+	if err := c.requireTool(rt, "file_search"); err != nil {
+		return nil, fileSearchResult{}, err
+	}
 	warning, _ := c.guardTarget(rt, opRead)
 
 	var (
@@ -293,31 +342,34 @@ func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, b
 	if args.Name != "" {
 		expr += " -name " + sshmux.Quote(args.Name)
 	}
-	// GNU find/head support NUL framing (-print0 / head -z), which keeps names
-	// with newlines unambiguous; other finds fall back to newline framing.
-	var cmd, sep string
-	if caps.GrepFlavor == "gnu" {
-		cmd = fmt.Sprintf("%s -print0 | head -z -n %d", expr, max+1)
-		sep = "\x00"
+	// GNU find supports NUL framing (-print0), which keeps names with newlines
+	// unambiguous; other finds fall back to newline framing (best-effort).
+	var producer, sep string
+	if caps.FindPrint {
+		producer, sep = expr+" -print0", "\x00"
 	} else {
-		cmd = fmt.Sprintf("%s -print | head -n %d", expr, max+1)
-		sep = "\n"
+		producer, sep = expr+" -print", "\n"
 	}
-	out, err := c.channelPipe(rt.ci, cmd, 60*time.Second)
+	out, exit, capped, err := c.channelClassified(rt.ci, producer, grepScanCap, 60*time.Second)
 	if err != nil {
 		return nil, false, err
 	}
+	if exit != 0 { // find exits 0 even with no results; nonzero is a real error
+		return nil, false, fmt.Errorf("file_search failed on %s (exit %d): %.200s", rt.host, exit, out)
+	}
 	var paths []string
+	truncated := capped
 	for _, rec := range strings.Split(string(out), sep) {
 		if rec == "" {
 			continue
 		}
 		if len(paths) >= max {
-			return paths, true, nil
+			truncated = true
+			break
 		}
 		paths = append(paths, rec)
 	}
-	return paths, false, nil
+	return paths, truncated, nil
 }
 
 func searchLocal(root, name, typ string, max int) ([]string, bool, error) {
@@ -353,19 +405,32 @@ func searchLocal(root, name, typ string, max int) ([]string, bool, error) {
 
 // ---- helpers ----
 
-// channelPipe runs a pipeline over the OOB channel and returns its stdout,
-// with stderr discarded. Unlike channelOutput it does not treat a nonzero exit
-// as failure: these pipelines end in head, whose success masks a grep/find
-// "no matches" exit, and error text must not pollute the parsed match stream.
-func (c *Core) channelPipe(ci *sshmux.ConnInfo, remoteCmd string, timeout time.Duration) ([]byte, error) {
-	res, err := c.Mux.ChannelRun(ci, "{ "+remoteCmd+"\n} </dev/null 2>/dev/null", timeout)
+// channelClassified runs a search producer over the OOB channel and returns its
+// output (stdout+stderr merged), the producer's own exit status, and whether a
+// byte cap truncated the output. The producer's exit is carried by a trailing
+// "@AISHRC@<code>" marker (emitted before the byte cap), so a producer failure
+// is never masked by the trailing head the way channelPipe/head pipelines are.
+// If the marker is missing, a large *successful* output was byte-capped.
+func (c *Core) channelClassified(ci *sshmux.ConnInfo, producer string, byteCap int, timeout time.Duration) (out []byte, exit int, capped bool, err error) {
+	cmd := fmt.Sprintf("{ %s\necho '@AISHRC@'$?; } </dev/null 2>&1 | head -c %d", producer, byteCap)
+	res, err := c.Mux.ChannelRun(ci, cmd, timeout)
 	if err != nil {
-		return nil, err
+		return nil, 0, false, err
 	}
 	if res.TimedOut {
-		return nil, errors.New("oob channel search timed out")
+		return nil, 0, false, errors.New("oob channel search timed out")
 	}
-	return res.Output, nil
+	data := res.Output
+	i := bytes.LastIndex(data, []byte("@AISHRC@"))
+	if i < 0 {
+		return data, 0, true, nil // marker lost → byte cap truncated a big result
+	}
+	code := strings.TrimRight(string(data[i+len("@AISHRC@"):]), "\r\n")
+	exit, convErr := strconv.Atoi(code)
+	if convErr != nil {
+		exit = 0
+	}
+	return data[:i], exit, false, nil
 }
 
 func findTypeFlag(typ string) string {

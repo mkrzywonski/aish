@@ -1,10 +1,11 @@
 # Plan: native-tool parity for aish remote hosts (v2)
 
-> Status: implemented on branch `remote-parity` (phases 0–5). Probe + host
+> Status: implemented on branch `remote-parity` (phases 0–6). Probe + host
 > awareness, three-way divergence enforcement, atomic conditional writes with
-> version tokens, `file_patch`, `file_grep`/`file_search`, and line-numbered
-> `file_read` are landed and tested. The optional Claude skill (phase 5) is not
-> built.
+> version tokens, `file_patch`, `file_grep`/`file_search`, line-numbered
+> `file_read`, and portability/graceful-failure (active probe, two-phase
+> fast-fail, per-tool availability gating, non-GNU fallbacks) are landed and
+> tested. The optional Claude skill (phase 5) is not built.
 
 
 Goal: when the shared session is inside SSH, give the AI tools that behave like
@@ -250,3 +251,60 @@ search are independent of each other.
 - Staleness token is named `version`/`version_kind`, never "hash".
 - Atomic write: regular-file replace atomic; append non-atomic (documented);
   symlink writes rejected initially; mode preserved, owner/ACL/xattr later.
+
+---
+
+# Phase 6 — portability & graceful failure
+
+From the platform-failure analysis: the toolset assumes GNU userland and, worse,
+some failures are silent or opaque to the AI. Priority is the *runtime error
+floor* (the last line of defense when the probe is wrong or the host changed),
+then reliable detection, then proactive disclosure/gating.
+
+## 6a. Runtime error floor (bug fixes — land first)
+- **Kill the 120s hang**: two-phase probe timeout. Wait the long (MFA-tolerant)
+  window for the *first byte*; once the shell responds, only a short window for
+  the sentinel. No sentinel ⇒ not a POSIX shell ⇒ fail fast with a clear
+  "this host didn't present /bin/sh (Windows / network device / restricted
+  shell)" error instead of hanging. Reduce the first-byte ceiling to ~60s.
+- **file_grep/file_search must not fail silently**: `channelPipe` discards
+  stderr and ignores exit, so a missing/broken grep reads as "no matches".
+  Replace with a classified run (`{ producer; echo @AISHRC@$?; } 2>&1 | head -c
+  cap`): distinguish exit 0 (matches), 1 (genuinely none), ≥2 (error → surface
+  stderr). Pipeline-exit-masking handled by the embedded RC marker (which
+  survives unless a large *successful* output was byte-capped).
+- **Atomic writes must not be opaque**: capture the subshell's stderr (`( … )
+  2>&1`) so `exit 91/…` carries the reason; clean up the temp file on the
+  `mv`-failure path too; stops the terminal stderr leak.
+
+## 6b. Reliable detection (active probe)
+Replace presence-only checks with *behavioral* tests, one round-trip:
+`stat -c`, `stat -f`, `find -printf`, `grep --null`, `head -z`, `base64 -d`,
+`base64 -D`, plus the package manager (`apt/dnf/yum/apk/pkg/brew/pacman`). New
+`Capabilities` booleans drive backend choice and availability. Non-POSIX hosts
+are marked from the probe handshake, not guessed.
+
+## 6c. Non-GNU fallbacks (the big real-world win)
+- **file_stat**: `stat -c` (GNU + BusyBox) → `stat -f` (BSD/macOS) by probe.
+- **directory_list**: GNU `find -printf | head -z` → portable
+  `find -maxdepth 1 -exec stat …` per the stat flavor.
+- **file_grep**: `rg` → `grep --null` → plain `grep -rn` (path:line:text).
+- **file_search**: GNU `-print0 | head -z` → `-print` (already degrades; drive
+  off the new booleans).
+- **base64 decode**: `-d` → `-D` (BSD) chosen from the probe; if no base64 at
+  all, the content tools are unavailable.
+
+## 6d. Disclosure + gating + install hints
+- Derive a per-tool availability map from the caps: `{available, missing,
+  install}` where `install` uses the detected package manager.
+- `session_status` reports `oob_tools`; MCP instructions tell the AI to check
+  it on a new host.
+- Each primitive gates on availability and returns an immediate, specific error
+  when unavailable (never attempts, never hangs), with the install hint so the
+  AI can offer to install (visibly, via run_command) — then re-probe.
+- Capabilities are already per-channel (per ssh host); add a host-change notice
+  so the AI re-reads oob_tools after switching hosts.
+
+## 6e. Docs
+README "Remote prerequisites" + platform support matrix; CLAUDE.md probe/
+availability model.
