@@ -166,6 +166,7 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)
 	registerRemoteTools(server, core)
+	registerSearchTools(server, core)
 	// Outermost first: gate on connection authorization before anything
 	// else (including cross-session forwarding) runs.
 	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core))
