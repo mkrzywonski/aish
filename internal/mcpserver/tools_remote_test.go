@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,5 +142,103 @@ func TestDivergencePolicy(t *testing.T) {
 			t.Errorf("divergencePolicy(%q, kind=%d, confirmed=%v) = %d, want %d",
 				tc.confidence, tc.kind, tc.confirmed, got, tc.want)
 		}
+	}
+}
+
+func TestLocalWriteVersioning(t *testing.T) {
+	c := localOOBCore(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "v.txt")
+	if err := os.WriteFile(path, []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// file_read yields a whole-file sha256 version.
+	_, rd, err := c.fileRead(context.Background(), nil, fileReadArgs{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rd.VersionKind != "sha256" || rd.Version == "" {
+		t.Fatalf("expected sha256 version, got %+v", rd)
+	}
+
+	// if_match with the current version succeeds.
+	_, _, err = c.fileWrite(context.Background(), nil, fileWriteArgs{Path: path, Content: "two", IfMatch: rd.Version})
+	if err != nil {
+		t.Fatalf("matching if_match write failed: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "two" {
+		t.Fatalf("content = %q", got)
+	}
+
+	// The old version is now stale: the write must be refused and the file left
+	// untouched.
+	_, _, err = c.fileWrite(context.Background(), nil, fileWriteArgs{Path: path, Content: "three", IfMatch: rd.Version})
+	if err == nil || !errors.Is(err, errStaleWrite) {
+		t.Fatalf("stale if_match err = %v, want errStaleWrite", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "two" {
+		t.Fatalf("file changed under stale write: %q", got)
+	}
+
+	// file_stat yields an mtime-size version that also works as if_match.
+	_, st, err := c.fileStat(context.Background(), nil, fileStatArgs{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.VersionKind != "mtime-size" || st.Version == "" {
+		t.Fatalf("expected mtime-size version, got %+v", st)
+	}
+	if _, _, err := c.fileWrite(context.Background(), nil, fileWriteArgs{Path: path, Content: "four", IfMatch: st.Version}); err != nil {
+		t.Fatalf("mtime-size if_match write failed: %v", err)
+	}
+
+	// Mode is preserved across the atomic replace.
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o644 {
+		t.Fatalf("mode = %o, want 644", fi.Mode().Perm())
+	}
+}
+
+func TestLocalWriteRefusesSymlink(t *testing.T) {
+	c := localOOBCore(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(target, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := c.fileWrite(context.Background(), nil, fileWriteArgs{Path: link, Content: "evil"})
+	if err == nil || !errors.Is(err, errSymlinkWrite) {
+		t.Fatalf("symlink write err = %v, want errSymlinkWrite", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "original" {
+		t.Fatalf("symlink target changed: %q", got)
+	}
+}
+
+func TestLocalEditClosesTOCTOU(t *testing.T) {
+	// writeFileAtomic with the version captured at read time must refuse to
+	// clobber a file that changed in between (the file_edit TOCTOU guard).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "race.txt")
+	original := []byte("hello world")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := localOOBCore(t)
+	rt := route{via: "local", host: "local"}
+	// A concurrent writer changes the file after we "read" original.
+	if err := os.WriteFile(path, []byte("changed underneath"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := c.writeFileAtomic(rt, path, []byte("edited"), "", sha256Version(original))
+	if err == nil || !errors.Is(err, errStaleWrite) {
+		t.Fatalf("err = %v, want errStaleWrite", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "changed underneath" {
+		t.Fatalf("stale edit clobbered concurrent write: %q", got)
 	}
 }

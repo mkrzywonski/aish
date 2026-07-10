@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -323,9 +325,14 @@ type fileReadResult struct {
 	Content  string `json:"content"`
 	Encoding string `json:"encoding"` // utf8 | base64
 	Eof      bool   `json:"eof"`
-	Via      string `json:"via"`
-	Host     string `json:"host"`
-	Warning  string `json:"warning,omitempty"`
+	// Version is a token for the whole file's current contents (only when the
+	// entire file was read); pass it as file_write's if_match to write only if
+	// the file hasn't changed since. VersionKind is "sha256".
+	Version     string `json:"version,omitempty"`
+	VersionKind string `json:"version_kind,omitempty"`
+	Via         string `json:"via"`
+	Host        string `json:"host"`
+	Warning     string `json:"warning,omitempty"`
 }
 
 func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args fileReadArgs) (*mcp.CallToolResult, fileReadResult, error) {
@@ -401,6 +408,11 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 		via = "channel" // shared persistent channel, not a fresh one per op
 	}
 	res := fileReadResult{Eof: eof, Via: via, Host: rt.host, Warning: warning}
+	if args.Offset == 0 && eof {
+		// The whole file is in hand: a sha256 over these exact bytes is a
+		// TOCTOU-correct version token for a later if_match write.
+		res.Version, res.VersionKind = sha256Version(data), "sha256"
+	}
 	if utf8.Valid(data) {
 		res.Content, res.Encoding = string(data), "utf8"
 	} else {
@@ -418,6 +430,7 @@ type fileWriteArgs struct {
 	Encoding string `json:"encoding,omitempty" jsonschema:"utf8 (default) or base64"`
 	Append   bool   `json:"append,omitempty"`
 	Mode     string `json:"mode,omitempty" jsonschema:"octal file mode to set, e.g. 0644"`
+	IfMatch  string `json:"if_match,omitempty" jsonschema:"only write if the file's current version still equals this token (from a prior file_read or file_stat); fails if the file changed. Not valid with append."`
 }
 
 type fileWriteResult struct {
@@ -434,22 +447,32 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 			return nil, fileWriteResult{}, err
 		}
 	}
+	if args.IfMatch != "" && args.Append {
+		return nil, fileWriteResult{}, errors.New("if_match cannot be combined with append")
+	}
 	rt := c.route()
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, fileWriteResult{}, err
 	}
 
+	// Non-append writes over an OOB route go through the atomic replace path
+	// (temp+rename, mode preserved, symlink-refusing, optional if_match CAS).
+	if !args.Append && rt.via != "in_band" {
+		if err := c.writeFileAtomic(rt, args.Path, data, args.Mode, args.IfMatch); err != nil {
+			return nil, fileWriteResult{}, err
+		}
+		return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host}, nil
+	}
+	if args.IfMatch != "" {
+		return nil, fileWriteResult{}, errors.New("if_match requires an out-of-band route; it is not available for append or in-band writes")
+	}
+
+	// Append, and the visible in_band fallback, keep the direct (non-atomic)
+	// write.
 	switch rt.via {
 	case "local":
 		path := expandLocal(args.Path)
-		flags := os.O_WRONLY | os.O_CREATE
-		if args.Append {
-			flags |= os.O_APPEND
-		} else {
-			flags |= os.O_TRUNC
-		}
-		mode := os.FileMode(0o644)
-		f, err := os.OpenFile(path, flags, mode)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
 			return nil, fileWriteResult{}, err
 		}
@@ -465,7 +488,7 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		}
 
 	case "controlmaster":
-		res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.Path, data, args.Append, args.Mode), 60*time.Second)
+		res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.Path, data, true, args.Mode), 60*time.Second)
 		if err != nil {
 			return nil, fileWriteResult{}, err
 		}
@@ -558,7 +581,14 @@ func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args file
 	if len(updated) > maxFileEdit {
 		return nil, fileEditResult{}, fmt.Errorf("edited file would exceed file_edit limit of %d bytes", maxFileEdit)
 	}
-	if err := c.writeOOBFile(rt, args.Path, updated); err != nil {
+	// Automatic staleness protection: verify the file still hashes to what we
+	// read before the atomic swap, closing the read->modify->write window. On a
+	// host with no sha256 tool we fall back to a plain atomic replace.
+	ifMatch := ""
+	if c.canSha256(rt) {
+		ifMatch = sha256Version(data)
+	}
+	if err := c.writeFileAtomic(rt, args.Path, updated, "", ifMatch); err != nil {
 		return nil, fileEditResult{}, err
 	}
 	if !args.ReplaceAll {
@@ -585,9 +615,20 @@ type fileStatResult struct {
 	Size         int64  `json:"size"`
 	Mode         string `json:"mode"`
 	ModifiedUnix int64  `json:"modified_unix"`
-	Via          string `json:"via"`
-	Host         string `json:"host"`
-	Warning      string `json:"warning,omitempty"`
+	// Version is a cheap mtime+size token for if_match writes (version_kind
+	// "mtime-size"). Weaker than file_read's sha256 — it can miss a same-size,
+	// same-mtime change — but needs no hasher on the remote.
+	Version     string `json:"version,omitempty"`
+	VersionKind string `json:"version_kind,omitempty"`
+	Via         string `json:"via"`
+	Host        string `json:"host"`
+	Warning     string `json:"warning,omitempty"`
+}
+
+// setMtimeVersion fills the mtime-size version token from Size/ModifiedUnix.
+func (r *fileStatResult) setMtimeVersion() {
+	r.Version = fmt.Sprintf("mtime-size:%d:%d", r.ModifiedUnix, r.Size)
+	r.VersionKind = "mtime-size"
 }
 
 func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args fileStatArgs) (*mcp.CallToolResult, fileStatResult, error) {
@@ -610,6 +651,7 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 		res.Size = info.Size()
 		res.Mode = fmt.Sprintf("%04o", info.Mode().Perm())
 		res.ModifiedUnix = info.ModTime().Unix()
+		res.setMtimeVersion()
 		return nil, res, nil
 	}
 
@@ -632,6 +674,7 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 		return nil, fileStatResult{}, fmt.Errorf("invalid stat timestamp %q", parts[2])
 	}
 	res.Type = remoteFileType(parts[3])
+	res.setMtimeVersion()
 	return nil, res, nil
 }
 
@@ -757,12 +800,8 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 	if err != nil {
 		return nil, transferResult{}, err
 	}
-	res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(args.RemotePath, data, false, ""), 120*time.Second)
-	if err != nil {
+	if err := c.writeFileAtomic(rt, args.RemotePath, data, "", ""); err != nil {
 		return nil, transferResult{}, err
-	}
-	if res.TimedOut || res.Exit != 0 {
-		return nil, transferResult{}, fmt.Errorf("oob channel upload failed: %.300s", res.Output)
 	}
 	return nil, transferResult{Bytes: int64(len(data)), Host: rt.host}, nil
 }
@@ -979,29 +1018,130 @@ func (c *Core) readOOBFile(rt route, path string, max int) ([]byte, error) {
 	}
 }
 
-func (c *Core) writeOOBFile(rt route, path string, data []byte) error {
+// Sentinel errors surfaced to the model so it can self-correct.
+var (
+	errStaleWrite   = errors.New("the file changed since it was read (if_match mismatch); re-read it and retry")
+	errSymlinkWrite = errors.New("refusing to write through a symlink; write to the symlink's real target path instead")
+)
+
+// sha256Version returns the version token for exactly these bytes.
+func sha256Version(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// canSha256 reports whether a sha256 if_match can be *enforced* on rt's write
+// path: always locally (aish hashes in Go), and remotely only when the host has
+// a sha256 tool to recompute the hash during the compare-and-swap.
+func (c *Core) canSha256(rt route) bool {
 	switch rt.via {
 	case "local":
-		info, err := os.Stat(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(path, data, info.Mode().Perm())
+		return true
 	case "controlmaster":
-		res, err := c.Mux.ChannelRun(rt.ci, sshmux.WriteScript(path, data, false, ""), 60*time.Second)
+		caps, ok := c.Mux.CachedCapabilities(rt.ci)
+		return ok && caps.Hasher != "" && caps.Hasher != "none"
+	}
+	return false
+}
+
+// writeFileAtomic installs data at path atomically (temp file + rename),
+// preserving the existing mode (or applying mode), refusing to follow a
+// symlink, and — when ifMatch is set — swapping only if the current file still
+// matches that version token. Not for append. Returns errStaleWrite /
+// errSymlinkWrite on the respective failures.
+func (c *Core) writeFileAtomic(rt route, path string, data []byte, mode, ifMatch string) error {
+	switch rt.via {
+	case "local":
+		return atomicWriteLocal(expandLocal(path), data, mode, ifMatch)
+	case "controlmaster":
+		hasher := ""
+		if caps, ok := c.Mux.CachedCapabilities(rt.ci); ok {
+			hasher = caps.Hasher
+		}
+		if strings.HasPrefix(ifMatch, "sha256:") && (hasher == "" || hasher == "none") {
+			return fmt.Errorf("cannot verify a sha256 if_match on %s (no sha256 tool); get an mtime-size version from file_stat, or omit if_match", rt.host)
+		}
+		script := sshmux.AtomicWriteScript(sshmux.WriteRequest{Path: path, Data: data, Mode: mode, IfMatch: ifMatch, Hasher: hasher})
+		res, err := c.Mux.ChannelRun(rt.ci, script, 60*time.Second)
 		if err != nil {
 			return err
 		}
 		if res.TimedOut {
-			return errors.New("oob channel edit timed out")
+			return errors.New("oob channel write timed out")
 		}
-		if res.Exit != 0 {
-			return fmt.Errorf("oob channel edit failed: %.300s", res.Output)
+		switch res.Exit {
+		case 0:
+			return nil
+		case sshmux.WriteExitStale:
+			return errStaleWrite
+		case sshmux.WriteExitSymlink:
+			return errSymlinkWrite
+		default:
+			return fmt.Errorf("oob channel write failed (exit %d): %.300s", res.Exit, res.Output)
 		}
-		return nil
 	default:
-		return oobPrimitiveError("file_edit", rt.host)
+		return oobPrimitiveError("write", rt.host)
 	}
+}
+
+// atomicWriteLocal mirrors AtomicWriteScript for a local-session target: refuse
+// symlinks, optional CAS, temp-in-dir + chmod + rename.
+func atomicWriteLocal(path string, data []byte, mode, ifMatch string) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return errSymlinkWrite
+	}
+	if ifMatch != "" {
+		cur, err := localVersion(path, ifMatch)
+		if err != nil {
+			return err
+		}
+		if cur != ifMatch {
+			return errStaleWrite
+		}
+	}
+	perm := os.FileMode(0o644)
+	if m, err := parseMode(mode); mode != "" && err == nil {
+		perm = m.Perm()
+	} else if fi, err := os.Stat(path); err == nil {
+		perm = fi.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".aishtmp.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// localVersion computes the current version token for path, in the same kind as
+// the supplied token (sha256 or mtime-size).
+func localVersion(path, tokenKind string) (string, error) {
+	switch {
+	case strings.HasPrefix(tokenKind, "sha256:"):
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return sha256Version(data), nil
+	case strings.HasPrefix(tokenKind, "mtime-size:"):
+		fi, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("mtime-size:%d:%d", fi.ModTime().Unix(), fi.Size()), nil
+	}
+	return "", errors.New("unsupported if_match token; use a version from file_read or file_stat")
 }
 
 func validateAbsolutePath(path string) error {
