@@ -113,6 +113,18 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Description: "Poll a background task started by exec: incremental output (pass next_cursor back), running state, exit code.",
 		Annotations: readOnlyTool("Poll background command"),
 	}, c.execStatus)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "probe_host",
+		Annotations: readOnlyTool("Probe session host tooling"),
+		Description: "Initialize the out-of-band toolset on the session's current host: open the OOB channel and run a " +
+			"capability probe, then return oob_tools (per-tool availability), remote_capabilities, and target_confidence. " +
+			"On a newly-SSH'd host the file/search tools start in state \"unknown\"; call this once to resolve them to " +
+			"available/unavailable so you can plan a workflow and, for any unavailable tool, offer to install its package " +
+			"(from the install hint) before acting. Unlike session_status this opens the channel, so it may prompt the user " +
+			"to authorize out-of-band access, and may cost a one-time MFA prompt on protected hosts. Not needed for local " +
+			"sessions. Tools also auto-probe on first use, so this is optional — it just moves the probe earlier for planning.",
+	}, c.probeHost)
 }
 
 // route decides where file/exec operations go.
@@ -304,6 +316,50 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 	default:
 		return "", nil
 	}
+}
+
+// ---- probe_host ----
+
+type probeHostArgs struct {
+	SessionArg
+}
+
+type probeHostResult struct {
+	Via              string               `json:"via"`  // local | controlmaster | in_band
+	Host             string               `json:"host"` // where OOB ops land
+	Probed           bool                 `json:"probed"`
+	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
+	OobTools         map[string]toolAvail `json:"oob_tools"`
+	TargetConfidence string               `json:"target_confidence"`
+	Note             string               `json:"note,omitempty"`
+}
+
+// probeHost is the explicit "reset button": it forces the capability probe on
+// the current OOB route so oob_tools resolves from unknown to real states,
+// letting the AI plan a workflow (and offer to install any missing package)
+// before acting. It routes through route() — probing opens the invisible
+// channel, so on an ungranted session it triggers the same OOB consent prompt,
+// and on an MFA-protected host it may prompt the human once. Unlike
+// session_status (a pure cache reader), this deliberately opens the channel.
+func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args probeHostArgs) (*mcp.CallToolResult, probeHostResult, error) {
+	rt := c.route()
+	res := probeHostResult{Via: rt.via, Host: rt.host}
+	switch rt.via {
+	case "controlmaster":
+		caps, err := c.Mux.EnsureProbed(rt.ci)
+		if err != nil {
+			return nil, probeHostResult{}, err
+		}
+		res.Probed = true
+		res.RemoteHost = &caps
+	case "local":
+		res.Note = "local session: out-of-band tools run in-process and are always available."
+	case "in_band":
+		res.Note = "no out-of-band channel to this host; file_read/file_write/exec fall back to the visible terminal and the other tools are unavailable."
+	}
+	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	res.OobTools = c.oobToolAvailability(rt)
+	return nil, res, nil
 }
 
 // downgrade turns an OOB-capable route into its visible in-band equivalent

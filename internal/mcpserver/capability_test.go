@@ -14,7 +14,7 @@ func TestCapabilityAvailabilityGNU(t *testing.T) {
 	}
 	av := capabilityAvailability(caps)
 	for _, tool := range oobToolNames {
-		if !av[tool].Available {
+		if !av[tool].Available() {
 			t.Errorf("GNU host: %s should be available, got %+v", tool, av[tool])
 		}
 	}
@@ -29,7 +29,7 @@ func TestCapabilityAvailabilityBusyBox(t *testing.T) {
 	}
 	av := capabilityAvailability(caps)
 	for _, tool := range oobToolNames {
-		if !av[tool].Available {
+		if !av[tool].Available() {
 			t.Errorf("BusyBox host: %s should still be available via fallback, got %+v", tool, av[tool])
 		}
 	}
@@ -40,11 +40,11 @@ func TestCapabilityAvailabilityMissingTools(t *testing.T) {
 	// unavailable — with an install hint — while exec stays available.
 	caps := sshmux.Capabilities{OS: "Linux", PkgMgr: "apt-get"}
 	av := capabilityAvailability(caps)
-	if av["exec"].Available != true {
+	if !av["exec"].Available() {
 		t.Fatal("exec should always be available")
 	}
 	for _, tool := range []string{"file_read", "file_write", "file_stat", "directory_list", "file_grep", "file_search"} {
-		if av[tool].Available {
+		if av[tool].Available() {
 			t.Errorf("%s should be unavailable, got %+v", tool, av[tool])
 		}
 		if av[tool].Install == "" {
@@ -58,10 +58,10 @@ func TestCapabilityAvailabilityMissingTools(t *testing.T) {
 
 func TestCapabilityAvailabilityUnsupported(t *testing.T) {
 	av := capabilityAvailability(sshmux.Capabilities{Unsupported: true})
-	if !av["exec"].Available {
+	if !av["exec"].Available() {
 		t.Error("exec should still be offered on unsupported hosts")
 	}
-	if av["file_read"].Available {
+	if av["file_read"].Available() {
 		t.Error("file_read should be unavailable on an unsupported host")
 	}
 }
@@ -81,5 +81,43 @@ func TestInstallHint(t *testing.T) {
 	}
 	if installHint("apt-get", "") != "" {
 		t.Error("empty package → empty hint")
+	}
+}
+
+func TestOobAvailabilityUnknownUntilProbed(t *testing.T) {
+	c := localOOBCore(t)
+
+	// A controlmaster route whose channel is not open/probed reports every tool
+	// as unknown (not optimistic-available) with a pointer to probe_host.
+	rt := route{via: "controlmaster", ci: &sshmux.ConnInfo{Sock: "/nonexistent.sock"}, host: "web"}
+	av := c.oobToolAvailability(rt)
+	for _, tool := range oobToolNames {
+		if av[tool].State != toolUnknown {
+			t.Errorf("unprobed host: %s state = %q, want unknown", tool, av[tool].State)
+		}
+		if av[tool].Available() {
+			t.Errorf("unprobed %s should not report Available()", tool)
+		}
+		if av[tool].Detail == "" {
+			t.Errorf("unprobed %s should carry a detail pointing at probe_host", tool)
+		}
+	}
+
+	// A local route knows its state without a channel: everything available.
+	for _, tool := range oobToolNames {
+		if a := c.oobToolAvailability(route{via: "local", host: "local"})[tool]; a.State != toolAvailable {
+			t.Errorf("local %s state = %q, want available", tool, a.State)
+		}
+	}
+
+	// in_band: the visible fallbacks are available, the rest unavailable.
+	ib := c.oobToolAvailability(route{via: "in_band", host: "web"})
+	for _, tool := range []string{"file_read", "file_write", "exec"} {
+		if ib[tool].State != toolAvailable {
+			t.Errorf("in_band %s state = %q, want available", tool, ib[tool].State)
+		}
+	}
+	if ib["file_grep"].State != toolUnavailable {
+		t.Errorf("in_band file_grep state = %q, want unavailable", ib["file_grep"].State)
 	}
 }

@@ -71,7 +71,9 @@ func registerTools(s *mcp.Server, c *Core) {
 		Description: "Get the status of the shared terminal session: current host and out-of-band route (local/controlmaster/in_band), " +
 			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
 			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
-			"on this machine. Every tool accepts a session argument to run against one of those other sessions instead.",
+			"on this machine. Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
+			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Every tool accepts a session " +
+			"argument to run against one of those other sessions instead.",
 	}, c.sessionStatus)
 
 	mcp.AddTool(s, &mcp.Tool{

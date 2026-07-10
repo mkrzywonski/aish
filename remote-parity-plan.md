@@ -308,3 +308,48 @@ are marked from the probe handshake, not guessed.
 ## 6e. Docs
 README "Remote prerequisites" + platform support matrix; CLAUDE.md probe/
 availability model.
+
+---
+
+# Phase 7 — unknown-until-probed + an explicit reset
+
+Phase 6 gave every OOB tool an accurate green/red light *once the host is
+probed*, but a never-probed ControlMaster host reported every tool as
+optimistically available. The AI couldn't tell "known good" from "not yet
+checked," and the probe only ever ran as a hidden side-effect of the first
+real op. This phase makes the model honest and gives the AI a control it can
+reason about — the box's master switch is the `--oob` grant; the automatic
+power-on self-test (probe) becomes a button the AI can also press deliberately.
+
+## 7a. Unknown is a first-class state
+- `toolAvail` carries a `state` of `available | unavailable | unknown` (was a
+  bare `available` bool). `unknown` means "this host hasn't been probed, so its
+  capabilities aren't known yet," with a `detail` pointing at `probe_host`.
+- A ControlMaster host with no cached probe reports every OOB tool `unknown`
+  instead of optimistic-green. Local (in-process) and in_band (visible-fallback)
+  states are known without a channel and are reported as before.
+- `unknown` is honest, not a tollgate: tools are NOT blocked while unknown. The
+  first real call still auto-probes via `requireTool`→`EnsureProbed` and gates
+  correctly, so an eager AI never runs a doomed command and a planning AI gets
+  the accurate panel up front. Only a *capability* determination (probe-time)
+  turns a tool red; a per-op runtime failure never latches it.
+
+## 7b. probe_host — the explicit reset button
+- New `probe_host` tool: opens/forces the OOB channel to the current host and
+  runs the capability probe, returning `oob_tools` (now resolved), the raw
+  `remote_capabilities`, `via`, `host`, and `target_confidence`.
+- It routes through `route()` (the prompting gate), so on an ungranted session
+  it triggers the same y/n/a OOB consent — probing *is* opening the invisible
+  channel. It is documented as possibly prompting the human for MFA once.
+- It adds no cost the first op wouldn't already pay; it just moves that one
+  unavoidable channel-open earlier and makes it intentional, so the AI can plan
+  a workflow against real availability (and offer to install a missing package
+  at plan time, from each red tool's `install` hint) before committing.
+- `session_status` stays a pure cache-reader (never opens a channel / never
+  probes — MFA-safe); it now shows `unknown` for an unprobed host and its
+  description points the AI at `probe_host`.
+
+## 7c. Docs
+MCP instructions tell the AI: on a new SSH host, OOB tools start `unknown` —
+call `probe_host` once to initialize them, then plan against `oob_tools`.
+README + CLAUDE.md note the unknown state and the reset button.

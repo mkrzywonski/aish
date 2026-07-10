@@ -56,9 +56,11 @@ const serverInstructions = "Aish gives you access to human-owned shared terminal
 	"inside each session, including a remote host reached by SSH. Your native shell and filesystem tools " +
 	"remain local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
 	"SSH'd into there, use aish tools instead. Start with list_sessions, choose the intended session, then " +
-	"call session_status; recheck status after SSH transitions. Every session tool accepts `session` (id or " +
-	"name). Use run_command for commands the human should see. Use exec, file_*, and directory_list for " +
-	"native-like work on the session's current host when OOB is authorized. Never send passwords or other " +
+	"call session_status; recheck status after SSH transitions. On a newly-SSH'd host the OOB file/search " +
+	"tools start `unknown`; call probe_host once to initialize them, then plan against oob_tools. Every " +
+	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +
+	"exec, file_*, and directory_list for native-like work on the session's current host when OOB is " +
+	"authorized. Never send passwords or other " +
 	"secrets; if echo_off is true, wait for the human. Name the target session and host in chat before the " +
 	"first substantial or destructive operation. The user approves each session on its own terminal."
 

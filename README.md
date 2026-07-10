@@ -154,7 +154,8 @@ Debug/poke without an AI:
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
-| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus interactive/OOB host, target confidence, and probed remote capabilities |
+| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus interactive/OOB host, target confidence, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
+| `probe_host` | Initialize the OOB toolset on the current host: open the channel, run the capability probe, resolve `oob_tools` from `unknown` to available/unavailable; may prompt for OOB consent / MFA. Optional (tools auto-probe on first use) |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
 | `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only. Atomic, with automatic staleness protection |
@@ -189,6 +190,14 @@ clear error (with an install suggestion) instead of failing silently. A target
 that isn't a POSIX shell at all (Windows, a network device, a restricted shell)
 is detected in seconds and the tools refuse with guidance — use `run_command`
 to drive it visibly instead.
+
+On a host it hasn't probed yet, `oob_tools` reads `unknown` for each tool —
+`session_status` never opens a channel (so a status check can't trigger an MFA
+prompt), so it can't yet know what the host supports. The `probe_host` tool is
+the explicit "initialize" step: it opens the channel, runs the probe, and
+returns the resolved availability so the AI can plan (and offer to install a
+missing package) before acting. Tools also auto-probe on first use, so this is
+optional — it just moves the one unavoidable channel-open earlier.
 
 Commands used (POSIX/coreutils):
 

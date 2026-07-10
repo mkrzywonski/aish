@@ -7,15 +7,28 @@ import (
 	"ai-ssh/internal/sshmux"
 )
 
+// tool availability states reported in oob_tools.
+const (
+	toolAvailable   = "available"   // prerequisites present on this host
+	toolUnavailable = "unavailable" // a prerequisite command is missing/broken
+	toolUnknown     = "unknown"     // host not probed yet — capabilities not known
+)
+
 // toolAvail is the availability of one OOB primitive on the current host,
 // derived from the capability probe. It is reported in session_status
 // (oob_tools) and enforced at call time so the AI never attempts — or hangs on
-// — an operation whose prerequisite command is missing.
+// — an operation whose prerequisite command is missing. State is capability
+// (probe-time), never per-operation outcome: a failed write never flips a tool
+// to unavailable, and unknown means "not probed yet," not "blocked."
 type toolAvail struct {
-	Available bool   `json:"available"`
-	Missing   string `json:"missing,omitempty"` // the capability that's absent
-	Install   string `json:"install,omitempty"` // suggested install command (needs user approval)
+	State   string `json:"state"`             // available | unavailable | unknown
+	Missing string `json:"missing,omitempty"` // the capability that's absent (unavailable)
+	Install string `json:"install,omitempty"` // suggested install command (needs user approval)
+	Detail  string `json:"detail,omitempty"`  // guidance, e.g. how to resolve unknown
 }
+
+// Available reports whether the tool can run now (state is available).
+func (t toolAvail) Available() bool { return t.State == toolAvailable }
 
 // oobToolNames are the primitives whose availability depends on remote tooling.
 var oobToolNames = []string{
@@ -30,7 +43,7 @@ func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 	case "local":
 		m := map[string]toolAvail{}
 		for _, n := range oobToolNames {
-			m[n] = toolAvail{Available: true} // Go does the work locally
+			m[n] = toolAvail{State: toolAvailable} // Go does the work locally
 		}
 		return m
 	case "in_band":
@@ -38,20 +51,22 @@ func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 		for _, n := range oobToolNames {
 			switch n {
 			case "file_read", "file_write", "exec":
-				m[n] = toolAvail{Available: true} // visible fallbacks exist
+				m[n] = toolAvail{State: toolAvailable} // visible fallbacks exist
 			default:
-				m[n] = toolAvail{Available: false, Missing: "an out-of-band route (no multiplexed channel to this host)"}
+				m[n] = toolAvail{State: toolUnavailable, Missing: "an out-of-band route (no multiplexed channel to this host)"}
 			}
 		}
 		return m
 	}
 	caps, ok := c.Mux.CachedCapabilities(rt.ci)
 	if !ok {
-		// Not probed yet: report available; the op will probe and, if the host
-		// turns out to be unsupported, fail fast with a clear error.
+		// Not probed yet: report unknown rather than guess. This is honest, not
+		// a tollgate — the first real op still auto-probes (requireTool →
+		// EnsureProbed) and gates correctly. The AI can call probe_host to
+		// resolve these deliberately before planning a workflow.
 		m := map[string]toolAvail{}
 		for _, n := range oobToolNames {
-			m[n] = toolAvail{Available: true}
+			m[n] = toolAvail{State: toolUnknown, Detail: "host not probed yet; call probe_host to initialize the out-of-band toolset"}
 		}
 		return m
 	}
@@ -63,19 +78,19 @@ func capabilityAvailability(caps sshmux.Capabilities) map[string]toolAvail {
 	if caps.Unsupported {
 		for _, n := range oobToolNames {
 			if n == "exec" {
-				m[n] = toolAvail{Available: true}
+				m[n] = toolAvail{State: toolAvailable}
 			} else {
-				m[n] = toolAvail{Available: false, Missing: "a POSIX shell (host not supported)"}
+				m[n] = toolAvail{State: toolUnavailable, Missing: "a POSIX shell (host not supported)"}
 			}
 		}
 		return m
 	}
 	set := func(name string, ok bool, missing, pkg string) {
 		if ok {
-			m[name] = toolAvail{Available: true}
+			m[name] = toolAvail{State: toolAvailable}
 			return
 		}
-		m[name] = toolAvail{Available: false, Missing: missing, Install: installHint(caps.PkgMgr, pkg)}
+		m[name] = toolAvail{State: toolUnavailable, Missing: missing, Install: installHint(caps.PkgMgr, pkg)}
 	}
 	encode := caps.HasBase64
 	decode := caps.Base64Decode() != ""
@@ -134,8 +149,13 @@ func (c *Core) requireTool(rt route, tool string) error {
 		}
 	}
 	av := c.oobToolAvailability(rt)[tool]
-	if av.Available {
+	if av.Available() {
 		return nil
+	}
+	if av.State == toolUnknown {
+		// Only reachable if EnsureProbed didn't populate the cache; surface it
+		// rather than proceed blind.
+		return fmt.Errorf("%s: %s on %s could not be initialized (call probe_host)", tool, tool, rt.host)
 	}
 	msg := fmt.Sprintf("%s is unavailable on %s: it needs %s", tool, rt.host, av.Missing)
 	if av.Install != "" {
