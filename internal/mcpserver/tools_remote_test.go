@@ -116,3 +116,30 @@ func TestRemotePrimitiveHelpers(t *testing.T) {
 		t.Fatalf("normalizePermissions = %q", got)
 	}
 }
+
+func TestDivergencePolicy(t *testing.T) {
+	cases := []struct {
+		confidence string
+		kind       opKind
+		confirmed  bool
+		want       divergenceAction
+	}{
+		// same host: always allow
+		{"same", opRead, false, divAllow},
+		{"same", opMutate, false, divAllow},
+		// detected mismatch: fail closed for writes, warn for reads
+		{"mismatch", opMutate, false, divFail},
+		{"mismatch", opMutate, true, divFail}, // a prior confirm never bypasses a detected mismatch
+		{"mismatch", opRead, false, divWarn},
+		// uncertain: reads proceed silently, writes confirm once
+		{"unknown", opRead, false, divAllow},
+		{"unknown", opMutate, false, divConfirm},
+		{"unknown", opMutate, true, divAllow}, // already confirmed this session
+	}
+	for _, tc := range cases {
+		if got := divergencePolicy(tc.confidence, tc.kind, tc.confirmed); got != tc.want {
+			t.Errorf("divergencePolicy(%q, kind=%d, confirmed=%v) = %d, want %d",
+				tc.confidence, tc.kind, tc.confirmed, got, tc.want)
+		}
+	}
+}

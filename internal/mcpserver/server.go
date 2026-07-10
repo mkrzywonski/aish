@@ -68,6 +68,14 @@ type Core struct {
 	crossAuthMu sync.Mutex
 	crossAuth   *clientauth.Identity
 
+	// confirmedTargets records OOB hosts the user has confirmed writing to under
+	// UNCERTAIN targeting (target_confidence "unknown"). Scoped to this session
+	// and keyed by the ssh target host, so the "cannot verify the host" prompt
+	// fires at most once per host per session — not a global trust-forever
+	// switch. Cleared by Revoke.
+	confirmMu        sync.Mutex
+	confirmedTargets map[string]bool
+
 	// OnClients, when set, is called with the number of connected MCP
 	// clients whenever it changes (drives the title-bar activity marker).
 	OnClients func(n int)
@@ -76,6 +84,31 @@ type Core struct {
 	// name (drives the title-bar label; the prompt badge re-reads the name
 	// file on its own).
 	OnRenamed func(name string)
+}
+
+// targetConfirmed reports whether the user has already confirmed OOB writes to
+// host under UNCERTAIN targeting this session.
+func (c *Core) targetConfirmed(host string) bool {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+	return c.confirmedTargets[host]
+}
+
+// confirmTarget records that the user confirmed OOB writes to host.
+func (c *Core) confirmTarget(host string) {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+	if c.confirmedTargets == nil {
+		c.confirmedTargets = map[string]bool{}
+	}
+	c.confirmedTargets[host] = true
+}
+
+// clearConfirmedTargets forgets every UNCERTAIN-write confirmation (Revoke).
+func (c *Core) clearConfirmedTargets() {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+	c.confirmedTargets = map[string]bool{}
 }
 
 // oobGranted reports whether out-of-band (invisible) operations are
@@ -126,6 +159,9 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	}
 	if core.challenges == nil {
 		core.challenges = map[string]authChallenge{}
+	}
+	if core.confirmedTargets == nil {
+		core.confirmedTargets = map[string]bool{}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)

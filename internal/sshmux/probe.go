@@ -89,6 +89,23 @@ func (m *Mux) probeChannel(ch *channel) {
 	ch.caps.Store(&c)
 }
 
+// EnsureProbed makes sure ci's channel is open and its capability probe has
+// run, returning the cached capabilities. Opening the channel is the same
+// action (and same possible MFA push) the caller's own OOB op is about to
+// trigger, so this adds no extra authorization cost — it just moves the probe
+// ahead of a divergence check so even the first write can be verified against
+// the real remote host. A ":" no-op forces the open+probe without side effects.
+func (m *Mux) EnsureProbed(ci *ConnInfo) (Capabilities, error) {
+	if c, ok := m.CachedCapabilities(ci); ok {
+		return c, nil
+	}
+	if _, err := m.ChannelRun(ci, ":", minOpenTimeout); err != nil {
+		return Capabilities{}, err
+	}
+	c, _ := m.CachedCapabilities(ci)
+	return c, nil
+}
+
 // CachedCapabilities returns the probed capabilities for ci's channel when the
 // channel is already open and probed. It never opens a channel or runs a
 // command, so session_status can call it without risking an MFA push. ok is

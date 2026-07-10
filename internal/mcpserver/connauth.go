@@ -65,6 +65,7 @@ func (c *Core) Revoke() int {
 	c.authMu.Lock()
 	c.grants = map[string]clientGrant{}
 	c.challenges = map[string]authChallenge{}
+	c.clearConfirmedTargets()
 	sessions := make([]*mcp.ServerSession, 0, len(c.conns))
 	for ss := range c.conns {
 		sessions = append(sessions, ss)

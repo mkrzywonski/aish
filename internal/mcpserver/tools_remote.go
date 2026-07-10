@@ -204,6 +204,96 @@ func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, confidence st
 	}
 }
 
+// opKind distinguishes read-only from mutating operations for the host
+// divergence policy: mutations fail closed on a detected mismatch, reads only
+// warn.
+type opKind int
+
+const (
+	opRead opKind = iota
+	opMutate
+)
+
+// divergenceAction is the decision of the (pure, testable) divergence policy.
+type divergenceAction int
+
+const (
+	divAllow   divergenceAction = iota // proceed, no notice
+	divWarn                            // proceed, attach a warning (read-only mismatch)
+	divConfirm                         // mutating op, uncertain target: ask the user once
+	divFail                            // mutating op, detected mismatch: refuse
+)
+
+// divergencePolicy is the three-way host-targeting rule agreed with Codex,
+// isolated as a pure function so it can be tested without a live channel:
+//
+//	same     → allow
+//	mismatch → fail closed for a mutation, warn for a read
+//	unknown  → a mutation needs a one-time confirm (unless already confirmed);
+//	           reads proceed silently
+func divergencePolicy(confidence string, kind opKind, alreadyConfirmed bool) divergenceAction {
+	switch confidence {
+	case "mismatch":
+		if kind == opMutate {
+			return divFail
+		}
+		return divWarn
+	case "unknown":
+		if kind == opMutate && !alreadyConfirmed {
+			return divConfirm
+		}
+		return divAllow
+	default: // "same"
+		return divAllow
+	}
+}
+
+// guardTarget applies the host-divergence policy to an OOB route before an
+// operation runs. Divergence is only possible over the ControlMaster channel (a
+// local session is one host; in_band ops go to the visible tty itself), so
+// every other route is allowed unchanged. For a mutation it first ensures the
+// channel is probed — the same open the write would trigger — so even the first
+// write is checked against the real remote host. It returns a warning to attach
+// to a read result, or an error that fails the operation closed.
+func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
+	if rt.via != "controlmaster" {
+		return "", nil
+	}
+	if kind == opMutate {
+		// Probe now (opening the channel if needed) so the confidence check sees
+		// the real remote hostname rather than "unknown-because-unprobed".
+		if _, perr := c.Mux.EnsureProbed(rt.ci); perr != nil {
+			return "", perr
+		}
+	}
+	interactiveHost, oobHost, confidence := c.hostConfidence(rt)
+	token := rt.host
+	if rt.ci != nil && rt.ci.Host != "" {
+		token = rt.ci.Host
+	}
+	switch divergencePolicy(confidence, kind, c.targetConfirmed(token)) {
+	case divFail:
+		return "", fmt.Errorf(
+			"refusing out-of-band write: the interactive shell appears to be on %q but the OOB channel targets %q; reconnect ssh through aish so they match, or use run_command to act visibly on the shell's host",
+			interactiveHost, oobHost)
+	case divWarn:
+		return fmt.Sprintf(
+			"host mismatch: this result came from %q (out-of-band target) but the interactive shell appears to be on %q",
+			oobHost, interactiveHost), nil
+	case divConfirm:
+		ans, ok := c.Sess.Prompt(
+			fmt.Sprintf("Cannot verify the interactive shell is still on %s. Proceed with OOB write to %s?", oobHost, oobHost),
+			"yn", 120*time.Second)
+		if ok && ans == 'y' {
+			c.confirmTarget(token)
+			return "", nil
+		}
+		return "", fmt.Errorf("out-of-band write to %s not confirmed (its host could not be verified); reconnect ssh through aish, or use run_command", oobHost)
+	default:
+		return "", nil
+	}
+}
+
 // downgrade turns an OOB-capable route into its visible in-band equivalent
 // (used when the user declines out-of-band access).
 func (c *Core) downgrade(cap route) route {
@@ -235,6 +325,7 @@ type fileReadResult struct {
 	Eof      bool   `json:"eof"`
 	Via      string `json:"via"`
 	Host     string `json:"host"`
+	Warning  string `json:"warning,omitempty"`
 }
 
 func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args fileReadArgs) (*mcp.CallToolResult, fileReadResult, error) {
@@ -243,6 +334,7 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 		max = maxFileRead
 	}
 	rt := c.route()
+	warning, _ := c.guardTarget(rt, opRead)
 	var data []byte
 	var eof bool
 
@@ -308,7 +400,7 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 	if via == "controlmaster" {
 		via = "channel" // shared persistent channel, not a fresh one per op
 	}
-	res := fileReadResult{Eof: eof, Via: via, Host: rt.host}
+	res := fileReadResult{Eof: eof, Via: via, Host: rt.host, Warning: warning}
 	if utf8.Valid(data) {
 		res.Content, res.Encoding = string(data), "utf8"
 	} else {
@@ -343,6 +435,9 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		}
 	}
 	rt := c.route()
+	if _, err := c.guardTarget(rt, opMutate); err != nil {
+		return nil, fileWriteResult{}, err
+	}
 
 	switch rt.via {
 	case "local":
@@ -437,6 +532,9 @@ func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args file
 	if rt.via == "in_band" {
 		return nil, fileEditResult{}, oobPrimitiveError("file_edit", rt.host)
 	}
+	if _, err := c.guardTarget(rt, opMutate); err != nil {
+		return nil, fileEditResult{}, err
+	}
 
 	data, err := c.readOOBFile(rt, args.Path, maxFileEdit)
 	if err != nil {
@@ -489,6 +587,7 @@ type fileStatResult struct {
 	ModifiedUnix int64  `json:"modified_unix"`
 	Via          string `json:"via"`
 	Host         string `json:"host"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args fileStatArgs) (*mcp.CallToolResult, fileStatResult, error) {
@@ -499,8 +598,9 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 	if rt.via == "in_band" {
 		return nil, fileStatResult{}, oobPrimitiveError("file_stat", rt.host)
 	}
+	warning, _ := c.guardTarget(rt, opRead)
 
-	res := fileStatResult{Path: args.Path, Via: resultVia(rt), Host: rt.host}
+	res := fileStatResult{Path: args.Path, Via: resultVia(rt), Host: rt.host, Warning: warning}
 	if rt.via == "local" {
 		info, err := os.Lstat(args.Path)
 		if err != nil {
@@ -555,6 +655,7 @@ type directoryListResult struct {
 	Truncated bool             `json:"truncated"`
 	Via       string           `json:"via"`
 	Host      string           `json:"host"`
+	Warning   string           `json:"warning,omitempty"`
 }
 
 func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args directoryListArgs) (*mcp.CallToolResult, directoryListResult, error) {
@@ -572,8 +673,9 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 	if rt.via == "in_band" {
 		return nil, directoryListResult{}, oobPrimitiveError("directory_list", rt.host)
 	}
+	warning, _ := c.guardTarget(rt, opRead)
 
-	res := directoryListResult{Via: resultVia(rt), Host: rt.host}
+	res := directoryListResult{Via: resultVia(rt), Host: rt.host, Warning: warning}
 	if rt.via == "local" {
 		entries, err := os.ReadDir(args.Path)
 		if err != nil {
@@ -638,14 +740,18 @@ type transferArgs struct {
 }
 
 type transferResult struct {
-	Bytes int64  `json:"bytes"`
-	Host  string `json:"host"`
+	Bytes   int64  `json:"bytes"`
+	Host    string `json:"host"`
+	Warning string `json:"warning,omitempty"`
 }
 
 func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
 	rt := c.route()
 	if rt.via != "controlmaster" {
 		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_write instead")
+	}
+	if _, err := c.guardTarget(rt, opMutate); err != nil {
+		return nil, transferResult{}, err
 	}
 	data, err := os.ReadFile(expandLocal(args.LocalPath))
 	if err != nil {
@@ -666,6 +772,7 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 	if rt.via != "controlmaster" {
 		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_read instead")
 	}
+	warning, _ := c.guardTarget(rt, opRead)
 	out, err := c.channelOutput(rt.ci, "base64 < "+sshmux.Quote(args.RemotePath), 120*time.Second)
 	if err != nil {
 		return nil, transferResult{}, err
@@ -677,7 +784,7 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 	if err := os.WriteFile(expandLocal(args.LocalPath), dec, 0o644); err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(len(dec)), Host: rt.host}, nil
+	return nil, transferResult{Bytes: int64(len(dec)), Host: rt.host, Warning: warning}, nil
 }
 
 // ---- exec / exec_status ----
@@ -706,6 +813,9 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 		}
 	}
 	rt := c.route()
+	if _, err := c.guardTarget(rt, opMutate); err != nil {
+		return nil, execResult{}, err
+	}
 
 	if rt.via == "in_band" {
 		if args.Background {
