@@ -41,7 +41,9 @@ func New() (*Identity, error) {
 
 // Authorize authorizes cs for targetSession. It proves possession of a
 // cached grant when possible and otherwise requests interactive approval.
-func (i *Identity) Authorize(ctx context.Context, cs *mcp.ClientSession, targetSession string) error {
+// description is a short, human-readable self-declaration of this client shown
+// in the target's approval prompt (paired there with the kernel-verified peer).
+func (i *Identity) Authorize(ctx context.Context, cs *mcp.ClientSession, targetSession, description string) error {
 	// i.mu guards only the i.grants map. The RPC round-trips run WITHOUT it:
 	// request_access can block on the server's approval prompt for up to ~120s,
 	// and a single Identity is shared across targets (the proxy pool, cross-
@@ -66,7 +68,10 @@ func (i *Identity) Authorize(ctx context.Context, cs *mcp.ClientSession, targetS
 	}
 
 	var result authproto.RequestAccessResult
-	if err := call(ctx, cs, authproto.RequestAccessTool, authproto.RequestAccessArgs{PublicKey: i.public}, &result); err != nil {
+	if err := call(ctx, cs, authproto.RequestAccessTool, authproto.RequestAccessArgs{
+		PublicKey:         i.public,
+		ClientDescription: description,
+	}, &result); err != nil {
 		return fmt.Errorf("requesting session access: %w", err)
 	}
 	if result.GrantID == "" {

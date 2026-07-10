@@ -76,10 +76,21 @@ func (c *Core) callInSession(ctx context.Context, target, tool string, args map[
 	if err != nil {
 		return nil, fmt.Errorf("session %s: generating client identity: %v", info.Label(), err)
 	}
-	if err := identity.Authorize(ctx, cs, info.ID); err != nil {
+	if err := identity.Authorize(ctx, cs, info.ID, c.crossSessionDescription()); err != nil {
 		return nil, fmt.Errorf("session %s: authorize: %v", info.Label(), err)
 	}
 	return cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+}
+
+// crossSessionDescription names the originating session for the target's
+// approval prompt, so a forwarded call reads as "aish session <name> (cross-
+// session forwarding)" rather than an anonymous client.
+func (c *Core) crossSessionDescription() string {
+	label := paths.ReadName(c.Sess.ID)
+	if label == "" {
+		label = c.Sess.ID
+	}
+	return "aish session " + label + " (cross-session forwarding)"
 }
 
 func (c *Core) crossIdentity() (*clientauth.Identity, error) {

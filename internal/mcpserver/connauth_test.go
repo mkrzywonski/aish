@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -130,7 +131,7 @@ func TestApprovalGrantsAndReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.Authorize(context.Background(), cs, ts.core.Sess.ID); err != nil {
+	if err := identity.Authorize(context.Background(), cs, ts.core.Sess.ID, "test client"); err != nil {
 		t.Fatal(err)
 	}
 	if res := callTool(t, cs, "set_session_name", map[string]any{"name": "approved"}); res.IsError {
@@ -142,7 +143,7 @@ func TestApprovalGrantsAndReconnect(t *testing.T) {
 	cs.Close()
 
 	cs2 := connectTestClient(t, ts.socket, "client-one")
-	if err := identity.Authorize(context.Background(), cs2, ts.core.Sess.ID); err != nil {
+	if err := identity.Authorize(context.Background(), cs2, ts.core.Sess.ID, "test client"); err != nil {
 		t.Fatal(err)
 	}
 	if got := prompts.Load(); got != 1 {
@@ -154,7 +155,7 @@ func TestApprovalGrantsAndReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs3 := connectTestClient(t, ts.socket, "client-two")
-	if err := identity2.Authorize(context.Background(), cs3, ts.core.Sess.ID); err != nil {
+	if err := identity2.Authorize(context.Background(), cs3, ts.core.Sess.ID, "test client"); err != nil {
 		t.Fatal(err)
 	}
 	if got := prompts.Load(); got != 2 {
@@ -168,6 +169,37 @@ func TestApprovalGrantsAndReconnect(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(paths.SessionDir(ts.core.Sess.ID), "token")); !os.IsNotExist(err) {
 		t.Fatalf("legacy token file exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func TestApprovalPromptShowsIdentityAndVerifiedPeer(t *testing.T) {
+	var captured atomic.Value // string
+	ts := startTestServer(t, false, func(q string, _ string, _ time.Duration) (byte, bool) {
+		captured.Store(q)
+		return 'y', true
+	})
+	cs := connectTestClient(t, ts.socket, "raw-client-info")
+
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := callTool(t, cs, authproto.RequestAccessTool, authproto.RequestAccessArgs{
+		PublicKey:         base64.RawURLEncoding.EncodeToString(public),
+		ClientDescription: "Gemini (Antigravity)",
+	})
+	if res.IsError {
+		t.Fatalf("request_access errored: %#v", res.Content)
+	}
+
+	q, _ := captured.Load().(string)
+	if !strings.Contains(q, "Gemini (Antigravity)") {
+		t.Errorf("prompt missing self-declared identity: %q", q)
+	}
+	// The test client connects over the same Unix socket, so SO_PEERCRED
+	// resolves to this test process — the prompt must carry a verified line.
+	if !strings.Contains(q, "verified:") || !strings.Contains(q, "pid ") {
+		t.Errorf("prompt missing verified peer: %q", q)
 	}
 }
 
@@ -231,10 +263,10 @@ func TestDeniedIsStickyAndNoAuthBypasses(t *testing.T) {
 	})
 	cs := connectTestClient(t, ts.socket, "denied-client")
 	identity, _ := clientauth.New()
-	if err := identity.Authorize(context.Background(), cs, ts.core.Sess.ID); err == nil {
+	if err := identity.Authorize(context.Background(), cs, ts.core.Sess.ID, "test client"); err == nil {
 		t.Fatal("denied client was authorized")
 	}
-	if err := identity.Authorize(context.Background(), cs, ts.core.Sess.ID); err == nil {
+	if err := identity.Authorize(context.Background(), cs, ts.core.Sess.ID, "test client"); err == nil {
 		t.Fatal("sticky denial was bypassed")
 	}
 	if got := prompts.Load(); got != 1 {
@@ -246,7 +278,7 @@ func TestDeniedIsStickyAndNoAuthBypasses(t *testing.T) {
 	})
 	timedOutClient := connectTestClient(t, timedOut.socket, "timed-out-client")
 	timedOutIdentity, _ := clientauth.New()
-	if err := timedOutIdentity.Authorize(context.Background(), timedOutClient, timedOut.core.Sess.ID); err == nil {
+	if err := timedOutIdentity.Authorize(context.Background(), timedOutClient, timedOut.core.Sess.ID, "test client"); err == nil {
 		t.Fatal("timed-out approval was authorized")
 	}
 

@@ -23,7 +23,8 @@ const (
 type connAuth struct {
 	mu      sync.Mutex
 	denied  bool
-	grantID string // non-empty once the connection is authorized
+	grantID string   // non-empty once the connection is authorized
+	peer    peerInfo // kernel-verified peer creds of this connection
 }
 
 type clientGrant struct {
@@ -52,6 +53,16 @@ func (c *Core) forgetConn(ss *mcp.ServerSession) {
 	c.authMu.Lock()
 	delete(c.conns, ss)
 	c.authMu.Unlock()
+}
+
+// setPeer records the kernel-verified peer credentials for a connection,
+// captured at accept time and shown (alongside the client's self-declared
+// identity) in the approval prompt.
+func (c *Core) setPeer(ss *mcp.ServerSession, p peerInfo) {
+	st := c.connState(ss)
+	st.mu.Lock()
+	st.peer = p
+	st.mu.Unlock()
 }
 
 // Revoke clears every client grant and challenge for this session and
@@ -129,13 +140,17 @@ func (c *Core) requestAccess(ctx context.Context, req *mcp.CallToolRequest, args
 	}
 
 	name := clientName(req.Session)
+	declared := args.ClientDescription
+	if declared == "" {
+		declared = name
+	}
 	switch {
 	case c.NoAuth:
 		// gate disabled entirely; nothing to prompt or record
 	case c.AutoApprove:
-		c.Sess.Notify("auto-approved %s (--auto-approve)", name)
+		c.Sess.Notify("auto-approved %s (--auto-approve)", approvalSubject(declared, st.peer))
 	default:
-		ans, ok := c.prompt(fmt.Sprintf("%s wants to control this session — allow?", name))
+		ans, ok := c.prompt(fmt.Sprintf("%s wants to control this session — allow?", approvalSubject(declared, st.peer)))
 		switch {
 		case ok && ans == 'y':
 		case ok && ans == 'n':
@@ -242,6 +257,20 @@ func clientName(ss *mcp.ServerSession) string {
 		return ip.ClientInfo.Name
 	}
 	return "an MCP client"
+}
+
+// approvalSubject renders who is asking for the approval prompt: the client's
+// self-declared identity, followed by the kernel-verified peer process in
+// brackets when available. The two are deliberately kept distinct — the first
+// is claimed (spoofable), the second is verified — so the user sees both, e.g.
+//
+//	"Gemini (Antigravity)" [verified: aish (pid 4521, uid 1000)]
+func approvalSubject(declared string, peer peerInfo) string {
+	subject := fmt.Sprintf("%q", declared)
+	if v := peer.String(); v != "" {
+		subject += " [verified: " + v + "]"
+	}
+	return subject
 }
 
 func decodePublicKey(encoded string) (ed25519.PublicKey, error) {

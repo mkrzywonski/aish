@@ -193,11 +193,17 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 			return err
 		}
 		go func() {
+			// Read the kernel-verified peer before wiring the transport (reading
+			// creds doesn't consume data). Stored against the session once Connect
+			// returns; the client's initialize round-trip completes before it can
+			// send request_access, so the creds are in place by then.
+			peer := peerCred(conn)
 			ss, err := server.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
 			if err != nil {
 				conn.Close()
 				return
 			}
+			core.setPeer(ss, peer)
 			notify(+1)
 			ss.Wait()
 			notify(-1)

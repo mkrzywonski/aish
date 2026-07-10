@@ -33,6 +33,7 @@ import (
 
 	"ai-ssh/internal/authproto"
 	"ai-ssh/internal/clientauth"
+	"ai-ssh/internal/procinfo"
 )
 
 type aggProxy struct {
@@ -254,7 +255,7 @@ func (p *aggProxy) conn(ctx context.Context, info SessionInfo) (*mcp.ClientSessi
 		raw.Close()
 		return nil, err
 	}
-	if err := p.identity.Authorize(ctx, cs, info.ID); err != nil {
+	if err := p.identity.Authorize(ctx, cs, info.ID, p.clientDescription()); err != nil {
 		cs.Close()
 		raw.Close()
 		return nil, err
@@ -296,6 +297,27 @@ func friendlyClientName(ss *mcp.ServerSession) string {
 		return "codex"
 	default:
 		return name
+	}
+}
+
+// clientDescription is the self-declared identity the proxy sends downstream to
+// a session's approval prompt. It combines the upstream TUI's self-reported
+// name (claude/codex/…) with the process that actually launched this proxy
+// (getppid → /proc), which the proxy observes directly rather than trusting a
+// wire value — so a session sees, e.g., "gemini (via aish proxy launched by
+// antigravity)" instead of a bare "aish-proxy".
+func (p *aggProxy) clientDescription() string {
+	name := friendlyClientName(p.frontSS)
+	parent := procinfo.Name(os.Getppid())
+	switch {
+	case name != "" && parent != "":
+		return name + " (via aish proxy launched by " + parent + ")"
+	case name != "":
+		return name + " (via aish proxy)"
+	case parent != "":
+		return "aish proxy (launched by " + parent + ")"
+	default:
+		return "aish proxy"
 	}
 }
 
