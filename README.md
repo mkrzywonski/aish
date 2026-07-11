@@ -115,11 +115,7 @@ reach the session's Unix socket.
 
 ## Running AISH
 
-```sh
-aish                       # start a shared session (wraps your $SHELL)
-aish --name deploy-web     # ... with a meaningful name
-aish --oob                 # ... authorizing invisible out-of-band ops
-```
+### Install the MCP Server in your AI TUI
 
 Register the MCP server with your AI TUI once (this wires up the integration —
 it does **not** install the binary, which you did above):
@@ -136,7 +132,16 @@ and point it at the session.
 
 Equivalent manual command: `claude mcp add aish --scope user -- aish mcp-proxy`.
 
-Every tool accepts a `session` argument (id or name). `session_status` lists
+### Launch a shared terminal for collaborating with the AI
+
+```sh
+aish                       # start a shared session (wraps your $SHELL)
+aish --name myproject      # ... with a meaningful name
+aish --oob                 # ... authorizing invisible out-of-band ops
+```
+
+You can run multiple sessions and share them with the AI. 
+Every MCP tool accepts a `session` argument (id or name). `session_status` lists
 other live sessions. The proxy attaches to one session by default, but that is
 only the default target, not a boundary. Use `AISH_SESSION=<id|name>` or
 `--session <id|name>` in the proxy args to pick a default explicitly.
