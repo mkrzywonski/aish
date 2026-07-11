@@ -27,7 +27,10 @@ func TestTrackingSnippetShape(t *testing.T) {
 	if !strings.Contains(snip, `deploy-web⧉`) {
 		t.Error("trackingSnippet should embed the label badge")
 	}
-	for _, want := range []string{`PS1='\[\033[35m\]deploy-web⧉\[\033[0m\] [\u@\h:\w]\$ '`, `PS1='%F{magenta}deploy-web⧉%f [%n@%m:%~]%# '`} {
+	for _, want := range []string{
+		`PS1='\[\033[35m\]deploy-web⧉\[\033[0m\] [\[\033[01;32m\]\u@\h\[\033[0m\]:\[\033[01;34m\]\w\[\033[0m\]]\$ '`,
+		`PS1='%F{magenta}deploy-web⧉%f [%B%F{green}%n@%m%f%b:%B%F{blue}%~%f%b]%# '`,
+	} {
 		if !strings.Contains(snip, want) {
 			t.Errorf("trackingSnippet missing PS1 form %q", want)
 		}

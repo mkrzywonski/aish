@@ -29,9 +29,9 @@ import (
 func trackingSnippet(label string) string {
 	return `__aish_osc7(){ printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$HOST}" "$PWD"; }; ` +
 		`[ -n "$BASH_VERSION" ] && eval 'case "$PROMPT_COMMAND" in *__aish_osc7*) ;; *) PROMPT_COMMAND="__aish_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}";; esac'; ` +
-		`[ -n "$BASH_VERSION" ] && PS1='\[\033[35m\]` + label + `⧉\[\033[0m\] [\u@\h:\w]\$ '; ` +
+		`[ -n "$BASH_VERSION" ] && PS1='\[\033[35m\]` + label + `⧉\[\033[0m\] [\[\033[01;32m\]\u@\h\[\033[0m\]:\[\033[01;34m\]\w\[\033[0m\]]\$ '; ` +
 		`[ -n "$ZSH_VERSION" ] && eval 'typeset -ag precmd_functions; case " ${precmd_functions[*]} " in *" __aish_osc7 "*) ;; *) precmd_functions+=(__aish_osc7);; esac'; ` +
-		`[ -n "$ZSH_VERSION" ] && PS1='%F{magenta}` + label + `⧉%f [%n@%m:%~]%# '`
+		`[ -n "$ZSH_VERSION" ] && PS1='%F{magenta}` + label + `⧉%f [%B%F{green}%n@%m%f%b:%B%F{blue}%~%f%b]%# '`
 }
 
 // RemoteTrackingApplicable reports the OOB host and whether offering to set up
