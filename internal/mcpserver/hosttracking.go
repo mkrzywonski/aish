@@ -1,5 +1,7 @@
 package mcpserver
 
+import "time"
+
 // Remote host tracking: on a remote whose shell has no OSC 7 integration, aish
 // can't verify the interactive tty is on the same host its OOB channel targets
 // (classifyConfidence returns "unknown"). This offers to install a tiny prompt
@@ -29,15 +31,28 @@ func (c *Core) RemoteTrackingApplicable() (host string, applicable bool) {
 	return oobHost, confidence != "same"
 }
 
+// provisionIdle is how long the shared terminal must have been quiet before we
+// type the tracking snippet. OSC 133 prompt marks (Tracker.PromptReady) are
+// useless here — this feature exists precisely for remotes with no shell
+// integration, where PromptReady is never true and, since ssh is the local
+// foreground process, mode reads "running" — so output quiescence is the only
+// available "at a prompt" proxy.
+const provisionIdle = 750 * time.Millisecond
+
 // ProvisionRemoteTracking injects osc7Snippet into the remote interactive shell
 // so aish can verify its host. This is the one place aish deliberately types
 // INTO the shared shell for the user's benefit — a VISIBLE, user-consented, in
-// band injection (never the invisible OOB channel). It only runs when the shell
-// is at a prompt and not in a full-screen app, so it can't corrupt a running
-// command, and it announces itself. Returns whether it injected.
+// band injection (never the invisible OOB channel). It refuses in a full-screen
+// app, during secret (echo-off) input, or while output is still flowing, so it
+// can't corrupt a running command or land in a password prompt; it announces
+// itself. Returns whether it injected.
 func (c *Core) ProvisionRemoteTracking() bool {
-	if !c.Tracker.PromptReady() || c.Term.Screen.Snapshot().AltScreen {
-		c.Sess.Notify("can't set up host tracking now — the shell is busy; try the aish menu when at a prompt")
+	idle := time.Duration(0)
+	if n := c.Sess.LastOutputNanos(); n > 0 {
+		idle = time.Since(time.Unix(0, n))
+	}
+	if c.Term.Screen.Snapshot().AltScreen || c.Tracker.EchoOff() || idle < provisionIdle {
+		c.Sess.Notify("can't set up host tracking now — the shell looks busy; try again from a quiet prompt")
 		return false
 	}
 	c.Sess.Notify("setting up host tracking on the remote shell (a visible one-time command); takes effect at the next prompt")
