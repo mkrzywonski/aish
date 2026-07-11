@@ -44,5 +44,6 @@ func (c *Core) StatusLine() string {
 	if drift {
 		s += "   ⚠ host drift"
 	}
+	s += "   Ctrl-] menu" // persistent reminder of the menu hotkey for new/forgetful users
 	return s
 }
