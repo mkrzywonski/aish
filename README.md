@@ -17,54 +17,40 @@ the remote host.
   session are multiplexed and remote file/exec operations can use the
   out-of-band channel.
 
-## Build
+## Install
 
-### Prerequisites
+aish is a single **Linux** binary (x86-64 or arm64). macOS isn't supported — it
+relies on Linux-only PTY/termios constants and `/proc`; on Windows, run it inside
+WSL2 (below).
 
-- **Go ≥ 1.25** — build-time only. Distro packages are often older than
-  this; when in doubt install from [go.dev/dl](https://go.dev/dl/).
-- **git** — to clone this repo.
-- **OpenSSH client** (`ssh`) — runtime, for the ControlMaster remote
-  features.
-- **bash or zsh** as your shell for OSC 133 integration (other shells work
-  with degraded output framing).
+**Runtime prerequisites** (needed to *run* it, not to install it):
 
-### Debian / Ubuntu
+- **OpenSSH client** (`ssh`) — for the ControlMaster remote features.
+- **bash or zsh** as your shell — for the OSC 133 prompt integration (other
+  shells work, with degraded output framing).
 
-```sh
-sudo apt install git openssh-client
+### Prebuilt binary — recommended (no Go toolchain needed)
 
-# Go from go.dev (apt's golang-go is usually too old):
-curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/go/bin   # add to ~/.profile to persist
-
-git clone https://github.com/mkrzywonski/aish.git
-cd aish
-go build -o aish ./cmd/aish
-```
-
-### Fedora / Arch
-
-Both ship a current Go:
+Download the latest release for your CPU and put it on your `PATH`:
 
 ```sh
-sudo dnf install golang git openssh-clients   # Fedora
-sudo pacman -S go git openssh                 # Arch
+# x86-64 (most machines):
+curl -fsSL https://github.com/mkrzywonski/aish/releases/latest/download/aish_linux_amd64.tar.gz | tar -xz aish
+# arm64 (Raspberry Pi 4/5, ARM servers): use .../aish_linux_arm64.tar.gz instead
 
-git clone https://github.com/mkrzywonski/aish.git
-cd aish
-go build -o aish ./cmd/aish
+sudo install -m 755 aish /usr/local/bin/aish && rm aish   # or: install -m 755 aish ~/.local/bin/aish (no sudo)
+aish version
 ```
+
+Then register it with your AI tool once — see [Use](#use).
 
 ### NixOS
 
 This repo is a flake exporting the package and an overlay:
 
 ```sh
-nix run github:mkrzywonski/aish          # try it without installing
-nix build github:mkrzywonski/aish       # or build ./result/bin/aish
-nix develop                              # dev shell with Go (in a clone)
+nix run github:mkrzywonski/aish               # try it without installing
+nix profile install github:mkrzywonski/aish   # install into your profile
 ```
 
 To install system-wide, consume it as a flake input in your NixOS config:
@@ -78,42 +64,64 @@ inputs.aish = {
 # and pkgs.aish to environment.systemPackages
 ```
 
-To update a pinned NixOS config, bump the flake input and rebuild:
+Update a pinned config by bumping the input and rebuilding:
 
 ```sh
 nix flake update aish --flake /path/to/your/nix-config
 sudo nixos-rebuild switch --flake /path/to/your/nix-config#<host>
-aish version   # prints the git revision it was built from
 ```
 
 ### Windows 11 — via WSL2
 
-aish requires a Unix PTY and OpenSSH ControlMaster multiplexing, neither of
-which exists natively on Windows, so run it inside WSL2:
+aish needs a Unix PTY and OpenSSH ControlMaster, so run it inside WSL2:
 
 ```powershell
 wsl --install -d Ubuntu   # once, then reboot / open Ubuntu
 ```
 
-Inside the Ubuntu shell, follow the Debian/Ubuntu steps above. Windows
-Terminal gives you tabs/titles, and `ssh` from WSL reaches the same hosts.
-Your MCP client (e.g. Claude Code) must also run inside WSL to reach the
+Inside the Ubuntu shell, follow **Prebuilt binary** above (the `linux_amd64`
+build). Your MCP client (e.g. Claude Code) must also run inside WSL to reach the
 session's Unix socket.
 
-### macOS
+### Build from source
 
-Not supported currently: the build fails on Linux-only termios constants, and
-process tracking uses `/proc`.
+Only needed to hack on aish, or to run on an architecture without a prebuilt
+binary. Requires **git** and **Go ≥ 1.25** (build-time only).
+
+<details>
+<summary>Don't have Go? Install it first</summary>
+
+Distro packages are often older than 1.25; the reliable route is the official
+tarball:
+
+```sh
+curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz   # arm64: swap in linux-arm64
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin   # add to ~/.profile to persist
+```
+
+Fedora `sudo dnf install golang`, Arch `sudo pacman -S go`, and current Debian
+release ship a new-enough Go too.
+</details>
+
+```sh
+git clone https://github.com/mkrzywonski/aish.git
+cd aish
+go install ./cmd/aish     # builds AND installs to ~/go/bin (put ~/go/bin on PATH)
+# or: go build -o aish ./cmd/aish   (leaves ./aish in the clone; not on PATH)
+aish version
+```
 
 ## Use
 
 ```sh
-./aish                       # start a shared session (wraps your $SHELL)
-./aish --name deploy-web     # ... with a meaningful name
-./aish --oob                 # ... authorizing invisible out-of-band ops
+aish                       # start a shared session (wraps your $SHELL)
+aish --name deploy-web     # ... with a meaningful name
+aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
-Register the MCP server with your AI TUI once:
+Register the MCP server with your AI TUI once (this wires up the integration —
+it does **not** install the binary, which you did above):
 
 ```sh
 aish install            # register with every AI TUI found (Claude Code, Codex)
@@ -133,16 +141,16 @@ only the default target, not a boundary. Use `AISH_SESSION=<id|name>` or
 `--session <id|name>` in the proxy args to pick a default explicitly.
 
 ```sh
-./aish sessions              # list live sessions: id, name
+aish sessions              # list live sessions: id, name
 ```
 
 Debug/poke without an AI:
 
 ```sh
-./aish client --list
-./aish client run_command '{"command":"uname -a"}'
-./aish client read_screen
-./aish client --session <id|name> session_status   # pick among several sessions
+aish client --list
+aish client run_command '{"command":"uname -a"}'
+aish client read_screen
+aish client --session <id|name> session_status   # pick among several sessions
 ```
 
 ## MCP tools

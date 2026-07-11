@@ -1,0 +1,47 @@
+# GoReleaser builds the prebuilt binaries attached to each GitHub release.
+# Cut a release by pushing a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+# The .github/workflows/release.yml workflow runs `goreleaser release` on the tag.
+version: 2
+
+project_name: aish
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: aish
+    main: ./cmd/aish
+    binary: aish
+    env:
+      - CGO_ENABLED=0 # pure Go, so the binaries cross-compile and are static
+    goos:
+      - linux # macOS/Windows unsupported (Linux-only PTY/termios + /proc)
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: aish
+    # Version-less names so releases/latest/download/aish_linux_amd64.tar.gz is a
+    # stable URL the README and install scripts can hard-code.
+    name_template: "aish_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  draft: false
+  prerelease: auto # vX.Y.Z-rc* → prerelease; plain vX.Y.Z → "latest"
+
+changelog:
+  use: github
+  sort: asc
