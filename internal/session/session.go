@@ -232,6 +232,20 @@ func (s *Session) Run() (int, error) {
 
 func nowNanos() int64 { return time.Now().UnixNano() }
 
+// WriteOut writes p directly to the user terminal under outMu, so it never
+// interleaves with shell output or a console prompt. It is the sanctioned path
+// for the status bar (a deliberate byte-transparency exception, like the console
+// and title marker) to paint the reserved row.
+func (s *Session) WriteOut(p []byte) {
+	out := s.Stdout
+	if out == nil {
+		out = os.Stdout
+	}
+	s.outMu.Lock()
+	out.Write(p)
+	s.outMu.Unlock()
+}
+
 func (s *Session) applySize() {
 	ws, err := pty.GetsizeFull(os.Stdin)
 	if err != nil || ws.Rows == 0 || ws.Cols == 0 {

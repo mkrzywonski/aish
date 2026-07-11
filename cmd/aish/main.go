@@ -216,29 +216,26 @@ func runMain(args []string) int {
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}
 
-	// Host-drift watcher: poll cheaply (HostDrift never runs `ssh -O check`) for
-	// the mismatch state — the shell is on a different host than out-of-band ops
-	// target — reflect it in the title ⚠, and Notify once per episode when the
-	// user is at a prompt (not mid full-screen app). The title marker is the
-	// durable signal; the notice is a one-time nudge.
+	// Status bar: a reserved bottom row showing the session badge, the tty host
+	// aish believes it's on (OSC 7 — stale is itself a signal), and the OOB
+	// target (user@host), so host/identity divergence is visible at a glance.
+	// Painted from aish's own state, so it works even when the remote is silent.
+	// A poll drives it and reflects host drift in the title ⚠ (no intrusive
+	// notice — the bar is the durable signal).
+	bar := session.NewStatusBar(sess, core.StatusLine, func() bool { return trm.Screen.Snapshot().AltScreen })
+	defer bar.Close() // reset the scroll region on a normal return
+	sess.OnResize(func(rows, cols uint16) { bar.SetSize(rows, cols) })
 	go func() {
-		tick := time.NewTicker(2 * time.Second)
+		tick := time.NewTicker(500 * time.Millisecond)
 		defer tick.Stop()
-		var notified bool
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				mismatch, ttyHost, oobHost := core.HostDrift()
+				mismatch, _, _ := core.HostDrift()
 				titles.SetDrift(mismatch)
-				switch {
-				case !mismatch:
-					notified = false
-				case !notified && !trm.Screen.Snapshot().AltScreen:
-					sess.Notify("⚠ host drift: the shell is on %s but out-of-band ops target %s — OOB writes fail closed; reconnect ssh through aish so they match, or use run_command to act on the shell's host", ttyHost, oobHost)
-					notified = true
-				}
+				bar.Tick()
 			}
 		}
 	}()
@@ -318,6 +315,7 @@ func runMain(args []string) int {
 	signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sig
+		bar.Close() // reset the scroll region before we exit without running defers
 		mux.CloseAll()
 		os.RemoveAll(dir)
 		os.Exit(1)
