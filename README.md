@@ -1,4 +1,4 @@
-# aish — AI-shareable terminal
+# aish — AI-shared terminal
 
 A terminal wrapper that lets you and an AI agent (Claude Code, Codex, or any
 MCP client) drive **one shared shell session**: both of you type into it,
@@ -10,12 +10,14 @@ the remote host.
 
 - The AI types into the same PTY you do, so it operates on whatever host the
   terminal is currently on.
-- `sudo` prompts stay in the shared terminal. You type the password there;
-  aish does not inject commands while secret input is active.
+- `sudo` prompts stay in the shared terminal. If the AI needs to run a privileged
+  command, you see the command and you type the password. No sharing secrets with
+  the AI. aish does not inject commands while secret input is active.
 - By default, file and exec operations are visible in the shared terminal.
-- If the session starts with `--oob`, SSH connections opened inside that
+- Out-of-band (hidden) operations can be enabled with the --oob command line argument
+  or vi the Ctrl-] menu. If oob is enabled, SSH connections opened inside that
   session are multiplexed and remote file/exec operations can use the
-  out-of-band channel.
+  out-of-band channel. This is convenient for code editing.
 
 ## Install
 
