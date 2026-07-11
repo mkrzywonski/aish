@@ -72,8 +72,10 @@ func registerTools(s *mcp.Server, c *Core) {
 			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
 			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
 			"on this machine. Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
-			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Every tool accepts a session " +
-			"argument to run against one of those other sessions instead.",
+			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Also reports oob_user: the " +
+			"identity out-of-band exec/file_* run as, which stays the SSH login user even after the human switches user in " +
+			"the shared shell (su/sudo -i) — check it before ownership/privilege-sensitive operations. Every tool accepts a " +
+			"session argument to run against one of those other sessions instead.",
 	}, c.sessionStatus)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -292,6 +294,12 @@ type sessionStatusResult struct {
 	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
 	OobTools         map[string]toolAvail `json:"oob_tools,omitempty"`
 	SSHUser          string               `json:"ssh_user,omitempty"`
+	// OOBUser is the identity out-of-band exec/file_* operations run as (the SSH
+	// login user, or the local user locally). Crucially it does NOT change when
+	// the human switches user in the shared terminal via su / sudo -i, so a write
+	// lands owned by this user and an op needing other privileges fails — flag the
+	// gap before ownership/privilege-sensitive operations.
+	OOBUser string `json:"oob_user,omitempty"`
 	Cwd              string               `json:"cwd,omitempty"`
 	PromptReady      bool                 `json:"prompt_ready"`
 	EchoOff          bool                 `json:"echo_off"`
@@ -337,6 +345,13 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	}
 	if caps, ok := c.Mux.CachedCapabilities(rt.ci); ok {
 		res.RemoteHost = &caps
+		res.OOBUser = caps.User // authoritative: `id -un` over the OOB channel
+	}
+	if res.OOBUser == "" {
+		res.OOBUser = sshUser // ssh login user, before the host is probed
+	}
+	if res.OOBUser == "" && rt.via == "local" {
+		res.OOBUser = os.Getenv("USER")
 	}
 	res.OobTools = c.oobToolAvailability(rt)
 	entries, err := os.ReadDir(paths.Base())

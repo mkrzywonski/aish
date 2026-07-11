@@ -61,7 +61,10 @@ const serverInstructions = "Aish gives you access to human-owned shared terminal
 	"tools start `unknown`; call probe_host once to initialize them, then plan against oob_tools. Every " +
 	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +
 	"exec, file_*, and directory_list for native-like work on the session's current host when OOB is " +
-	"authorized. Never send passwords or other " +
+	"authorized. Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +
+	"when the human switches user in the shared terminal via su or sudo -i; before writing files whose ownership " +
+	"matters or running anything needing different privileges, check oob_user, and if the human's shell has " +
+	"switched users say so and prefer run_command (it runs in the shared shell's current user). Never send passwords or other " +
 	"secrets; if echo_off is true, wait for the human. Name the target session and host in chat before the " +
 	"first substantial or destructive operation. The user approves each session on its own terminal."
 

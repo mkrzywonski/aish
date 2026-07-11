@@ -44,7 +44,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Description: "Write (or append to) a file on the host the shared session is currently on. " +
 			"Content is UTF-8, or base64 with encoding=base64. Out-of-band (invisible) when authorized; " +
 			"otherwise the write types base64 through the shared terminal (visible to the user) " +
-			"and is limited to 48KB.",
+			"and is limited to 48KB. The file is owned by session_status.oob_user (the SSH login user), not " +
+			"whatever user the human's shell is currently on — relevant after su/sudo -i.",
 	}, c.fileWrite)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -105,7 +106,9 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"otherwise the command runs in-band, visibly, through the shared terminal. Use background=true for " +
 			"long-running commands, then poll exec_status (background requires an OOB route). Set cwd to an absolute " +
 			"directory when the command must run somewhere other than the OOB shell's default directory. " +
-			"For commands the user should see, prefer run_command.",
+			"Out-of-band, the command runs as session_status.oob_user (the SSH login user) regardless of any su/sudo -i " +
+			"in the shared shell; for commands the user should see, or that need the shell's current identity/privileges, " +
+			"prefer run_command.",
 	}, c.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
