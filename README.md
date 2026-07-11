@@ -310,6 +310,28 @@ do this automatically.
   ssh — is rewritten to start with `⧉<label> `, gaining a `⚡` while an MCP
   client (an AI) is actually connected, reverting when it disconnects.
 
+### The prompt does double duty — and `ssh`/`su` drops it
+
+The badge is not just decoration; the same prompt hook serves two audiences:
+
+- **You** — at a glance it tells you that *this* terminal is a shared aish
+  session, which one (`<name>`), and which host/user it is on. With several
+  terminals open, that badge is how you know where you're about to point the AI.
+- **aish** — the hook also emits an OSC 7 report each prompt, which is how aish
+  tracks the interactive host, keeps the AI aimed at the intended target, and
+  can warn or fail closed when the host you're looking at and the host
+  out-of-band writes land on have drifted apart (see
+  [Wrong-host protection](#wrong-host-protection)).
+
+aish installs this in the session's *own* shell. But a shell you reach **later**
+— after `ssh host`, or after `su - user` on a remote — comes up with that
+host/user's plain default prompt: no badge, and no OSC 7, so aish drops to
+`unknown` host confidence and starts asking for a per-write confirmation. Restore
+both with **`Ctrl-]` → `p`** (offered whenever aish is on a remote it can't yet
+verify), which types the one-time badge + OSC 7 snippet into that shell. It is
+session-only and per-shell, so you have to remember to do it after each hop —
+aish never auto-injects into a shell it didn't start.
+
 ## The aish menu
 
 Press **`Ctrl-]`** at the shell to open the aish menu (the keypress is caught
