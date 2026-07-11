@@ -29,9 +29,37 @@ WSL2 (below).
 - **bash or zsh** as your shell — for the OSC 133 prompt integration (other
   shells work, with degraded output framing).
 
-### Prebuilt binary — recommended (no Go toolchain needed)
+### Build from source
 
-Download the latest release for your CPU and put it on your `PATH`:
+Requires **git** and **Go ≥ 1.25**.
+
+Distro Go packages are often older than 1.25; the reliable route is the official
+tarball:
+
+```sh
+curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz   # arm64: swap in linux-arm64
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin   # add to ~/.profile to persist
+```
+
+Fedora `sudo dnf install golang`, Arch `sudo pacman -S go`, and a current Debian
+release ship a new-enough Go too.
+
+Then build and install:
+
+```sh
+git clone https://github.com/mkrzywonski/aish.git
+cd aish
+go install ./cmd/aish     # builds AND installs to ~/go/bin (put ~/go/bin on PATH)
+# or: go build -o aish ./cmd/aish   (leaves ./aish in the clone; not on PATH)
+aish version
+```
+
+### Prebuilt binary
+
+If you'd rather not build it yourself, each release ships a static Linux binary.
+Running someone else's binary is a trust call — the source build above is there
+if you'd rather compile it (ideally after a look at the code).
 
 ```sh
 # x86-64 (most machines):
@@ -41,8 +69,6 @@ curl -fsSL https://github.com/mkrzywonski/aish/releases/latest/download/aish_lin
 sudo install -m 755 aish /usr/local/bin/aish && rm aish   # or: install -m 755 aish ~/.local/bin/aish (no sudo)
 aish version
 ```
-
-Then register it with your AI tool once — see [Use](#use).
 
 ### NixOS
 
@@ -79,38 +105,9 @@ aish needs a Unix PTY and OpenSSH ControlMaster, so run it inside WSL2:
 wsl --install -d Ubuntu   # once, then reboot / open Ubuntu
 ```
 
-Inside the Ubuntu shell, follow **Prebuilt binary** above (the `linux_amd64`
-build). Your MCP client (e.g. Claude Code) must also run inside WSL to reach the
-session's Unix socket.
-
-### Build from source
-
-Only needed to hack on aish, or to run on an architecture without a prebuilt
-binary. Requires **git** and **Go ≥ 1.25** (build-time only).
-
-<details>
-<summary>Don't have Go? Install it first</summary>
-
-Distro packages are often older than 1.25; the reliable route is the official
-tarball:
-
-```sh
-curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz   # arm64: swap in linux-arm64
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/go/bin   # add to ~/.profile to persist
-```
-
-Fedora `sudo dnf install golang`, Arch `sudo pacman -S go`, and current Debian
-release ship a new-enough Go too.
-</details>
-
-```sh
-git clone https://github.com/mkrzywonski/aish.git
-cd aish
-go install ./cmd/aish     # builds AND installs to ~/go/bin (put ~/go/bin on PATH)
-# or: go build -o aish ./cmd/aish   (leaves ./aish in the clone; not on PATH)
-aish version
-```
+Inside the Ubuntu shell, build from source or grab the prebuilt `linux_amd64`
+binary as above. Your MCP client (e.g. Claude Code) must also run inside WSL to
+reach the session's Unix socket.
 
 ## Use
 
