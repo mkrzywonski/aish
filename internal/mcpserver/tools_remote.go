@@ -905,7 +905,7 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 // tabs or newlines unambiguous.
 func (c *Core) dirListGNU(ci *sshmux.ConnInfo, path string, max int) ([]directoryEntry, error) {
 	fieldLimit := (max + 1) * 4
-	cmd := fmt.Sprintf("test -d %s && find %s -mindepth 1 -maxdepth 1 -printf '%%f\\0%%y\\0%%s\\0%%T@\\0' | head -z -n %d",
+	cmd := fmt.Sprintf("test -d %s && find -H %s -mindepth 1 -maxdepth 1 -printf '%%f\\0%%y\\0%%s\\0%%T@\\0' | head -z -n %d",
 		sshmux.Quote(path), sshmux.Quote(path), fieldLimit)
 	out, err := c.channelOutput(ci, cmd, 60*time.Second)
 	if err != nil {
@@ -943,7 +943,7 @@ func (c *Core) dirListPortable(ci *sshmux.ConnInfo, path string, caps sshmux.Cap
 	} else {
 		statExpr = "stat -c '%n\t%F\t%s\t%Y'"
 	}
-	cmd := fmt.Sprintf("test -d %s && find %s -mindepth 1 -maxdepth 1 -exec %s {} + | head -n %d",
+	cmd := fmt.Sprintf("test -d %s && find -H %s -mindepth 1 -maxdepth 1 -exec %s {} + | head -n %d",
 		sshmux.Quote(path), sshmux.Quote(path), statExpr, max+1)
 	out, err := c.channelOutput(ci, cmd, 60*time.Second)
 	if err != nil {
@@ -1221,6 +1221,12 @@ func (c *Core) readOOBFile(rt route, path string, max int) ([]byte, error) {
 var (
 	errStaleWrite   = errors.New("the file changed since it was read (if_match mismatch); re-read it and retry")
 	errSymlinkWrite = errors.New("refusing to write through a symlink; write to the symlink's real target path instead")
+	// errNoVersionWrite is distinct from errStaleWrite: the remote couldn't
+	// compute the current version (its sha256/stat tool is unavailable, or the
+	// file vanished), so the CAS couldn't be checked at all — retrying the same
+	// if_match would loop. The caller should re-read (file_read/file_stat picks a
+	// verifiable token for this host) or omit if_match.
+	errNoVersionWrite = errors.New("could not verify the file's version on this host (its sha256/stat tool is unavailable, or the file no longer exists); re-read it or write without if_match")
 )
 
 // sha256Version returns the version token for exactly these bytes.
@@ -1274,6 +1280,8 @@ func (c *Core) writeFileAtomic(rt route, path string, data []byte, mode, ifMatch
 			return nil
 		case sshmux.WriteExitStale:
 			return errStaleWrite
+		case sshmux.WriteExitNoVersion:
+			return errNoVersionWrite
 		case sshmux.WriteExitSymlink:
 			return errSymlinkWrite
 		default:

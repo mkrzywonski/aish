@@ -35,8 +35,13 @@ type Capabilities struct {
 	HeadZ     bool `json:"head_z"`
 	GrepNull  bool `json:"grep_null"`
 
-	// Unsupported marks a host whose shell isn't POSIX enough to run the probe.
-	// Set by the channel handshake when the shell never returns our sentinel.
+	// Unsupported marks a host that can't run the native file tools at all. A
+	// non-POSIX shell is normally caught earlier (the probe sentinel never
+	// arrives → errNotPosixShell in channel.go, before caps are cached), so a
+	// host that probes successfully reports per-tool availability instead. This
+	// stays a defensive fallback and is not flipped by a missing uname alone —
+	// doing so wrongly disabled every file tool on hosts whose base64/stat/find/
+	// grep all work.
 	Unsupported bool `json:"unsupported"`
 }
 
@@ -115,9 +120,6 @@ func parseCapabilities(out []byte) Capabilities {
 	c.FindPrint = kv["findprintf"] == "1"
 	c.HeadZ = kv["headz"] == "1"
 	c.GrepNull = kv["grepnull"] == "1"
-	if c.OS == "" {
-		c.Unsupported = true
-	}
 	return c
 }
 

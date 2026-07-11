@@ -11,6 +11,7 @@ const (
 	WriteExitWriteFail = 91 // temp file could not be written
 	WriteExitStale     = 92 // if_match did not match the current file (CAS lost)
 	WriteExitSymlink   = 93 // target is a symlink; we refuse to follow/replace it
+	WriteExitNoVersion = 94 // the version tool (sha256/stat) produced nothing — CAS unverifiable
 )
 
 // WriteRequest describes one atomic, optionally conditional write over the OOB
@@ -88,7 +89,7 @@ func casBlock(req WriteRequest) string {
 	if req.IfMatch == "" {
 		return ""
 	}
-	var cur string
+	var cur, emptyToken string
 	switch {
 	case strings.HasPrefix(req.IfMatch, "sha256:"):
 		hasher := "sha256sum"
@@ -96,12 +97,18 @@ func casBlock(req WriteRequest) string {
 			hasher = "shasum -a 256"
 		}
 		cur = fmt.Sprintf(`_cur=sha256:$(%s < "$_p" 2>/dev/null | cut -c1-64)`, hasher)
+		emptyToken = "sha256:"
 	case strings.HasPrefix(req.IfMatch, "mtime-size:"):
 		cur = `_cur=mtime-size:$(stat -c '%Y:%s' "$_p" 2>/dev/null || stat -f '%m:%z' "$_p" 2>/dev/null)`
+		emptyToken = "mtime-size:"
 	default:
 		return ""
 	}
 	return cur + "\n" +
+		// A bare prefix with no value means the version tool (sha256sum/shasum/
+		// stat) produced nothing — the CAS can't be verified, which is distinct
+		// from a real mismatch. Report it as its own exit code, not "stale".
+		fmt.Sprintf("[ \"$_cur\" = '%s' ] && { rm -f \"$_tmp\"; exit %d; }\n", emptyToken, WriteExitNoVersion) +
 		fmt.Sprintf("[ \"$_cur\" = %s ] || { rm -f \"$_tmp\"; exit %d; }\n", Quote(req.IfMatch), WriteExitStale)
 }
 

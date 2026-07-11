@@ -55,10 +55,19 @@ func TestParseCapabilitiesBusyBox(t *testing.T) {
 	}
 }
 
-func TestParseCapabilitiesNonPosix(t *testing.T) {
+func TestParseCapabilitiesEmptyOutput(t *testing.T) {
+	// A probe that returns no recognizable key=value (e.g. a stripped host, or a
+	// missing uname) must NOT flip Unsupported — that wrongly disabled every file
+	// tool on hosts whose base64/stat/find/grep all work. A truly non-POSIX shell
+	// is caught earlier in channel.go (the sentinel never arrives), before caps
+	// are cached. Here every capability is simply absent, so per-tool availability
+	// reports them unavailable individually.
 	c := parseCapabilities([]byte("garbage output, not key=value\n"))
-	if !c.Unsupported {
-		t.Fatalf("empty uname should mark Unsupported: %+v", c)
+	if c.Unsupported {
+		t.Fatalf("empty/garbage probe output should not mark Unsupported: %+v", c)
+	}
+	if c.HasBase64 || c.HasFind || c.HasGrep || c.StatC || c.StatF || c.Hasher != "none" {
+		t.Fatalf("no capabilities should be reported present: %+v", c)
 	}
 	if c.Base64Decode() != "" {
 		t.Fatalf("no base64 → Base64Decode should be empty, got %q", c.Base64Decode())

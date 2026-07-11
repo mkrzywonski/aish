@@ -334,8 +334,11 @@ func (c *Core) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fi
 
 func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, bool, error) {
 	caps, _ := c.Mux.CachedCapabilities(rt.ci)
+	// -H follows a symlinked search root (e.g. macOS /etc -> /private/etc) so it
+	// isn't treated as a leaf and skipped by -mindepth; find still doesn't follow
+	// symlinks it meets underneath.
 	p := sshmux.Quote(args.Path)
-	expr := "find " + p + " -mindepth 1"
+	expr := "find -H " + p + " -mindepth 1"
 	if tf := findTypeFlag(args.Type); tf != "" {
 		expr += " " + tf
 	}
@@ -344,18 +347,17 @@ func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, b
 	}
 	// GNU find supports NUL framing (-print0), which keeps names with newlines
 	// unambiguous; other finds fall back to newline framing (best-effort).
+	// 2>/dev/null drops find's per-entry diagnostics (e.g. a "Permission denied"
+	// on an unreadable subdir) so they can't pollute the path list.
 	var producer, sep string
 	if caps.FindPrint {
-		producer, sep = expr+" -print0", "\x00"
+		producer, sep = expr+" -print0 2>/dev/null", "\x00"
 	} else {
-		producer, sep = expr+" -print", "\n"
+		producer, sep = expr+" -print 2>/dev/null", "\n"
 	}
 	out, exit, capped, err := c.channelClassified(rt.ci, producer, grepScanCap, 60*time.Second)
 	if err != nil {
 		return nil, false, err
-	}
-	if exit != 0 { // find exits 0 even with no results; nonzero is a real error
-		return nil, false, fmt.Errorf("file_search failed on %s (exit %d): %.200s", rt.host, exit, out)
 	}
 	var paths []string
 	truncated := capped
@@ -368,6 +370,13 @@ func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, b
 			break
 		}
 		paths = append(paths, rec)
+	}
+	// find exits nonzero when it couldn't read some traversed dir, even though
+	// the matches it already printed are valid. Only treat nonzero as failure
+	// when nothing matched at all (then the path likely doesn't exist / isn't
+	// readable) — otherwise return the valid partial results.
+	if exit != 0 && len(paths) == 0 {
+		return nil, false, fmt.Errorf("file_search found nothing on %s and find exited %d (the path may not exist or be inaccessible)", rt.host, exit)
 	}
 	return paths, truncated, nil
 }

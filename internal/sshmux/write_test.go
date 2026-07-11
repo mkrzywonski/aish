@@ -7,8 +7,32 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestAtomicWriteNoVersionWhenHasherMissing simulates a host whose sha256 tool
+// produces nothing (shadowed with a no-op). The CAS must report the distinct
+// WriteExitNoVersion (94), not a false "stale" (92), and leave the file intact.
+func TestAtomicWriteNoVersionWhenHasherMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f")
+	if err := os.WriteFile(path, []byte("orig\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := WriteRequest{
+		Path: path, Data: []byte("new\n"),
+		IfMatch: "sha256:" + strings.Repeat("a", 64), Hasher: "sha256sum",
+	}
+	// The subshell inherits this function, shadowing the external sha256sum.
+	script := "sha256sum() { cat >/dev/null; }\n" + AtomicWriteScript(req)
+	if code := runScript(t, script); code != WriteExitNoVersion {
+		t.Fatalf("missing hasher should exit %d (no-version), got %d", WriteExitNoVersion, code)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "orig\n" {
+		t.Fatalf("file must be unchanged on a no-version abort, got %q", b)
+	}
+}
 
 // runScript executes an AtomicWriteScript through /bin/sh (as the OOB channel's
 // `sh -s` would) and returns the exit code. The script is self-contained (the

@@ -66,6 +66,66 @@ func (s *Session) cancelCapture() {
 	}
 }
 
+// escLead is how long to wait for a byte after an ESC before deciding it was a
+// standalone Escape keypress. Terminal escape sequences (arrow keys, and — the
+// reason this exists — mouse-motion and focus reports) send their bytes back-to-
+// back, so a follow-up byte within this window means "escape sequence" and its
+// absence means the user actually pressed Escape.
+const escLead = 40 * time.Millisecond
+
+// recvByte reads one captured byte, or reports false if none arrives within
+// escLead (used only mid escape-sequence, where bytes are already buffered).
+func recvByte(ch <-chan byte) (byte, bool) {
+	select {
+	case b := <-ch:
+		return b, true
+	case <-time.After(escLead):
+		return 0, false
+	}
+}
+
+// isLoneEscape is called just after an ESC (0x1b) was read from ch. It reports
+// whether that ESC was a standalone Escape keypress (→ a prompt should cancel).
+// When more bytes follow — an escape sequence such as a CSI mouse/focus/arrow
+// report or an SS3 key — it consumes the rest of the sequence so those bytes are
+// not read as prompt input, and returns false. This stops a mouse move over the
+// terminal (which emits ESC-prefixed sequences) from cancelling the prompt.
+func isLoneEscape(ch <-chan byte) bool {
+	b, ok := recvByte(ch)
+	if !ok {
+		return true // nothing followed the ESC → a real Escape keypress
+	}
+	switch b {
+	case '[': // CSI
+		first, ok := recvByte(ch)
+		if !ok {
+			return false
+		}
+		if first == 'M' { // X10 mouse report: exactly 3 raw coordinate bytes follow
+			for i := 0; i < 3; i++ {
+				recvByte(ch)
+			}
+			return false
+		}
+		// Otherwise consume up to and including the final byte (0x40..0x7e):
+		// covers focus (I/O), arrows, and SGR mouse (… 'M'/'m').
+		if first >= 0x40 && first <= 0x7e {
+			return false
+		}
+		for {
+			c, ok := recvByte(ch)
+			if !ok || (c >= 0x40 && c <= 0x7e) {
+				return false
+			}
+		}
+	case 'O': // SS3: one byte follows (e.g. F1-F4, application-mode arrows)
+		recvByte(ch)
+		return false
+	default: // ESC + other (e.g. an Alt-key) — not a cancel
+		return false
+	}
+}
+
 // Prompt shows question on the terminal and waits for the user to press one
 // of the accept keys (case-insensitive), returning the lowercased key. The
 // keypress is captured before the shell sees it. Esc or timeout returns
@@ -86,9 +146,12 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 	for {
 		select {
 		case b := <-ch:
-			if b == 0x1b { // Esc cancels
-				fmt.Fprintf(os.Stdout, "(cancelled)\r\n")
-				return 0, false
+			if b == 0x1b { // Esc cancels — but not a mouse/focus/arrow escape sequence
+				if isLoneEscape(ch) {
+					fmt.Fprintf(os.Stdout, "(cancelled)\r\n")
+					return 0, false
+				}
+				continue // drained an escape sequence; keep waiting for a choice
 			}
 			lb := lower(b)
 			if strings.IndexByte(accept, lb) >= 0 {
@@ -128,9 +191,12 @@ func (s *Session) PromptLine(question string, timeout time.Duration) (string, bo
 			case b == '\r' || b == '\n':
 				fmt.Fprint(os.Stdout, "\r\n")
 				return string(line), true
-			case b == 0x1b: // Esc cancels
-				fmt.Fprint(os.Stdout, "\r\n")
-				return "", false
+			case b == 0x1b: // Esc cancels — but not a mouse/focus/arrow escape sequence
+				if isLoneEscape(ch) {
+					fmt.Fprint(os.Stdout, "\r\n")
+					return "", false
+				}
+				// drained an escape sequence; ignore it and keep reading the line
 			case b == 0x7f || b == 0x08: // backspace
 				if len(line) > 0 {
 					line = line[:len(line)-1]
