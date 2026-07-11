@@ -61,7 +61,19 @@ type Session struct {
 
 	lastOutput atomic.Int64 // unix nanos of last PTY output
 	closed     atomic.Bool
+
+	// reserveRow, when set (by the status bar), makes applySize hand the shell
+	// one fewer row than the physical terminal, so the bottom row is the bar's
+	// alone. Shrinking the PTY to match the bar's scroll region is what keeps
+	// full-screen apps (vim/htop) rendering correctly — a region without a
+	// matching PTY size doubles lines.
+	reserveRow atomic.Bool
 }
+
+// SetReserveRow tells applySize whether to reserve the bottom physical row for a
+// status bar (hand the shell rows-1). Takes effect on the next resize; call
+// applySize (or resize the window) to apply immediately.
+func (s *Session) SetReserveRow(on bool) { s.reserveRow.Store(on) }
 
 // NewID returns a short random session identifier.
 func NewID() string {
@@ -253,11 +265,17 @@ func (s *Session) applySize() {
 		// default rather than propagating a 0x0 winsize to the shell.
 		ws = &pty.Winsize{Rows: 24, Cols: 80}
 	}
+	if s.reserveRow.Load() && ws.Rows > 2 {
+		ws.Rows-- // give the shell rows-1; the status bar owns the physical bottom row
+	}
 	pty.Setsize(s.Ptmx, ws)
 	s.resizeMu.Lock()
 	cbs := append([]func(rows, cols uint16){}, s.resizeCbs...)
 	s.resizeMu.Unlock()
 	for _, cb := range cbs {
+		// Callbacks get the shell's row count (already reduced when reserving),
+		// so Term/Screen sizing matches what the shell renders. The status bar
+		// adds its reserved row back to find the physical bottom row.
 		cb(ws.Rows, ws.Cols)
 	}
 }

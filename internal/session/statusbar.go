@@ -6,21 +6,22 @@ import (
 	"unicode/utf8"
 )
 
-// StatusBar reserves the terminal's bottom row via a DECSTBM scroll region and
-// paints a caller-supplied line there. At a shell prompt the shell's output
-// scrolls within rows 1..rows-1, so the reserved row survives without shrinking
-// the PTY. A full-screen (alt-screen) app uses the whole screen and covers the
-// bar — and gets every row — so the bar is "gone" inside vim/htop; on exit the
-// region is re-asserted and the bar repainted. Not byte-transparent: a
-// deliberate standing exception, painted only through Session.WriteOut (under
-// outMu, so it never interleaves with shell output or a console prompt).
+// StatusBar reserves the terminal's bottom physical row for a caller-supplied
+// line. It works by giving the shell one fewer row (Session.reserveRow, so the
+// PTY is sized rows-1) AND confining it to a matching scroll region (1..rows-1)
+// — the two together keep full-screen apps (vim/htop) rendering correctly: they
+// run in rows-1 rows, matching the region, so nothing they draw reaches or
+// scrolls the reserved row. The bar is painted only at a prompt (a full-screen
+// app clears the reserved row itself and owns the cursor); at the prompt it
+// reappears. Not byte-transparent: a deliberate standing exception, painted only
+// via Session.WriteOut (under outMu).
 type StatusBar struct {
 	sess    *Session
 	content func() string
 	isAlt   func() bool
 
 	mu        sync.Mutex
-	rows      int
+	shellRows int // rows the shell has (physical rows minus the reserved one)
 	cols      int
 	regionSet bool
 	enabled   bool
@@ -29,16 +30,17 @@ type StatusBar struct {
 }
 
 func NewStatusBar(s *Session, content func() string, isAlt func() bool) *StatusBar {
+	s.SetReserveRow(true) // hand the shell one fewer row; we own the physical bottom
 	return &StatusBar{sess: s, content: content, isAlt: isAlt}
 }
 
-// SetSize records the terminal dimensions (wire it to Session.OnResize) and
-// forces the scroll region to be re-asserted at the next Tick.
+// SetSize records the shell's row/col count (from Session.OnResize — already the
+// reserved rows-1) and forces the scroll region to be re-asserted at next Tick.
 func (b *StatusBar) SetSize(rows, cols uint16) {
 	b.mu.Lock()
-	b.rows, b.cols = int(rows), int(cols)
+	b.shellRows, b.cols = int(rows), int(cols)
 	b.regionSet = false
-	b.enabled = b.rows >= 3 && b.cols >= 8
+	b.enabled = b.shellRows >= 2 && b.cols >= 8
 	b.mu.Unlock()
 }
 
@@ -51,21 +53,20 @@ func (b *StatusBar) Tick() {
 		return
 	}
 	b.ticks++
-	if b.isAlt() {
-		// A full-screen app owns the whole grid: release our region and stop
-		// painting so it has every row and the bar is out of the way.
-		if b.regionSet {
-			b.sess.WriteOut([]byte("\x1b7\x1b[r\x1b8"))
-			b.regionSet = false
-		}
-		return
-	}
+	// Keep the shell's scroll region matched to its (already-shrunk) PTY size, so
+	// the reserved row survives and full-screen apps render right. Re-asserted on
+	// resize; must track the PTY even while an app is up, or a resize mid-app
+	// would desync region and size.
 	if !b.regionSet {
-		// Reserve rows 1..rows-1 for the shell, keeping the last row for the bar.
-		// DECSTBM homes the cursor, so save/restore around it.
-		b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[1;%dr\x1b8", b.rows-1)))
+		b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[1;%dr\x1b8", b.shellRows)))
 		b.regionSet = true
 		b.last = ""
+	}
+	// Don't paint over a full-screen app: it owns the alt screen (and clears the
+	// reserved row itself), and painting there would fight its cursor. The bar
+	// reappears at the next prompt.
+	if b.isAlt() {
+		return
 	}
 	line := b.content()
 	// Repaint on change, and periodically to recover from a clobber (e.g. a
@@ -77,12 +78,11 @@ func (b *StatusBar) Tick() {
 	b.paint(line)
 }
 
-// paint writes the bar on the last row without disturbing the shell's cursor.
+// paint writes the bar on the physical bottom row (shellRows+1) without moving
+// the shell's cursor.
 func (b *StatusBar) paint(line string) {
 	line = truncateCells(line, b.cols-1)
-	// save cursor; go to last row col 1; clear it; reverse-video the text; reset;
-	// restore cursor.
-	b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K\x1b[7m%s\x1b[0m\x1b8", b.rows, line)))
+	b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K\x1b[7m%s\x1b[0m\x1b8", b.shellRows+1, line)))
 }
 
 // Close resets the scroll region and clears the reserved row so the terminal is
@@ -90,10 +90,11 @@ func (b *StatusBar) paint(line string) {
 func (b *StatusBar) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.rows == 0 {
+	if b.shellRows == 0 {
 		return
 	}
-	b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[r\x1b[%d;1H\x1b[K\x1b8", b.rows)))
+	b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[r\x1b[%d;1H\x1b[K\x1b8", b.shellRows+1)))
+	b.sess.SetReserveRow(false)
 	b.regionSet = false
 }
 
