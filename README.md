@@ -32,6 +32,8 @@ WSL2 (below).
 - **bash or zsh** as your shell — for the OSC 133 prompt integration (other
   shells work, with degraded output framing).
 
+You can build from source or use pre-built binaries.
+
 ### Build from source
 
 Requires **git** and **Go ≥ 1.25**.
