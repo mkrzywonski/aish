@@ -35,16 +35,21 @@ func trackingSnippet(label string) string {
 }
 
 // RemoteTrackingApplicable reports the OOB host and whether offering to set up
-// remote host tracking makes sense: only on a live ControlMaster remote whose
-// interactive host aish can't already confirm as "same". Non-prompting (uses
+// remote host tracking makes sense: on any remote (controlmaster or in-band),
+// regardless of confidence. It is deliberately NOT gated on confidence != "same"
+// — a jump to a host that emits no OSC 7 leaves the stale interactive host
+// matching the OOB host, which reads as a false "same" and used to HIDE this
+// option exactly when it was needed. Hidden only on a purely local session,
+// where the built-in badge already re-reads the name each prompt (dynamic);
+// injecting here would freeze the label statically. Non-prompting (uses
 // capability(), not route()), so the menu can call it freely.
 func (c *Core) RemoteTrackingApplicable() (host string, applicable bool) {
 	rt := c.capability()
-	if rt.via != "controlmaster" {
+	if rt.via == "local" {
 		return "", false
 	}
-	_, oobHost, confidence := c.hostConfidence(rt)
-	return oobHost, confidence != "same"
+	_, oobHost, _ := c.hostConfidence(rt)
+	return oobHost, true
 }
 
 // provisionIdle is how long the shared terminal must have been quiet before we
