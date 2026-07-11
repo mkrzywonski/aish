@@ -1,4 +1,4 @@
-# aish — AI-shared terminal
+# AISH — AI-shared terminal
 
 A terminal wrapper that lets you and an AI agent (Claude Code, Codex, or any
 MCP client) drive **one shared shell session**: both of you type into it,
@@ -13,18 +13,18 @@ the remote host.
   error messages.
 - `sudo` prompts stay in the shared terminal. If the AI needs to run a privileged
   command, you see the command and you type the password. No sharing secrets with
-  the AI. aish does not inject commands while secret input is active.
+  the AI. AISH does not inject commands while secret input is active.
 - By default, file and exec operations are visible in the shared terminal.
-- Out-of-band (hidden) operations can be enabled with the --oob command line argument
-  or vi the Ctrl-] menu. If oob is enabled, SSH connections opened inside that
+- Out-of-band (hidden) operations can be enabled with the `--oob` command line argument
+  or via the Ctrl-] menu. If oob is enabled, SSH connections opened inside that
   session are multiplexed and remote file/exec operations can use the
   out-of-band channel. This is convenient for code editing.
 
 ## Install
 
-aish is a single **Linux** binary (x86-64 or arm64). Windows and macOS not supported.
-aish relies on Linux-only PTY/termios constants and `/proc`; on Windows, run it inside
-WSL2 (below).
+AISH is a single **Linux** binary (x86-64 or arm64). Windows and macOS aren't
+supported natively — AISH relies on Linux-only PTY/termios constants and `/proc`.
+On Windows, run it inside WSL2 (below).
 
 **Runtime prerequisites** (needed to *run* it, not to install it):
 
@@ -32,13 +32,13 @@ WSL2 (below).
 - **bash or zsh** as your shell — for the OSC 133 prompt integration (other
   shells work, with degraded output framing).
 
-You can build from source or use pre-built binaries.
+You can build from source or use prebuilt binaries.
 
 ### Build from source
 
 Requires **git** and **Go ≥ 1.25**.
 
-* Debian/Ubuntu `***tbd***`
+* Debian/Ubuntu `sudo apt install golang-go` (usually too old — use the tarball below)
 * Fedora `sudo dnf install golang`
 * Arch `sudo pacman -S go`
 
@@ -103,7 +103,7 @@ sudo nixos-rebuild switch --flake /path/to/your/nix-config#<host>
 
 ### Windows 11 — via WSL2
 
-aish needs a Unix PTY and OpenSSH ControlMaster, so run it inside WSL2:
+AISH needs a Unix PTY and OpenSSH ControlMaster, so run it inside WSL2:
 
 ```powershell
 wsl --install -d Ubuntu   # once, then reboot / open Ubuntu
@@ -140,7 +140,7 @@ aish --name myproject      # ... with a meaningful name
 aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
-You can run multiple sessions and share them with the AI. 
+You can run multiple sessions and share them with the AI.
 Every MCP tool accepts a `session` argument (id or name). `session_status` lists
 other live sessions. The proxy attaches to one session by default, but that is
 only the default target, not a boundary. Use `AISH_SESSION=<id|name>` or
@@ -173,7 +173,7 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
 | `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only. Atomic, with automatic staleness protection |
-| `file_patch` | Apply a unified diff (multi-hunk) to a text file on the current host; applied in aish, written atomically; OOB only |
+| `file_patch` | Apply a unified diff (multi-hunk) to a text file on the current host; applied in AISH, written atomically; OOB only |
 | `file_grep` / `file_search` | Regex content search and name-glob file finding on the current host (ripgrep/grep/find, best-effort); OOB only |
 | `file_stat` / `directory_list` | Native-style path metadata and directory browsing on the current host; OOB only |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
@@ -197,7 +197,7 @@ connections. See
 ### Remote prerequisites
 
 The OOB file/exec tools run **stock commands on the target over one persistent
-`/bin/sh`** — nothing is installed or deployed. When the channel opens, aish
+`/bin/sh`** — nothing is installed or deployed. When the channel opens, AISH
 probes the host and reports per-tool availability in `session_status`
 (`oob_tools`); a tool whose prerequisite is missing is disabled and returns a
 clear error (with an install suggestion) instead of failing silently. A target
@@ -221,7 +221,7 @@ Commands used (POSIX/coreutils):
   `grep` or `ripgrep` (file_grep), `sha256sum`/`shasum` (optional, for
   `if_match` staleness checks).
 
-aish adapts to the flavor it finds (GNU vs BusyBox vs BSD `stat`/`find`/`grep`,
+AISH adapts to the flavor it finds (GNU vs BusyBox vs BSD `stat`/`find`/`grep`,
 `base64 -d` vs `-D`, `ripgrep` vs `grep`), so Debian/RHEL/Arch/Raspberry Pi OS
 work fully; Alpine/BusyBox, BSD, and macOS work with best-effort fallbacks;
 Windows and network devices are cleanly refused.
@@ -237,20 +237,20 @@ Windows and network devices are cleanly refused.
 This is mainly a visibility/consent tool, not a sandbox. The MCP endpoint is a
 Unix socket under `$XDG_RUNTIME_DIR/aish/<id>/` (mode `0700`), not a TCP port.
 Do not expose it over localhost TCP/HTTP/WebSocket. If code is already
-running as your uid, aish does not try to defend against it.
+running as your uid, AISH does not try to defend against it.
 
 Prompts are shown and answered outside the shell input stream, so the response
 does not go through the shell or land in scrollback.
 
 ### Client authorization
 
-When an MCP client first tries to use a tool, aish asks in your terminal:
+When an MCP client first tries to use a tool, AISH asks in your terminal:
 
 ```
 claude wants to control this session — allow? [y/n]
 ```
 
-- **y** grants that client access until the aish session closes; reconnects
+- **y** grants that client access until the AISH session closes; reconnects
   must prove possession of the approved private key.
 - **n** denies it — sticky, so a client can't re-prompt-spam you; reconnect to
   be asked again.
@@ -258,7 +258,7 @@ claude wants to control this session — allow? [y/n]
 
 The prompt names the connecting client from its MCP `clientInfo` — shown as
 `claude` or `codex` for the bundled TUIs, or the raw client name otherwise.
-Approvals are per client for the life of the aish session. Reconnects use a
+Approvals are per client for the life of the AISH session. Reconnects use a
 challenge/response check so an already-approved client can reconnect without a
 new prompt. Client keys and grants are memory-only.
 
@@ -280,7 +280,7 @@ Out-of-band (invisible) operation is opt-in, two ways:
 
 - **`aish --oob`** authorizes it up front for the whole session.
 - **Interactive grant.** In a session *without* `--oob`, the first time the AI
-  attempts an out-of-band-capable operation aish asks:
+  attempts an out-of-band-capable operation AISH asks:
 
   ```
   the AI wants out-of-band (invisible) access on <host> — allow? [y/n/a]
@@ -301,7 +301,7 @@ instead of one per OOB operation. Lost channels are not reopened silently.
 
 When you use one host as a jump box (`ssh a`, then `ssh b` from there), the
 interactive shell can be on **b** while the out-of-band channel still points at
-**a**. aish guards against writing to the wrong host: on the first probe it
+**a**. AISH guards against writing to the wrong host: on the first probe it
 records the OOB host and compares it to where the shell reports it is
 (`session_status` shows `interactive_host`, `oob_host`, and `target_confidence`).
 On a **detected mismatch** an OOB *write* (`file_write`/`file_edit`/`file_patch`/
@@ -323,33 +323,39 @@ do this automatically.
 - **Window title**: any title set by your shell — or by a remote host over
   ssh — is rewritten to start with `⧉<label> `, gaining a `⚡` while an MCP
   client (an AI) is actually connected, reverting when it disconnects.
+- **Status bar**: a reserved bottom row showing the session badge, the host the
+  terminal is on (`tty:`), and where out-of-band ops land (`oob: user@host`),
+  with a `⚠` when those diverge — plus a `Ctrl-] menu` hint. It is painted from
+  AISH's own state, so a stale `tty:` (e.g. still your old host after an `ssh`
+  the remote never reported over OSC 7) is itself the warning. Apps get one
+  fewer row; the bar steps aside inside full-screen apps like vim/htop.
 
 ### The prompt does double duty — and `ssh`/`su` drops it
 
 The badge is not just decoration; the same prompt hook serves two audiences:
 
-- **You** — at a glance it tells you that *this* terminal is a shared aish
+- **You** — at a glance it tells you that *this* terminal is a shared AISH
   session, which one (`<name>`), and which host/user it is on. With several
   terminals open, that badge is how you know where you're about to point the AI.
-- **aish** — the hook also emits an OSC 7 report each prompt, which is how aish
+- **AISH** — the hook also emits an OSC 7 report each prompt, which is how AISH
   tracks the interactive host, keeps the AI aimed at the intended target, and
   can warn or fail closed when the host you're looking at and the host
   out-of-band writes land on have drifted apart (see
   [Wrong-host protection](#wrong-host-protection)).
 
-aish installs this in the session's *own* shell. But a shell you reach **later**
+AISH installs this in the session's *own* shell. But a shell you reach **later**
 — after `ssh host`, or after `su - user` on a remote — comes up with that
-host/user's plain default prompt: no badge, and no OSC 7, so aish drops to
+host/user's plain default prompt: no badge, and no OSC 7, so AISH drops to
 `unknown` host confidence and starts asking for a per-write confirmation. Restore
-both with **`Ctrl-]` → `p`** (offered whenever aish is on a remote it can't yet
+both with **`Ctrl-]` → `p`** (offered whenever AISH is on a remote it can't yet
 verify), which types the one-time badge + OSC 7 snippet into that shell. It is
 session-only and per-shell, so you have to remember to do it after each hop —
-aish never auto-injects into a shell it didn't start.
+AISH never auto-injects into a shell it didn't start.
 
-## The aish menu
+## The AISH menu
 
-Press **`Ctrl-]`** at the shell to open the aish menu (the keypress is caught
-by aish and doesn't reach the shell). `Esc` cancels the menu at any point. So
+Press **`Ctrl-]`** at the shell to open the AISH menu (the keypress is caught
+by AISH and doesn't reach the shell). `Esc` cancels the menu at any point. So
 does a second **`Ctrl-]`** — which additionally passes one literal `Ctrl-]`
 through to the shell, so you can still send the key to a program (e.g. `telnet`)
 by pressing it twice.
@@ -362,9 +368,10 @@ by pressing it twice.
 - **`k` — revoke client access.** Disconnects every connected client and clears
   all grants for this session, so the next client to act must be approved
   again. (No effect under `--no-auth`.)
-- **`p` — set up the aish prompt on the remote.** Shown only when you're SSH'd
-  into a remote whose host aish can't yet verify (its shell reports no OSC 7).
-  Types one visible, one-time command that gives the remote shell aish's badge
+- **`p` — set up the AISH prompt on the remote.** Offered whenever you're on a
+  remote (SSH'd) — useful because a remote shell often reports no OSC 7, so AISH
+  can't otherwise verify its host.
+  Types one visible, one-time command that gives the remote shell AISH's badge
   prompt (`<name>⧉ [user@host:cwd]$`) plus OSC 7 host reporting — so the shared
   terminal shows you're on the remote and out-of-band writes stop asking for a
   per-host confirmation. Session-only (no dotfile edits); make it permanent in
@@ -373,14 +380,14 @@ by pressing it twice.
 ## How the ssh integration works
 
 Inside a session started with `--oob`, a PATH shim makes `ssh` resolve to
-aish itself, which injects `-oControlMaster=auto
+AISH itself, which injects `-oControlMaster=auto
 -oControlPath=<session>/cm-<hash> -oControlPersist=60s` and execs the real
 ssh. (Without `--oob` the shim only records which host you're on and execs
 ssh untouched — no multiplexing, no extra channels.)
 
 That injection happens when the `ssh` process starts. If you enable OOB only
 after an SSH session is already open, that existing SSH process stays
-untouched: aish can still track the host, but remote OOB tools will not have a
+untouched: AISH can still track the host, but remote OOB tools will not have a
 ControlMaster route until you reconnect SSH after enabling OOB.
 
 Remote OOB operations share **one persistent channel** per remote: a
@@ -412,7 +419,7 @@ a hard kill.
 
 - Nested ssh (host A → host B): out-of-band tools reach hop 1; deeper hops
   are in-band. (`ProxyJump` channel reuse is the planned fix.)
-- Only ssh sessions started *inside* aish are multiplexed; existing
+- Only ssh sessions started *inside* AISH are multiplexed; existing
   connections elsewhere can't be adopted.
 - bash and zsh get OSC 133 integration; fish and other unsupported shells
   fall back to idle detection, with commands typed bare and no exit code.
