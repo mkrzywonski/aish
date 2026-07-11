@@ -2,8 +2,8 @@
 // ControlMaster connection, through which all foreground exec and file
 // operations for that remote are streamed. On hosts where every new ssh
 // session/channel re-triggers MFA (login_duo-style Duo pushes), this costs
-// exactly one authorization at open instead of one per operation. See
-// oob.md for the validation.
+// exactly one authorization at open instead of one per operation (validated
+// on a production Duo host).
 //
 // Framing: each script is followed by a printf of a nonce sentinel carrying
 // $?; the reader collects output lines until the sentinel. Scripts that
