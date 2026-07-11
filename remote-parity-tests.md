@@ -1,7 +1,7 @@
 # Remote-parity test scenarios
 
-Manual/semi-manual scenarios to exercise the OOB file/exec toolset (Phases 0–7
-of `remote-parity-plan.md`) and surface easily-triggered bugs. Run against a
+Manual/semi-manual scenarios to exercise the OOB file/exec toolset and surface
+easily-triggered bugs. Run against a
 real remote reached by SSH *through* an aish session — that exercises the actual
 shim → ControlMaster → persistent `sh -s` channel path, not a shortcut.
 
