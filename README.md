@@ -326,6 +326,13 @@ by pressing it twice.
 - **`k` — revoke client access.** Disconnects every connected client and clears
   all grants for this session, so the next client to act must be approved
   again. (No effect under `--no-auth`.)
+- **`p` — set up the aish prompt on the remote.** Shown only when you're SSH'd
+  into a remote whose host aish can't yet verify (its shell reports no OSC 7).
+  Types one visible, one-time command that gives the remote shell aish's badge
+  prompt (`<name>⧉ [user@host:cwd]$`) plus OSC 7 host reporting — so the shared
+  terminal shows you're on the remote and out-of-band writes stop asking for a
+  per-host confirmation. Session-only (no dotfile edits); make it permanent in
+  the remote `~/.bashrc` yourself.
 
 ## How the ssh integration works
 

@@ -324,10 +324,10 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 			oobHost, interactiveHost), nil
 	case divConfirm:
 		ans, ok := c.Sess.Prompt(
-			fmt.Sprintf("Can't verify the interactive shell is still on %s — [y] write once, [t] set up host tracking so I can verify, [n] cancel", oobHost),
-			"ytn", 120*time.Second)
+			fmt.Sprintf("Can't verify the interactive shell is still on %s — [y] write once, [p] set up the aish prompt so I can verify, [n] cancel", oobHost),
+			"ypn", 120*time.Second)
 		switch {
-		case ok && ans == 't':
+		case ok && ans == 'p':
 			c.ProvisionRemoteTracking()
 			c.confirmTarget(token)
 			return "", nil
@@ -335,7 +335,7 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 			c.confirmTarget(token)
 			return "", nil
 		default:
-			return "", fmt.Errorf("out-of-band write to %s not confirmed (its host could not be verified); reconnect ssh through aish, set up host tracking from the aish menu, or use run_command", oobHost)
+			return "", fmt.Errorf("out-of-band write to %s not confirmed (its host could not be verified); reconnect ssh through aish, set up the aish prompt from the aish menu, or use run_command", oobHost)
 		}
 	default:
 		return "", nil

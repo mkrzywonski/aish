@@ -232,10 +232,11 @@ func runMain(args []string) int {
 			fmt.Sprintf("  [o] out-of-band ops (currently %s)", oobState),
 			"  [k] revoke client access",
 		}
-		// Offer host tracking only on a remote whose host aish can't yet verify.
+		// Offer the aish prompt (badge + host tracking) only on a remote whose
+		// host aish can't yet verify.
 		if trackHost, ok := core.RemoteTrackingApplicable(); ok {
-			accept += "t"
-			lines = append(lines, fmt.Sprintf("  [t] set up host tracking on %s", trackHost))
+			accept += "p"
+			lines = append(lines, fmt.Sprintf("  [p] set up aish prompt on %s", trackHost))
 		}
 		lines = append(lines, "  Esc to cancel")
 		choice, ok := sess.Prompt(strings.Join(lines, "\r\n"), accept, 30*time.Second)
@@ -273,7 +274,7 @@ func runMain(args []string) int {
 			if noAuth {
 				sess.Notify("note: this session runs with --no-auth, so reconnecting clients are NOT prompted for approval")
 			}
-		case 't':
+		case 'p':
 			core.ProvisionRemoteTracking()
 		}
 	})
