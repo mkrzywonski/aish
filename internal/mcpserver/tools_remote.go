@@ -203,6 +203,29 @@ func (c *Core) route() route {
 // ci.Host: that target may be an alias ("ssh web") whose real hostname differs,
 // which would read as a false mismatch. When caps aren't probed yet we report
 // unknown rather than guess.
+// HostDrift reports whether the interactive tty and the out-of-band target have
+// diverged into a "mismatch" (the shell is on a different host than OOB ops
+// would land on — the jump-box case, where writes fail closed). It is cheap
+// enough to poll: unlike capability() it never runs `ssh -O check`, reading only
+// the shim's connection events, the cached probe, and the Tracker. The "unknown"
+// state (a remote that reports no OSC 7) is deliberately not a drift — it's the
+// normal unverified case, too common to flag. Used to drive the title ⚠ marker.
+func (c *Core) HostDrift() (mismatch bool, interactiveHost, oobHost string) {
+	ttyHost, _ := c.Tracker.Cwd()
+	interactiveHost = ttyHost
+	ci := c.Mux.Current()
+	if ci == nil {
+		return false, interactiveHost, c.Tracker.LocalHost()
+	}
+	oobHost = ci.Host
+	caps, ok := c.Mux.CachedCapabilities(ci)
+	if !ok || caps.Hostname == "" {
+		return false, interactiveHost, oobHost // unprobed → unknown, not a mismatch
+	}
+	oobHost = caps.Hostname
+	return classifyConfidence(ttyHost, c.Tracker.LocalHost(), caps.Hostname) == "mismatch", interactiveHost, oobHost
+}
+
 func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, confidence string) {
 	ttyHost, _ := c.Tracker.Cwd()
 	interactiveHost = ttyHost

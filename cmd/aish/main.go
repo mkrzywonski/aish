@@ -216,6 +216,33 @@ func runMain(args []string) int {
 		OnRenamed: func(newName string) { titles.SetLabel(newName) },
 	}
 
+	// Host-drift watcher: poll cheaply (HostDrift never runs `ssh -O check`) for
+	// the mismatch state — the shell is on a different host than out-of-band ops
+	// target — reflect it in the title ⚠, and Notify once per episode when the
+	// user is at a prompt (not mid full-screen app). The title marker is the
+	// durable signal; the notice is a one-time nudge.
+	go func() {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		var notified bool
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				mismatch, ttyHost, oobHost := core.HostDrift()
+				titles.SetDrift(mismatch)
+				switch {
+				case !mismatch:
+					notified = false
+				case !notified && !trm.Screen.Snapshot().AltScreen:
+					sess.Notify("⚠ host drift: the shell is on %s but out-of-band ops target %s — OOB writes fail closed; reconnect ssh through aish so they match, or use run_command to act on the shell's host", ttyHost, oobHost)
+					notified = true
+				}
+			}
+		}
+	}()
+
 	// Ctrl-] opens the aish menu: rename this session or toggle out-of-band
 	// operations. The prompt badge re-reads the name file on the next prompt;
 	// SetLabel updates the window title immediately. OOB toggling flips both

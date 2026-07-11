@@ -19,7 +19,8 @@ type TitleMarker struct {
 	mu        sync.Mutex
 	out       io.Writer
 	connected atomic.Bool
-	label     string // session name or id, shown next to the marker glyph
+	drift     atomic.Bool // host/target drift detected (⚠)
+	label     string      // session name or id, shown next to the marker glyph
 
 	// stream state machine
 	state     int
@@ -48,6 +49,9 @@ func (t *TitleMarker) marker() string {
 	if t.connected.Load() {
 		m += "⚡"
 	}
+	if t.drift.Load() {
+		m += "⚠"
+	}
 	return m + " "
 }
 
@@ -55,6 +59,15 @@ func (t *TitleMarker) marker() string {
 func (t *TitleMarker) SetConnected(yes bool) {
 	t.connected.Store(yes)
 	t.Refresh()
+}
+
+// SetDrift updates the host/target-drift marker (⚠) and re-asserts the title.
+// It re-emits only when the value actually changes, so a poller can call it
+// freely.
+func (t *TitleMarker) SetDrift(yes bool) {
+	if t.drift.Swap(yes) != yes {
+		t.Refresh()
+	}
 }
 
 // SetLabel updates the session label (name or id) and re-asserts the title.
