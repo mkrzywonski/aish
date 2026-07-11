@@ -9,7 +9,8 @@ the remote host.
 ## What it does
 
 - The AI types into the same PTY you do, so it operates on whatever host the
-  terminal is currently on.
+  terminal is currently on. The AI can see the terminal, no cutting and pasting
+  error messages.
 - `sudo` prompts stay in the shared terminal. If the AI needs to run a privileged
   command, you see the command and you type the password. No sharing secrets with
   the AI. aish does not inject commands while secret input is active.
@@ -21,8 +22,8 @@ the remote host.
 
 ## Install
 
-aish is a single **Linux** binary (x86-64 or arm64). macOS isn't supported — it
-relies on Linux-only PTY/termios constants and `/proc`; on Windows, run it inside
+aish is a single **Linux** binary (x86-64 or arm64). Windows and macOS not supported.
+aish relies on Linux-only PTY/termios constants and `/proc`; on Windows, run it inside
 WSL2 (below).
 
 **Runtime prerequisites** (needed to *run* it, not to install it):
@@ -35,6 +36,10 @@ WSL2 (below).
 
 Requires **git** and **Go ≥ 1.25**.
 
+* Debian/Ubuntu `***tbd***`
+* Fedora `sudo dnf install golang`
+* Arch `sudo pacman -S go`
+
 Distro Go packages are often older than 1.25; the reliable route is the official
 tarball:
 
@@ -43,9 +48,6 @@ curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz   # arm64: swap in linux-
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin   # add to ~/.profile to persist
 ```
-
-Fedora `sudo dnf install golang`, Arch `sudo pacman -S go`, and a current Debian
-release ship a new-enough Go too.
 
 Then build and install:
 
@@ -60,8 +62,6 @@ aish version
 ### Prebuilt binary
 
 If you'd rather not build it yourself, each release ships a static Linux binary.
-Running someone else's binary is a trust call — the source build above is there
-if you'd rather compile it (ideally after a look at the code).
 
 ```sh
 # x86-64 (most machines):
