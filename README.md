@@ -113,7 +113,7 @@ Inside the Ubuntu shell, build from source or grab the prebuilt `linux_amd64`
 binary as above. Your MCP client (e.g. Claude Code) must also run inside WSL to
 reach the session's Unix socket.
 
-## Use
+## Running AISH
 
 ```sh
 aish                       # start a shared session (wraps your $SHELL)
