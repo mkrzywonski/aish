@@ -25,6 +25,7 @@ type StatusBar struct {
 	cols      int
 	regionSet bool
 	enabled   bool
+	wasAlt    bool // last Tick saw the alt screen (a full-screen app was up)
 	last      string
 	ticks     int
 }
@@ -53,11 +54,24 @@ func (b *StatusBar) Tick() {
 		return
 	}
 	b.ticks++
+	alt := b.isAlt()
+	// A full-screen app resets the scroll margins to full height on exit (rmcup /
+	// ESC[r), which would let the shell scroll into our reserved row. Force a
+	// re-assert when we leave the alt screen so the region is restored the moment
+	// the app quits.
+	if b.wasAlt && !alt {
+		b.regionSet = false
+	}
+	b.wasAlt = alt
 	// Keep the shell's scroll region matched to its (already-shrunk) PTY size, so
 	// the reserved row survives and full-screen apps render right. Re-asserted on
-	// resize; must track the PTY even while an app is up, or a resize mid-app
-	// would desync region and size.
-	if !b.regionSet {
+	// resize and on alt-screen exit; also re-asserted periodically (off the alt
+	// screen) to recover from any other clobber (reset/tput) that widened the
+	// margins without our knowing. Must track the PTY even while an app is up, or a
+	// resize mid-app would desync region and size — so the initial set still fires
+	// under alt, but the periodic recovery does not (it would fight the app's own
+	// margins).
+	if !b.regionSet || (!alt && b.ticks%4 == 0) {
 		b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[1;%dr\x1b8", b.shellRows)))
 		b.regionSet = true
 		b.last = ""
@@ -65,7 +79,7 @@ func (b *StatusBar) Tick() {
 	// Don't paint over a full-screen app: it owns the alt screen (and clears the
 	// reserved row itself), and painting there would fight its cursor. The bar
 	// reappears at the next prompt.
-	if b.isAlt() {
+	if alt {
 		return
 	}
 	line := b.content()
