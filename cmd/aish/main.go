@@ -51,7 +51,7 @@ Usage:
   aish version
 `
 
-var version = "0.2.1-dev"
+var version = "0.2.2-dev"
 
 func main() {
 	// Busybox-style dispatch: when invoked through the PATH shim symlink
@@ -249,11 +249,16 @@ func runMain(args []string) int {
 		if core.OOBEnabled() {
 			oobState = "on"
 		}
-		accept := "rok"
+		barState := "off"
+		if bar.Enabled() {
+			barState = "on"
+		}
+		accept := "robk"
 		lines := []string{
 			"aish menu:",
 			"  [r] rename session",
 			fmt.Sprintf("  [o] out-of-band ops (currently %s)", oobState),
+			fmt.Sprintf("  [b] status bar (currently %s)", barState),
 			"  [k] revoke client access",
 		}
 		// Offer the aish prompt (badge + host tracking) only on a remote whose
@@ -291,6 +296,14 @@ func runMain(args []string) int {
 				sess.Notify("out-of-band operations ENABLED — the AI may now act invisibly (ControlMaster channels, direct file/exec)")
 			} else {
 				sess.Notify("out-of-band operations DISABLED — AI activity stays visible in the shared terminal")
+			}
+		case 'b':
+			on := !bar.Enabled()
+			bar.SetEnabled(on)
+			if on {
+				sess.Notify("status bar ENABLED")
+			} else {
+				sess.Notify("status bar DISABLED — the bottom row is returned to the shell")
 			}
 		case 'k':
 			n := core.Revoke()

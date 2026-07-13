@@ -24,7 +24,8 @@ type StatusBar struct {
 	shellRows int // rows the shell has (physical rows minus the reserved one)
 	cols      int
 	regionSet bool
-	enabled   bool
+	enabled   bool // terminal is big enough to reserve a row
+	off       bool // user toggled the bar off (menu); reserved row returned to the shell
 	wasAlt    bool // last Tick saw the alt screen (a full-screen app was up)
 	last      string
 	ticks     int
@@ -45,12 +46,47 @@ func (b *StatusBar) SetSize(rows, cols uint16) {
 	b.mu.Unlock()
 }
 
+// Enabled reports whether the bar is currently on (not toggled off by the user).
+func (b *StatusBar) Enabled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.off
+}
+
+// SetEnabled turns the bar on or off at runtime (the Ctrl-] menu). Turning it off
+// resets the scroll region, clears the reserved row, and grows the PTY back to
+// full height so the shell reclaims the row; turning it on shrinks the PTY again
+// and lets the next Tick re-assert the region and repaint. The PTY resize goes out
+// immediately via Session.ApplySize (a SIGWINCH the shell redraws to), so the
+// change is visible without waiting for the user to resize the window. Never call
+// this while holding b.mu — ApplySize runs resize callbacks that re-enter SetSize.
+func (b *StatusBar) SetEnabled(on bool) {
+	b.mu.Lock()
+	if b.off == !on {
+		b.mu.Unlock()
+		return // no change
+	}
+	b.off = !on
+	bottom := b.shellRows + 1
+	b.mu.Unlock()
+
+	if on {
+		b.sess.SetReserveRow(true)
+		b.sess.ApplySize() // shrink the PTY; SetSize clears regionSet, next Tick paints
+		return
+	}
+	// Give the row back: reset the region and wipe the old bar, then grow the PTY.
+	b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[r\x1b[%d;1H\x1b[K\x1b8", bottom)))
+	b.sess.SetReserveRow(false)
+	b.sess.ApplySize()
+}
+
 // Tick reconciles the reserved row with the current state. Cheap and idempotent
 // at a steady prompt; call it on a modest interval.
 func (b *StatusBar) Tick() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.enabled {
+	if !b.enabled || b.off {
 		return
 	}
 	b.ticks++

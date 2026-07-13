@@ -258,6 +258,12 @@ func (s *Session) WriteOut(p []byte) {
 	s.outMu.Unlock()
 }
 
+// ApplySize re-reads the terminal size and re-applies it to the PTY and resize
+// callbacks. Use it to make a SetReserveRow change take effect immediately
+// (the PTY resize is a SIGWINCH the shell redraws to) rather than waiting for the
+// next window resize.
+func (s *Session) ApplySize() { s.applySize() }
+
 func (s *Session) applySize() {
 	ws, err := pty.GetsizeFull(os.Stdin)
 	if err != nil || ws.Rows == 0 || ws.Cols == 0 {
