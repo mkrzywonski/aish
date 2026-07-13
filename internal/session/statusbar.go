@@ -2,8 +2,8 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"sync"
-	"unicode/utf8"
 )
 
 // StatusBar reserves the terminal's bottom physical row for a caller-supplied
@@ -92,11 +92,23 @@ func (b *StatusBar) Tick() {
 	b.paint(line)
 }
 
-// paint writes the bar on the physical bottom row (shellRows+1) without moving
-// the shell's cursor.
+// paint writes the bar across the full width of the physical bottom row
+// (shellRows+1) without moving the shell's cursor. The content is padded with
+// spaces to fill every column, all under reverse video, so the bar reads as one
+// continuous strip. Autowrap is disabled around the paint (ESC[?7l / ESC[?7h) so
+// filling the final column can't trigger a wrap/scroll and any cell-width miscount
+// clips at the right edge instead of spilling onto the shell's rows; the extra
+// safety space guarantees the row fills even on a one-cell undercount. DECSC/DECRC
+// keep the shell's cursor put.
 func (b *StatusBar) paint(line string) {
-	line = truncateCells(line, b.cols-1)
-	b.sess.WriteOut([]byte(fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K\x1b[7m%s\x1b[0m\x1b8", b.shellRows+1, line)))
+	line = truncateCells(line, b.cols)
+	pad := b.cols - displayCells(line)
+	if pad < 0 {
+		pad = 0
+	}
+	b.sess.WriteOut([]byte(fmt.Sprintf(
+		"\x1b7\x1b[?7l\x1b[%d;1H\x1b[7m%s%s\x1b[0m\x1b[?7h\x1b8",
+		b.shellRows+1, line, strings.Repeat(" ", pad+1))))
 }
 
 // Close resets the scroll region and clears the reserved row so the terminal is
@@ -112,20 +124,53 @@ func (b *StatusBar) Close() {
 	b.regionSet = false
 }
 
-// truncateCells trims s to at most n display columns, approximating one cell per
-// rune with a 2-cell safety margin (a couple of the glyphs are double-width).
-// Under-fill is harmless; over-fill would wrap the bar onto the shell's row.
+// truncateCells trims s to at most n display columns, appending an ellipsis when
+// it has to cut. Widths come from displayCells so the bar's wide glyphs are
+// accounted for. Under-fill is padded by paint; over-fill is clipped by paint's
+// disabled autowrap — so this only needs to be close.
 func truncateCells(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(s) <= n-2 {
+	if displayCells(s) <= n {
 		return s
 	}
-	r := []rune(s)
-	end := n - 3
-	if end < 0 {
-		end = 0
+	// Must cut; reserve one column for the ellipsis.
+	limit := n - 1
+	if limit < 0 {
+		limit = 0
 	}
-	return string(r[:end]) + "…"
+	w := 0
+	var out []rune
+	for _, r := range s {
+		rw := runeCells(r)
+		if w+rw > limit {
+			break
+		}
+		out = append(out, r)
+		w += rw
+	}
+	return string(out) + "…"
+}
+
+// runeCells approximates the terminal columns a rune occupies. The bar uses a
+// small fixed set of wide glyphs (the ⧉ session marker and the ⚠ drift warning);
+// everything else is treated as one cell. paint disables autowrap, so an
+// occasional miscount clips rather than wraps.
+func runeCells(r rune) int {
+	switch r {
+	case '⧉', '⚠':
+		return 2
+	default:
+		return 1
+	}
+}
+
+// displayCells approximates the number of terminal columns s occupies.
+func displayCells(s string) int {
+	n := 0
+	for _, r := range s {
+		n += runeCells(r)
+	}
+	return n
 }
