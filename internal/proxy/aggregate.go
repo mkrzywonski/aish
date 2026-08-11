@@ -40,6 +40,7 @@ type aggProxy struct {
 	client   *mcp.Client
 	identity *clientauth.Identity
 	version  string
+	hasPSK   bool
 	frontSS  *mcp.ServerSession // the connection to the AI client, for log notices
 
 	mu         sync.Mutex
@@ -91,6 +92,7 @@ func Serve(version string, psk []byte) int {
 		client:    mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
 		identity:  identity,
 		version:   version,
+		hasPSK:    len(psk) > 0,
 		conns:     map[string]*pooledConn{},
 		lastNames: map[string]string{},
 	}
@@ -106,6 +108,13 @@ func Serve(version string, psk []byte) int {
 		Description: "List the live aish sessions on this machine (id and name). Use a session's id or name as the `session` argument to other tools. Safe to call anytime; never prompts the user.",
 		Annotations: &mcp.ToolAnnotations{Title: "List aish sessions", ReadOnlyHint: true},
 	}, p.listSessions)
+
+	// version_info: answered locally, reports proxy + session versions.
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "version_info",
+		Description: "Report version information for all components in the aish chain: the MCP proxy, the connected session server, and whether PSK authentication is active. Useful for diagnosing version mismatches.",
+		Annotations: &mcp.ToolAnnotations{Title: "Version info", ReadOnlyHint: true},
+	}, p.versionInfo)
 
 	// Mirror the session tools with a generic forwarding handler.
 	specs, err := p.toolSpecs(ctx)
@@ -380,6 +389,52 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	// without also flagging its own results (the AI is already looking here).
 	p.renameNotices(live)
 	return nil, out, nil
+}
+
+// ---- version_info ----
+
+type versionInfoArgs struct{}
+
+type versionInfoResult struct {
+	Proxy   proxyInfo    `json:"proxy"`
+	Session *sessionInfo `json:"session,omitempty"`
+}
+
+type proxyInfo struct {
+	Version string `json:"version"`
+	PSK     bool   `json:"psk_auth"`
+	Binary  string `json:"binary"`
+}
+
+type sessionInfo struct {
+	Version string `json:"version"`
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+}
+
+func (p *aggProxy) versionInfo(ctx context.Context, req *mcp.CallToolRequest, args versionInfoArgs) (*mcp.CallToolResult, versionInfoResult, error) {
+	exe, _ := os.Executable()
+	result := versionInfoResult{
+		Proxy: proxyInfo{
+			Version: p.version,
+			PSK:     p.hasPSK,
+			Binary:  exe,
+		},
+	}
+	// Try to get the session version from a connected session.
+	if live := List(); len(live) > 0 {
+		info := live[0]
+		if cs, err := p.conn(ctx, info); err == nil {
+			if ir := cs.InitializeResult(); ir != nil && ir.ServerInfo != nil {
+				result.Session = &sessionInfo{
+					Version: ir.ServerInfo.Version,
+					ID:      info.ID,
+					Name:    info.Name,
+				}
+			}
+		}
+	}
+	return nil, result, nil
 }
 
 // ---- tool-list mirroring (schema cache) ----
