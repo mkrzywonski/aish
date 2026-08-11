@@ -50,11 +50,12 @@ Usage:
   aish mcp-proxy      stdio<->socket MCP proxy for AI agents (run by the TUI)
   aish client [--session <id|name>] <tool> [json-args]
                       call an MCP tool on a running session (debug)
-  aish generate-psk    generate a random pre-shared key for MCP proxy auth
+  aish generate-psk   generate a pre-shared key for persistent proxy auth
+                      (avoids repeated approval prompts across proxy restarts)
   aish version
 `
 
-var version = "0.2.2-dev"
+var version = "0.3.0"
 
 func main() {
 	// Busybox-style dispatch: when invoked through the PATH shim symlink
@@ -398,11 +399,21 @@ func generatePSKMain() int {
 	psk := hex.EncodeToString(b)
 	fmt.Println(psk)
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Set this as the AISH_PSK environment variable in your MCP client's settings.")
-	fmt.Fprintln(os.Stderr, "The proxy will derive a stable identity from it, so sessions can recognize")
-	fmt.Fprintln(os.Stderr, "reconnects without re-prompting after proxy process restarts.")
+	fmt.Fprintln(os.Stderr, "Pass this key to the proxy via the AISH_PSK environment variable.")
+	fmt.Fprintln(os.Stderr, "The proxy derives a stable identity from it, allowing aish sessions to")
+	fmt.Fprintln(os.Stderr, "recognize reconnects without re-prompting after process restarts.")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Example (Amazon Quick MCP settings):")
-	fmt.Fprintf(os.Stderr, "  Environment variable: AISH_PSK=%s\n", psk)
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintf(os.Stderr, "  Direct:    AISH_PSK=%s aish mcp-proxy\n", psk)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Claude Code / Codex (~/.claude.json or similar):")
+	fmt.Fprintf(os.Stderr, "    \"env\": { \"AISH_PSK\": \"%s\" }\n", psk)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Amazon Quick (MCP settings dialog):")
+	fmt.Fprintf(os.Stderr, "    Arguments: -d Ubuntu -- env AISH_PSK=%s aish mcp-proxy\n", psk)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "First connection to a new session still prompts for approval (one time).")
+	fmt.Fprintln(os.Stderr, "Subsequent proxy restarts are recognized silently.")
 	return 0
 }

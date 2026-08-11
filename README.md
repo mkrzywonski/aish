@@ -260,11 +260,50 @@ The prompt names the connecting client from its MCP `clientInfo` — shown as
 `claude` or `codex` for the bundled TUIs, or the raw client name otherwise.
 Approvals are per client for the life of the AISH session. Reconnects use a
 challenge/response check so an already-approved client can reconnect without a
-new prompt. Client keys and grants are memory-only.
+new prompt. Client keys and grants are memory-only (or persisted to
+  tmpfs when PSK auth is used — see below).
 
 - `--no-auth`: never prompt for client approval.
 - `--auto-approve`: keep the handshake, but auto-answer prompts. Useful for testing.
 - `aish client`: treated as a client too, so it also goes through approval unless disabled.
+
+### Pre-shared key (PSK) authentication
+
+When the MCP host (Amazon Quick, an IDE, etc.) restarts the proxy process
+between uses, ephemeral client keys are lost and every reconnect triggers a
+new approval prompt. PSK auth solves this: the proxy derives a **deterministic**
+Ed25519 keypair from a shared secret, so the session recognizes it across
+restarts.
+
+```sh
+aish generate-psk          # prints a 32-byte random hex key
+```
+
+Pass the key to the proxy via the `AISH_PSK` environment variable:
+
+```sh
+AISH_PSK=<hex> aish mcp-proxy
+```
+
+The first connection to a new session still prompts for approval (you type
+`y` once). After that, the session persists the grant — keyed by the PSK-derived
+public key — to a file in its tmpfs session directory
+(`/run/user/$UID/aish/<session-id>/grants.json`). On the next proxy restart,
+the session recognizes the returning key and grants access silently.
+
+Security properties:
+
+- **Volatile storage.** The grants file lives on tmpfs. It is cleaned up when
+  the session exits and wiped at logout/reboot.
+- **Scoped.** Each session has its own grants; revoking one session does not
+  affect others.
+- **Revocable.** `Ctrl-]` → `k` (revoke) clears both in-memory and persisted
+  grants. The next connection will prompt again.
+- **Unknown clients still prompt.** A proxy without the PSK (or with a
+  different PSK) generates a random ephemeral key and gets the normal
+  interactive prompt.
+- **The PSK never touches the Linux filesystem.** It lives in the MCP client's
+  configuration (Windows-side for Quick, `~/.claude.json` for Claude Code, etc.).
 
 ### Out-of-band operation authorization
 
