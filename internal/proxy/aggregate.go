@@ -69,11 +69,23 @@ const serverInstructions = "Aish gives you access to human-owned shared terminal
 	"first substantial or destructive operation. The user approves each session on its own terminal."
 
 // Serve runs the aggregating proxy over stdio until the client disconnects.
-func Serve(version string) int {
-	identity, err := clientauth.New()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "aish mcp-proxy: generating client identity:", err)
-		return 1
+// If psk is non-nil, the proxy derives a deterministic identity from it so
+// sessions can recognize reconnects without re-prompting.
+func Serve(version string, psk []byte) int {
+	var identity *clientauth.Identity
+	var err error
+	if len(psk) > 0 {
+		identity, err = clientauth.FromPSK(psk)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "aish mcp-proxy: deriving identity from PSK:", err)
+			return 1
+		}
+	} else {
+		identity, err = clientauth.New()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "aish mcp-proxy: generating client identity:", err)
+			return 1
+		}
 	}
 	p := &aggProxy{
 		client:    mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),

@@ -6,6 +6,7 @@
 package proxy
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -146,10 +147,23 @@ func ping(sock string) error {
 	return nil
 }
 
-// Main runs the aggregating MCP proxy over stdio. It no longer binds to a
-// single session; it presents one durable endpoint and routes each tool call
-// to the session named in its `session` argument. `--session` is accepted for
-// backward compatibility but ignored (routing is per-call now).
+// Main runs the aggregating MCP proxy over stdio. It reads an optional PSK
+// from the AISH_PSK environment variable (hex-encoded, at least 16 bytes).
+// When set, the proxy derives a deterministic identity from the PSK so the
+// session can recognize reconnects without re-prompting.
 func Main(version string, args []string) int {
-	return Serve(version)
+	var psk []byte
+	if pskHex := os.Getenv("AISH_PSK"); pskHex != "" {
+		var err error
+		psk, err = hex.DecodeString(pskHex)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "aish mcp-proxy: AISH_PSK is not valid hex: %v\n", err)
+			return 1
+		}
+		if len(psk) < 16 {
+			fmt.Fprintln(os.Stderr, "aish mcp-proxy: AISH_PSK must be at least 16 bytes (32 hex chars)")
+			return 1
+		}
+	}
+	return Serve(version, psk)
 }

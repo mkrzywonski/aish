@@ -5,14 +5,18 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ai-ssh/internal/authproto"
+	"ai-ssh/internal/paths"
 )
 
 const (
@@ -86,6 +90,8 @@ func (c *Core) Revoke() int {
 	for _, ss := range sessions {
 		_ = ss.Close()
 	}
+	// Also clear persisted grants so revoked clients must re-approve.
+	c.clearPersistedGrants()
 	return len(sessions)
 }
 
@@ -139,6 +145,18 @@ func (c *Core) requestAccess(ctx context.Context, req *mcp.CallToolRequest, args
 		return nil, authproto.RequestAccessResult{GrantID: st.grantID}, nil
 	}
 
+	// Check if this public key has a persisted grant from a prior approval.
+	// This allows PSK-based proxies to reconnect without re-prompting after
+	// process restart, as long as the session is still alive.
+	if grantID, ok := c.lookupPersistedGrant(key); ok {
+		c.authMu.Lock()
+		c.grants[grantID] = clientGrant{publicKey: key, clientName: clientName(req.Session)}
+		c.authMu.Unlock()
+		st.grantID = grantID
+		c.Sess.Notify("recognized previously-approved client %s", approvalSubject(args.ClientDescription, st.peer))
+		return nil, authproto.RequestAccessResult{GrantID: grantID}, nil
+	}
+
 	name := clientName(req.Session)
 	declared := args.ClientDescription
 	if declared == "" {
@@ -177,6 +195,11 @@ func (c *Core) requestAccess(ctx context.Context, req *mcp.CallToolRequest, args
 	c.grants[grantID] = clientGrant{publicKey: key, clientName: name}
 	c.authMu.Unlock()
 	st.grantID = grantID
+
+	// Persist the grant so the same public key (PSK-derived or otherwise) can
+	// reconnect without prompting after the proxy process restarts.
+	c.persistGrant(grantID, key)
+
 	return nil, authproto.RequestAccessResult{GrantID: grantID}, nil
 }
 
@@ -287,4 +310,79 @@ func randomID(bytes int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// --- Grant persistence (volatile, tmpfs) ---
+//
+// Grants are persisted to the session's runtime directory on tmpfs
+// (e.g., /run/user/1000/aish/<session-id>/grants.json). This file is:
+//   - Volatile: wiped on reboot/logout (tmpfs) and explicitly cleaned by
+//     os.RemoveAll(sessionDir) when the session exits.
+//   - Scoped: each session has its own grants; a revoked session clears its own file.
+//   - Keyed by public key: a PSK-derived proxy always presents the same key,
+//     so the session recognizes it without prompting again.
+
+type persistedGrant struct {
+	GrantID   string `json:"grant_id"`
+	PublicKey string `json:"public_key"` // base64url-encoded
+}
+
+func (c *Core) grantsFilePath() string {
+	return filepath.Join(paths.SessionDir(c.Sess.ID), "grants.json")
+}
+
+func (c *Core) loadPersistedGrants() []persistedGrant {
+	b, err := os.ReadFile(c.grantsFilePath())
+	if err != nil {
+		return nil
+	}
+	var grants []persistedGrant
+	if json.Unmarshal(b, &grants) != nil {
+		return nil
+	}
+	return grants
+}
+
+func (c *Core) savePersistedGrants(grants []persistedGrant) {
+	b, err := json.Marshal(grants)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(c.grantsFilePath(), b, 0o600)
+}
+
+// persistGrant saves a grant keyed by public key to the session's tmpfs dir.
+func (c *Core) persistGrant(grantID string, key ed25519.PublicKey) {
+	encoded := base64.RawURLEncoding.EncodeToString(key)
+	grants := c.loadPersistedGrants()
+	// Replace existing entry for this key, or append.
+	found := false
+	for i, g := range grants {
+		if g.PublicKey == encoded {
+			grants[i].GrantID = grantID
+			found = true
+			break
+		}
+	}
+	if !found {
+		grants = append(grants, persistedGrant{GrantID: grantID, PublicKey: encoded})
+	}
+	c.savePersistedGrants(grants)
+}
+
+// lookupPersistedGrant checks if the given public key has been previously
+// approved and persisted. Returns the grant ID and true if found.
+func (c *Core) lookupPersistedGrant(key ed25519.PublicKey) (string, bool) {
+	encoded := base64.RawURLEncoding.EncodeToString(key)
+	for _, g := range c.loadPersistedGrants() {
+		if g.PublicKey == encoded {
+			return g.GrantID, true
+		}
+	}
+	return "", false
+}
+
+// clearPersistedGrants removes the grants file (called on Revoke).
+func (c *Core) clearPersistedGrants() {
+	_ = os.Remove(c.grantsFilePath())
 }

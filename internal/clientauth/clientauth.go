@@ -6,11 +6,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
+
+	"golang.org/x/crypto/hkdf"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -19,7 +23,9 @@ import (
 
 // Identity is one logical aish client. Its private key and grants are kept in
 // memory only; restarting the client creates a new identity that must be
-// approved again.
+// approved again — unless it was created with FromPSK, in which case the same
+// pre-shared key always derives the same keypair, allowing session-side grant
+// persistence to skip re-approval.
 type Identity struct {
 	mu      sync.Mutex
 	private ed25519.PrivateKey
@@ -27,11 +33,36 @@ type Identity struct {
 	grants  map[string]string // target session id -> grant id
 }
 
+// New generates a random ephemeral identity. Restarting the process creates a
+// new identity that must be interactively approved again.
 func New() (*Identity, error) {
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
+	return &Identity{
+		private: private,
+		public:  base64.RawURLEncoding.EncodeToString(public),
+		grants:  map[string]string{},
+	}, nil
+}
+
+// FromPSK derives a deterministic identity from a pre-shared key. Every proxy
+// started with the same PSK produces the same public key, allowing session-side
+// grant persistence to recognize the client without interactive re-approval.
+// The PSK should be at least 16 bytes of cryptographically random material.
+func FromPSK(psk []byte) (*Identity, error) {
+	if len(psk) < 16 {
+		return nil, errors.New("PSK must be at least 16 bytes")
+	}
+	// HKDF-SHA256: derive a 32-byte Ed25519 seed from the PSK.
+	r := hkdf.New(sha256.New, psk, []byte("aish-psk-v1"), nil)
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := io.ReadFull(r, seed); err != nil {
+		return nil, fmt.Errorf("deriving key from PSK: %w", err)
+	}
+	private := ed25519.NewKeyFromSeed(seed)
+	public := private.Public().(ed25519.PublicKey)
 	return &Identity{
 		private: private,
 		public:  base64.RawURLEncoding.EncodeToString(public),

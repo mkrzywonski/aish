@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -48,6 +50,7 @@ Usage:
   aish mcp-proxy      stdio<->socket MCP proxy for AI agents (run by the TUI)
   aish client [--session <id|name>] <tool> [json-args]
                       call an MCP tool on a running session (debug)
+  aish generate-psk    generate a random pre-shared key for MCP proxy auth
   aish version
 `
 
@@ -80,6 +83,8 @@ func main() {
 		os.Exit(proxy.Main(version, args))
 	case "client":
 		os.Exit(debugcli.Main(version, args))
+	case "generate-psk":
+		os.Exit(generatePSKMain())
 	case "version":
 		fmt.Println("aish", version)
 	case "help", "-h", "--help":
@@ -382,4 +387,22 @@ func sweepStaleSessions() {
 		}
 		os.RemoveAll(paths.SessionDir(e.Name()))
 	}
+}
+
+func generatePSKMain() int {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		fmt.Fprintln(os.Stderr, "aish: generating PSK:", err)
+		return 1
+	}
+	psk := hex.EncodeToString(b)
+	fmt.Println(psk)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Set this as the AISH_PSK environment variable in your MCP client's settings.")
+	fmt.Fprintln(os.Stderr, "The proxy will derive a stable identity from it, so sessions can recognize")
+	fmt.Fprintln(os.Stderr, "reconnects without re-prompting after proxy process restarts.")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Example (Amazon Quick MCP settings):")
+	fmt.Fprintf(os.Stderr, "  Environment variable: AISH_PSK=%s\n", psk)
+	return 0
 }
