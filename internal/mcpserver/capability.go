@@ -100,8 +100,8 @@ func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
 	}
 
 	missing := "a POSIX shell"
-	if f.Shell.Dialect != sshmux.DialectUnknown {
-		missing = fmt.Sprintf("a POSIX shell (this host presents %s)", f.Shell.Dialect.Human())
+	if identity := f.Identity.DialectFact(); identity.Dialect != sshmux.DialectUnknown {
+		missing = fmt.Sprintf("a POSIX shell (this host presents %s)", identity.Dialect.Human())
 	}
 	detail := f.Shell.Reason
 	if detail != "" {
@@ -155,7 +155,7 @@ func (c *Core) remoteDialect(rt route) sshmux.Dialect {
 	if !ok {
 		return sshmux.DialectUnknown
 	}
-	return f.Shell.Dialect
+	return f.Identity.DialectFact().Dialect
 }
 
 func capabilityAvailability(caps sshmux.Capabilities) map[string]toolAvail {

@@ -385,20 +385,22 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 
 type probeHostArgs struct {
 	SessionArg
-	Force bool `json:"force,omitempty" jsonschema:"discard what aish already knows about this host and probe again; needed when the remote's login shell has changed, since a host that conclusively failed is otherwise never re-probed"`
+	Force bool `json:"force,omitempty" jsonschema:"discard the cached persistent-shell probe and run it again; needed when the remote's login shell has changed, since a host that conclusively failed is otherwise never re-probed"`
 }
 
 type probeHostResult struct {
-	Via              string               `json:"via"`  // local | controlmaster | in_band
-	Host             string               `json:"host"` // where OOB ops land
-	Probed           bool                 `json:"probed"`
-	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
-	RemoteDialect    string               `json:"remote_dialect,omitempty"`
-	RemotePlatform   string               `json:"remote_platform,omitempty"`
-	ProbeAttempts    int                  `json:"probe_attempts,omitempty"`
-	OobTools         map[string]toolAvail `json:"oob_tools"`
-	TargetConfidence string               `json:"target_confidence"`
-	Note             string               `json:"note,omitempty"`
+	Via                  string               `json:"via"`  // local | controlmaster | in_band
+	Host                 string               `json:"host"` // where OOB ops land
+	Probed               bool                 `json:"probed"`
+	RemoteHost           *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
+	RemoteDialect        string               `json:"remote_dialect,omitempty"`
+	RemotePlatform       string               `json:"remote_platform,omitempty"`
+	RemoteDialectSource  string               `json:"remote_dialect_source,omitempty"`
+	RemotePlatformSource string               `json:"remote_platform_source,omitempty"`
+	ProbeAttempts        int                  `json:"probe_attempts,omitempty"`
+	OobTools             map[string]toolAvail `json:"oob_tools"`
+	TargetConfidence     string               `json:"target_confidence"`
+	Note                 string               `json:"note,omitempty"`
 }
 
 // probeHost is the explicit "reset button": it forces the capability probe on
@@ -416,14 +418,15 @@ type probeHostResult struct {
 //     error — this is the discovery tool, so describing the host is more useful
 //     than refusing. The consent prompt is skipped too: there is no point
 //     asking for invisible access just to report that it cannot be used.
-//   - force=true discards those facts first. Until now the docstring claimed
-//     "reset button" while EnsureProbed short-circuited on cache, so it reset
-//     nothing.
+//   - force=true discards the shell probe and shell-derived identity first.
+//     Independently learned identity survives this scoped reset. Until now the
+//     docstring claimed "reset button" while EnsureProbed short-circuited on
+//     cache, so it reset nothing.
 func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args probeHostArgs) (*mcp.CallToolResult, probeHostResult, error) {
 	// Non-prompting look first: capability() never asks the user for OOB consent.
 	if cap := c.capability(); cap.via == "controlmaster" {
 		if args.Force {
-			c.Mux.ForgetFacts(cap.ci)
+			c.Mux.ForgetShellFacts(cap.ci)
 		} else if f, ok := c.Mux.Facts(cap.ci); ok && f.ShellBlocked() {
 			return nil, c.blockedProbeResult(cap, f), nil
 		}
@@ -447,6 +450,16 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 		res.RemoteDialect = string(sshmux.DialectPosix)
 		res.RemotePlatform = sshmux.DialectPosix.Platform()
 		if f, ok := c.Mux.Facts(rt.ci); ok {
+			dialect := f.Identity.DialectFact()
+			platform := f.Identity.PlatformFact()
+			if dialect.Dialect != sshmux.DialectUnknown {
+				res.RemoteDialect = string(dialect.Dialect)
+				res.RemoteDialectSource = string(dialect.Source)
+			}
+			if platform.Platform != "" {
+				res.RemotePlatform = platform.Platform
+				res.RemotePlatformSource = string(platform.Source)
+			}
 			res.ProbeAttempts = f.Shell.Attempts
 		}
 	case "local":
@@ -462,15 +475,19 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 // blockedProbeResult describes a host whose shell axis is known bad, without
 // opening a channel.
 func (c *Core) blockedProbeResult(rt route, f sshmux.HostFacts) probeHostResult {
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
 	res := probeHostResult{
-		Via:            rt.via,
-		Host:           rt.host,
-		Probed:         false,
-		RemoteDialect:  string(f.Shell.Dialect),
-		RemotePlatform: f.Shell.Dialect.Platform(),
-		ProbeAttempts:  f.Shell.Attempts,
-		Note:           f.Note(),
-		OobTools:       availability(f),
+		Via:                  rt.via,
+		Host:                 rt.host,
+		Probed:               false,
+		RemoteDialect:        string(dialect.Dialect),
+		RemotePlatform:       platform.Platform,
+		RemoteDialectSource:  string(dialect.Source),
+		RemotePlatformSource: string(platform.Source),
+		ProbeAttempts:        f.Shell.Attempts,
+		Note:                 f.Note(),
+		OobTools:             availability(f),
 	}
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
 	return res

@@ -43,6 +43,67 @@ a81c19c  framing, read_output: consume the linearizer; bump to 0.4.0
 
 ---
 
+## Active work
+
+Branch: `b-identity-facts`
+
+Branch point: `af3a40f` (`main`)
+
+Objective: separate authoritative target identity from persistent-shell
+capability without changing phase-1 probe, availability, or retry behavior.
+
+### Status
+
+Checkpoint complete and ready for review/merge.
+
+### Completed
+
+- Removed dialect identity from `ShellAxis`; shell state now contains only
+  persistent-channel capability, failure details, attempts, caps, and probe time.
+- Added source-specific authoritative identity records for `shell_probe`,
+  `deep_probe`, and future `sftp` evidence.
+- Added deterministic independent selection: deep evidence wins for dialect;
+  SFTP wins for platform; lower-priority observations remain available.
+- Added `NoteIdentity`, which cannot mutate shell capability.
+- Changed `probe_host{force:true}` to reset shell facts and shell-derived
+  identity only.
+- Migrated status, availability, host tracking, and probe responses to the new
+  identity model.
+- Added `remote_platform_source`; authoritative phase-1 status now reports
+  `shell_probe` rather than generic `probe`.
+
+### Changed files
+
+`internal/sshmux/facts.go`, `internal/sshmux/facts_test.go`,
+`internal/mcpserver/capability.go`, `internal/mcpserver/capability_test.go`,
+`internal/mcpserver/tools.go`, `internal/mcpserver/tools_remote.go`, `CLAUDE.md`,
+and `windows-targets-plan.md`.
+
+### Verification
+
+```text
+go test ./...                                      PASS
+go vet ./...                                       PASS
+go test -race ./internal/sshmux ./internal/mcpserver  PASS
+git diff --check                                   PASS
+```
+
+### Remaining
+
+No live-host validation is required for this behavior-preserving data-model
+checkpoint. Passive screen detection remains unimplemented.
+
+### Exact next step
+
+Review and merge `b-identity-facts`, then branch `b-screen-hints` from updated
+`main` and implement the pure advisory screen classifier.
+
+### Blockers or uncertainties
+
+None.
+
+---
+
 ## Next work: finish B
 
 Start the next implementation branch from the updated `main`. A suitable name

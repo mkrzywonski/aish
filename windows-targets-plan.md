@@ -178,11 +178,18 @@ attempt costing a channel open and, on an MFA host, a push.
 ### Data model
 
 A `HostFacts` record on `Mux`, keyed by `ci.Sock` (already deterministic per ssh
-target), holding a `ShellAxis` with `AxisUnknown | AxisUp | AxisDown`, a
-`Dialect`, the matched evidence, and an attempt count. Critically it **outlives
-the channel that produced it**. Capabilities move here too, which also fixes a
-live bug where positive caps die on a channel timeout and silently regress
-`target_confidence` from `same` back to `unknown`.
+target), holding a `ShellAxis` with `AxisUnknown | AxisUp | AxisDown`, matched
+failure evidence, and an attempt count. Critically it **outlives the channel
+that produced it**. Capabilities move here too, which also fixes a live bug where
+positive caps die on a channel timeout and silently regress `target_confidence`
+from `same` back to `unknown`.
+
+Dialect and platform identity are independent facts beside `ShellAxis`, each
+carrying its source, evidence, and observation time. This separation is
+load-bearing for phases 2-3 and C: an active identity probe can identify cmd.exe
+without proving whether `sh -s` works, while SFTP can identify Windows without
+identifying cmd.exe versus PowerShell. A forced shell retry clears only the
+shell axis and shell-derived identity; independently learned identity survives.
 
 Its own mutex, separate from `chMu` — `session_status` reads facts on every call
 and must never block behind `openChannel`'s `cmd.Start()`, which runs under
@@ -198,7 +205,7 @@ two MFA pushes before requiring an explicit force.
 
 | Tier | Cost | Signal | Phase |
 |---|---|---|---|
-| **0 — passive screen** | Free. No channel, no grant, no round trip. | Fingerprint the visible screen: `Microsoft Windows [Version`, `PS C:\…>`, `C:\…>`. One strong or two weak hits. **Advisory only** — may suppress a claim, never enable one. | 2 |
+| **0 — passive screen** | Free. No channel, no grant, no round trip. | Fingerprint the visible screen: `Microsoft Windows [Version`, `PS C:\…>`, `C:\…>`. One strong or two weak hits. **Advisory only** — annotates status and never changes availability. | 2 |
 | **A — stderr fingerprint** | Nothing beyond the channel open already paid for. | Pipe `cmd.Stderr` (currently wired to the null device), keep the `out` buffer on failure, classify against the exact strings above. **The workhorse** — fully covers the observed case. | 1 |
 | **B — active polyglot** | A second session on the master; may cost an MFA push. | `echo AISHDIALECT %OS% %COMSPEC% $SHELL` behind `probe_host{deep:true}`. Never implicit. | 3 |
 
@@ -206,9 +213,10 @@ two MFA pushes before requiring an explicit force.
 
 `session_status` stays a pure cache reader that never opens a channel. It gains
 `remote_dialect`, `remote_platform`, and — load-bearing —
-`remote_dialect_source`, distinguishing an authoritative `probe` result from an
-advisory `screen` guess. A passive guess must never stop the AI trying; an
-authoritative one must.
+`remote_dialect_source`, distinguishing authoritative `shell_probe` and
+`deep_probe` results from an advisory `screen` guess. Platform has its own source
+because SFTP may establish it independently. A passive guess must never stop the
+AI trying; an authoritative shell-capability result must.
 
 A classified non-POSIX host flips from `unknown` to `unavailable`, and its detail
 text stops saying "call probe_host to initialize". This sits squarely inside the

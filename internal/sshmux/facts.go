@@ -52,19 +52,74 @@ func (s AxisState) String() string {
 // serve file operations on a host whose login shell is cmd.exe.
 type ShellAxis struct {
 	State    AxisState
-	Dialect  Dialect
 	Reason   string // model-facing explanation; set when State == AxisDown
 	Evidence string // the matched remote output, trimmed to one line
 	Sticky   bool   // true => never retry; the conclusion is a host property
 	Attempts int
 	Caps     Capabilities // meaningful only when State == AxisUp
+	ProbedAt time.Time
+}
+
+// IdentitySource names how an authoritative target identity was learned.
+// Passive screen hints deliberately do not belong here: they are ephemeral,
+// advisory observations owned by the status layer and must never become durable
+// transport facts.
+type IdentitySource string
+
+const (
+	IdentitySourceShellProbe IdentitySource = "shell_probe"
+	IdentitySourceDeepProbe  IdentitySource = "deep_probe"
+	IdentitySourceSFTP       IdentitySource = "sftp"
+)
+
+// IdentityFact is one source's observation. Dialect and platform are selected
+// independently from the source records because SFTP can establish Windows
+// structurally without distinguishing cmd.exe from PowerShell.
+type IdentityFact struct {
+	Dialect    Dialect
+	Platform   string
+	Source     IdentitySource
+	Evidence   string
+	ObservedAt time.Time
+}
+
+// IdentityFacts retains every authoritative observation rather than only the
+// currently selected value. That makes precedence independent of call order and
+// leaves conflicting evidence available for diagnostics.
+type IdentityFacts struct {
+	ShellProbe IdentityFact
+	DeepProbe  IdentityFact
+	SFTP       IdentityFact
+}
+
+// DialectFact returns the most specific authoritative dialect observation.
+// The active probe identifies login-shell grammar directly; the shell probe
+// only proves that `sh -s` ran (or classifies why it did not).
+func (f IdentityFacts) DialectFact() IdentityFact {
+	for _, candidate := range []IdentityFact{f.DeepProbe, f.ShellProbe, f.SFTP} {
+		if candidate.Dialect != DialectUnknown {
+			return candidate
+		}
+	}
+	return IdentityFact{}
+}
+
+// PlatformFact prefers SFTP's structural path evidence, then the explicit deep
+// probe, then the platform inferred by the ordinary shell probe.
+func (f IdentityFacts) PlatformFact() IdentityFact {
+	for _, candidate := range []IdentityFact{f.SFTP, f.DeepProbe, f.ShellProbe} {
+		if candidate.Platform != "" {
+			return candidate
+		}
+	}
+	return IdentityFact{}
 }
 
 // HostFacts is what aish has learned about one ssh target.
 type HostFacts struct {
 	Sock, Host, User, Port string
 	Shell                  ShellAxis
-	ProbedAt               time.Time
+	Identity               IdentityFacts
 }
 
 // maxSoftAttempts is how many times an UNCLASSIFIED failure is retried before
@@ -106,8 +161,8 @@ func (f HostFacts) Note() string {
 	if f.Shell.Evidence != "" {
 		msg += fmt.Sprintf(" (it answered %q)", f.Shell.Evidence)
 	}
-	if !f.ProbedAt.IsZero() {
-		msg += fmt.Sprintf("; probed %s ago", roundDur(time.Since(f.ProbedAt)))
+	if !f.Shell.ProbedAt.IsZero() {
+		msg += fmt.Sprintf("; probed %s ago", roundDur(time.Since(f.Shell.ProbedAt)))
 	}
 	// The advice differs by kind of failure, and getting this wrong is how a
 	// model ends up doing the useless thing: a sticky host needs force=true to
@@ -160,8 +215,8 @@ func (m *Mux) Facts(ci *ConnInfo) (HostFacts, bool) {
 	return *f, true
 }
 
-// ForgetFacts discards what is known about ci, so the next operation probes
-// again. This is what probe_host{force:true} calls — the explicit reset.
+// ForgetFacts discards the entire target record. Normal forced shell probing
+// uses ForgetShellFacts so independently learned identity can survive.
 func (m *Mux) ForgetFacts(ci *ConnInfo) {
 	if ci == nil || ci.Sock == "" {
 		return
@@ -169,6 +224,24 @@ func (m *Mux) ForgetFacts(ci *ConnInfo) {
 	m.factsMu.Lock()
 	delete(m.facts, ci.Sock)
 	m.factsMu.Unlock()
+}
+
+// ForgetShellFacts resets only conclusions produced by the persistent-shell
+// probe. Identity learned independently by an explicit deep probe or by SFTP
+// must survive force=true, which means "retry sh -s", not "forget everything
+// known about this target".
+func (m *Mux) ForgetShellFacts(ci *ConnInfo) {
+	if ci == nil || ci.Sock == "" {
+		return
+	}
+	m.factsMu.Lock()
+	defer m.factsMu.Unlock()
+	f := m.facts[ci.Sock]
+	if f == nil {
+		return
+	}
+	f.Shell = ShellAxis{}
+	f.Identity.ShellProbe = IdentityFact{}
 }
 
 // factsFor returns the mutable record for ci, creating it on first use.
@@ -190,8 +263,10 @@ func (m *Mux) NoteShellUsable(ci *ConnInfo, caps Capabilities) {
 	m.factsMu.Lock()
 	defer m.factsMu.Unlock()
 	f := m.factsForLocked(ci)
-	f.Shell = ShellAxis{State: AxisUp, Dialect: DialectPosix, Caps: caps, Attempts: f.Shell.Attempts + 1}
-	f.ProbedAt = time.Now()
+	now := time.Now()
+	f.Shell = ShellAxis{State: AxisUp, Caps: caps, Attempts: f.Shell.Attempts + 1, ProbedAt: now}
+	f.noteIdentityLocked(DialectPosix, DialectPosix.Platform(), IdentitySourceShellProbe,
+		"the POSIX capability probe completed", now)
 }
 
 // NoteShellUnusable records a failed probe. A classified failure is sticky
@@ -217,12 +292,40 @@ func (m *Mux) NoteShellUnusable(ci *ConnInfo, d Dialect, reason, evidence string
 	}
 	f.Shell = ShellAxis{
 		State:    AxisDown,
-		Dialect:  d,
 		Reason:   reason,
 		Evidence: evidence,
 		Sticky:   sticky,
 		Attempts: attempts,
+		ProbedAt: time.Now(),
 	}
-	f.ProbedAt = time.Now()
+	if d != DialectUnknown {
+		f.noteIdentityLocked(d, d.Platform(), IdentitySourceShellProbe, evidence, f.Shell.ProbedAt)
+	}
 	return *f
+}
+
+// NoteIdentity records authoritative identity evidence without changing any
+// transport axis. The deep probe and SFTP workstreams use this path so learning
+// what a target is cannot accidentally claim that `sh -s` works there.
+func (m *Mux) NoteIdentity(ci *ConnInfo, d Dialect, platform string, source IdentitySource, evidence string) HostFacts {
+	if ci == nil || ci.Sock == "" {
+		return HostFacts{}
+	}
+	m.factsMu.Lock()
+	defer m.factsMu.Unlock()
+	f := m.factsForLocked(ci)
+	f.noteIdentityLocked(d, platform, source, evidence, time.Now())
+	return *f
+}
+
+func (f *HostFacts) noteIdentityLocked(d Dialect, platform string, source IdentitySource, evidence string, observedAt time.Time) {
+	fact := IdentityFact{Dialect: d, Platform: platform, Source: source, Evidence: evidence, ObservedAt: observedAt}
+	switch source {
+	case IdentitySourceShellProbe:
+		f.Identity.ShellProbe = fact
+	case IdentitySourceDeepProbe:
+		f.Identity.DeepProbe = fact
+	case IdentitySourceSFTP:
+		f.Identity.SFTP = fact
+	}
 }

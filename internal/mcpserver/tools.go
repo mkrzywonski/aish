@@ -308,23 +308,24 @@ type sessionStatusResult struct {
 	OOBUser string `json:"oob_user,omitempty"`
 	// RemoteDialect names what the far end's ssh login shell actually is
 	// (posix / cmd / powershell / network_os / restricted / no_shell), learned
-	// from the capability probe. RemoteDialectSource is load-bearing: "probe" is
-	// channel-derived and authoritative, so an AI should stop trying OOB tools;
-	// a merely advisory source must never have that effect.
-	RemoteDialect       string            `json:"remote_dialect,omitempty"`
-	RemotePlatform      string            `json:"remote_platform,omitempty"`
-	RemoteDialectSource string            `json:"remote_dialect_source,omitempty"`
-	ProbeAttempts       int               `json:"probe_attempts,omitempty"`
-	OobNote             string            `json:"oob_note,omitempty"`
-	Cwd                 string            `json:"cwd,omitempty"`
-	PromptReady         bool              `json:"prompt_ready"`
-	EchoOff             bool              `json:"echo_off"`
-	Foreground          *state.Foreground `json:"foreground,omitempty"`
-	Rows                int               `json:"rows"`
-	Cols                int               `json:"cols"`
-	AltScreen           bool              `json:"alt_screen"`
-	LastOutputMs        int64             `json:"last_output_ms_ago"`
-	Ended               bool              `json:"ended"`
+	// from authoritative identity evidence or an advisory screen hint.
+	// RemoteDialectSource is load-bearing: shell_probe/deep_probe are
+	// authoritative, while screen must never change tool availability.
+	RemoteDialect        string            `json:"remote_dialect,omitempty"`
+	RemotePlatform       string            `json:"remote_platform,omitempty"`
+	RemoteDialectSource  string            `json:"remote_dialect_source,omitempty"`
+	RemotePlatformSource string            `json:"remote_platform_source,omitempty"`
+	ProbeAttempts        int               `json:"probe_attempts,omitempty"`
+	OobNote              string            `json:"oob_note,omitempty"`
+	Cwd                  string            `json:"cwd,omitempty"`
+	PromptReady          bool              `json:"prompt_ready"`
+	EchoOff              bool              `json:"echo_off"`
+	Foreground           *state.Foreground `json:"foreground,omitempty"`
+	Rows                 int               `json:"rows"`
+	Cols                 int               `json:"cols"`
+	AltScreen            bool              `json:"alt_screen"`
+	LastOutputMs         int64             `json:"last_output_ms_ago"`
+	Ended                bool              `json:"ended"`
 }
 
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
@@ -367,10 +368,13 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	// a host whose probe failed reports what it IS rather than reverting to
 	// "unknown, call probe_host" forever. Reading facts never opens a channel.
 	if f, ok := c.Mux.Facts(rt.ci); ok {
-		if f.Shell.Dialect != sshmux.DialectUnknown {
-			res.RemoteDialect = string(f.Shell.Dialect)
-			res.RemotePlatform = f.Shell.Dialect.Platform()
-			res.RemoteDialectSource = "probe"
+		if identity := f.Identity.DialectFact(); identity.Dialect != sshmux.DialectUnknown {
+			res.RemoteDialect = string(identity.Dialect)
+			res.RemoteDialectSource = string(identity.Source)
+		}
+		if identity := f.Identity.PlatformFact(); identity.Platform != "" {
+			res.RemotePlatform = identity.Platform
+			res.RemotePlatformSource = string(identity.Source)
 		}
 		res.ProbeAttempts = f.Shell.Attempts
 		res.OobNote = f.Note()

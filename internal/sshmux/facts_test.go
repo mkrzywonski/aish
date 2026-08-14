@@ -41,6 +41,18 @@ func TestFactsOutliveTheChannel(t *testing.T) {
 	if caps.Hostname != "buildbox" {
 		t.Errorf("hostname = %q, want %q", caps.Hostname, "buildbox")
 	}
+	f, _ := m.Facts(ci)
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
+	if dialect.Dialect != DialectPosix || dialect.Source != IdentitySourceShellProbe {
+		t.Errorf("successful shell identity = %+v, want POSIX from shell_probe", dialect)
+	}
+	if platform.Platform != "unix" || platform.Source != IdentitySourceShellProbe {
+		t.Errorf("successful shell platform = %+v, want unix from shell_probe", platform)
+	}
+	if f.Shell.ProbedAt.IsZero() || dialect.ObservedAt.IsZero() || platform.ObservedAt.IsZero() {
+		t.Error("successful probe should timestamp shell, dialect, and platform facts")
+	}
 }
 
 func TestFactsKeyedBySock(t *testing.T) {
@@ -55,7 +67,7 @@ func TestFactsKeyedBySock(t *testing.T) {
 		t.Error("first target's facts were disturbed by the second")
 	}
 	f, ok := m.Facts(b)
-	if !ok || f.Shell.Dialect != DialectCmd {
+	if !ok || f.Identity.DialectFact().Dialect != DialectCmd {
 		t.Error("second target did not record its own dialect")
 	}
 	if _, ok := m.CachedCapabilities(b); ok {
@@ -98,9 +110,17 @@ func TestClassifiedFailureIsStickyImmediately(t *testing.T) {
 	if f.Shell.Attempts != 1 {
 		t.Errorf("attempts = %d, want 1", f.Shell.Attempts)
 	}
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
+	if dialect.Dialect != DialectCmd || dialect.Source != IdentitySourceShellProbe {
+		t.Errorf("dialect = %+v, want cmd from shell_probe", dialect)
+	}
+	if platform.Platform != "windows" || platform.Source != IdentitySourceShellProbe {
+		t.Errorf("platform = %+v, want windows from shell_probe", platform)
+	}
 }
 
-func TestForgetFactsAllowsRetry(t *testing.T) {
+func TestForgetFactsClearsEntireRecord(t *testing.T) {
 	m := New(t.TempDir())
 	ci := testConn()
 	m.NoteShellUnusable(ci, DialectCmd, "cmd.exe", "'sh' is not recognized", true)
@@ -108,10 +128,113 @@ func TestForgetFactsAllowsRetry(t *testing.T) {
 		t.Fatal("precondition: host should be blocked")
 	}
 
-	m.ForgetFacts(ci) // what probe_host{force:true} does
+	m.ForgetFacts(ci)
 
 	if _, ok := m.Facts(ci); ok {
 		t.Error("ForgetFacts should clear the record entirely")
+	}
+}
+
+func TestNoteIdentityDoesNotChangeShellCapability(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+	m.NoteShellUsable(ci, Capabilities{Hostname: "buildbox", HasBase64: true})
+	before, _ := m.Facts(ci)
+
+	f := m.NoteIdentity(ci, DialectPowerShell, "windows", IdentitySourceDeepProbe, "PSOS=Windows_NT")
+
+	if f.Shell.State != before.Shell.State || f.Shell.Attempts != before.Shell.Attempts || f.Shell.Caps != before.Shell.Caps {
+		t.Errorf("identity observation changed shell capability:\nbefore=%+v\nafter=%+v", before.Shell, f.Shell)
+	}
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
+	if dialect.Dialect != DialectPowerShell || dialect.Source != IdentitySourceDeepProbe {
+		t.Errorf("dialect = %+v, want PowerShell from deep_probe", dialect)
+	}
+	if platform.Platform != "windows" || platform.Source != IdentitySourceDeepProbe {
+		t.Errorf("platform = %+v, want windows from deep_probe", platform)
+	}
+}
+
+func TestIdentitySelectionIsIndependentOfObservationOrder(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+	m.NoteIdentity(ci, DialectCmd, "windows", IdentitySourceDeepProbe, "PCTOS=Windows_NT")
+	m.NoteShellUsable(ci, Capabilities{Hostname: "buildbox"})
+	m.NoteIdentity(ci, DialectUnknown, "windows", IdentitySourceSFTP, "/C:/Users/mk31")
+
+	f, _ := m.Facts(ci)
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
+	if dialect.Dialect != DialectCmd || dialect.Source != IdentitySourceDeepProbe {
+		t.Errorf("dialect precedence = %+v, want cmd from deep_probe", dialect)
+	}
+	if platform.Platform != "windows" || platform.Source != IdentitySourceSFTP {
+		t.Errorf("platform precedence = %+v, want windows from sftp", platform)
+	}
+	if f.Identity.ShellProbe.Dialect != DialectPosix {
+		t.Errorf("lower-priority shell evidence was discarded: %+v", f.Identity.ShellProbe)
+	}
+}
+
+func TestUnknownShellFailurePreservesIndependentIdentity(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+	m.NoteIdentity(ci, DialectCmd, "windows", IdentitySourceDeepProbe, "PCTOS=Windows_NT")
+
+	f := m.NoteShellUnusable(ci, DialectUnknown, "channel timed out", "", false)
+
+	if f.Shell.State != AxisDown {
+		t.Errorf("shell state = %s, want down", f.Shell.State)
+	}
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
+	if dialect.Dialect != DialectCmd || dialect.Source != IdentitySourceDeepProbe {
+		t.Errorf("unknown shell failure overwrote dialect: %+v", dialect)
+	}
+	if platform.Platform != "windows" || platform.Source != IdentitySourceDeepProbe {
+		t.Errorf("unknown shell failure overwrote platform: %+v", platform)
+	}
+}
+
+func TestForgetShellFactsPreservesIndependentIdentity(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+	m.NoteShellUnusable(ci, DialectCmd, "cmd.exe", "'sh' is not recognized", true)
+	m.NoteIdentity(ci, DialectPowerShell, "windows", IdentitySourceDeepProbe, "PSOS=Windows_NT")
+
+	m.ForgetShellFacts(ci)
+
+	f, ok := m.Facts(ci)
+	if !ok {
+		t.Fatal("shell-scoped reset discarded the whole host record")
+	}
+	if f.Shell.State != AxisUnknown || f.Shell.Attempts != 0 || !f.Shell.ProbedAt.IsZero() {
+		t.Errorf("shell facts survived scoped reset: %+v", f.Shell)
+	}
+	dialect := f.Identity.DialectFact()
+	platform := f.Identity.PlatformFact()
+	if dialect.Dialect != DialectPowerShell || dialect.Source != IdentitySourceDeepProbe {
+		t.Errorf("scoped reset discarded independent dialect: %+v", dialect)
+	}
+	if platform.Platform != "windows" || platform.Source != IdentitySourceDeepProbe {
+		t.Errorf("scoped reset discarded independent platform: %+v", platform)
+	}
+}
+
+func TestForgetShellFactsClearsShellProbeIdentity(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+	m.NoteShellUnusable(ci, DialectCmd, "cmd.exe", "'sh' is not recognized", true)
+
+	m.ForgetShellFacts(ci)
+
+	f, ok := m.Facts(ci)
+	if !ok {
+		t.Fatal("scoped reset should retain the target record")
+	}
+	if f.Shell.State != AxisUnknown || f.Identity.DialectFact().Dialect != DialectUnknown || f.Identity.PlatformFact().Platform != "" {
+		t.Errorf("shell-derived facts survived scoped reset: %+v", f)
 	}
 }
 
@@ -177,7 +300,7 @@ func TestNeedsProbeAfterForget(t *testing.T) {
 		t.Error("a live channel with recorded capabilities should not re-probe")
 	}
 
-	m.ForgetFacts(ci) // what probe_host{force:true} does
+	m.ForgetShellFacts(ci) // what probe_host{force:true} does
 	if !m.needsProbe(ci, false) {
 		t.Error("after a forced reset the live channel must re-probe, or the facts stay empty forever")
 	}

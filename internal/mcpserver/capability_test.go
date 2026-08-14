@@ -155,6 +155,25 @@ func TestOobAvailabilityNonPosixHost(t *testing.T) {
 	}
 }
 
+func TestBlockedProbeResultReportsIdentitySources(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "winbox", User: "mk31", Port: "22", Sock: "/run/aish/cm-source"}
+	f := c.Mux.NoteShellUnusable(ci, sshmux.DialectCmd,
+		"the remote ssh login shell is Windows cmd.exe",
+		"'sh' is not recognized as an internal or external command,", true)
+
+	res := c.blockedProbeResult(route{via: "controlmaster", ci: ci, host: "winbox"}, f)
+	if res.RemoteDialectSource != string(sshmux.IdentitySourceShellProbe) {
+		t.Errorf("dialect source = %q, want shell_probe", res.RemoteDialectSource)
+	}
+	if res.RemotePlatformSource != string(sshmux.IdentitySourceShellProbe) {
+		t.Errorf("platform source = %q, want shell_probe", res.RemotePlatformSource)
+	}
+	if res.RemoteDialect != string(sshmux.DialectCmd) || res.RemotePlatform != "windows" {
+		t.Errorf("identity = %q/%q, want cmd/windows", res.RemoteDialect, res.RemotePlatform)
+	}
+}
+
 // TestOobAvailabilityRetryableFailureStaysUnknown: an unclassified failure is a
 // transport fact, so the toolset stays "unknown" — but the detail has to say
 // what a retry costs rather than cheerfully suggesting one.
