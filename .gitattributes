@@ -1,3 +1,11 @@
+# Everything textual is LF, in the repository and in the working tree. AISH is a
+# Linux-only program, so there is no platform that wants CRLF here. This rule
+# exists because a Windows checkout once rewrote README.md to CRLF: nothing
+# broke, but every later edit to that file produced a whole-file diff, which
+# buries the actual change and makes `git diff --check` unusable. Without an
+# explicit rule, git's default depends on each developer's core.autocrlf.
+* text=auto eol=lf
+
 # Terminal capture corpus: raw bytes recorded from a real PTY. These files ARE
 # the escape sequences under test, so line-ending conversion would silently
 # corrupt them — and with core.autocrlf enabled (any Windows checkout) that is
@@ -5,5 +13,6 @@
 # captures happen to contain NUL bytes, so git's own heuristic detects them as
 # binary, but that is luck rather than a guarantee: a regenerated capture
 # without NULs would be mangled, and the resulting test failure would be
-# baffling. Mark them explicitly instead.
+# baffling. Mark them explicitly instead. This rule must stay BELOW the
+# wildcard above: for a path matched by several lines, the last one wins.
 internal/term/testdata/*.bin binary
