@@ -485,6 +485,25 @@ func TestSFTPAtomicWriteMissingVersionDoesNotCreateDestination(t *testing.T) {
 	}
 }
 
+func TestSFTPAtomicWriteRefusesIgnoredMode(t *testing.T) {
+	files := map[string]fakeSFTPFile{"/tmp/file": {data: []byte("current"), mode: 0o640}}
+	ops := atomicWriteFake(files)
+	ops.chmodFn = func(string, os.FileMode) error { return nil }
+	m, ci := installFakeSFTPWithExtensions(t, "posix", []string{"posix-rename@openssh.com"}, ops)
+	_, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{Path: "/tmp/file", Data: []byte("new")})
+	if !errors.Is(err, ErrSFTPWriteMode) || !strings.Contains(err.Error(), "server reported") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := string(files["/tmp/file"].data); got != "current" {
+		t.Fatalf("destination changed to %q", got)
+	}
+	for name := range files {
+		if strings.Contains(name, ".aishtmp.") {
+			t.Fatalf("temporary file remained: %s", name)
+		}
+	}
+}
+
 func TestSFTPAtomicWriteRechecksSymlinkBeforeRename(t *testing.T) {
 	files := map[string]fakeSFTPFile{"/tmp/file": {data: []byte("current"), mode: 0o600}}
 	ops := atomicWriteFake(files)

@@ -27,6 +27,7 @@ var (
 	ErrSFTPWriteStale               = errors.New("SFTP destination changed since it was read")
 	ErrSFTPWriteSymlink             = errors.New("refusing to replace an SFTP symlink")
 	ErrSFTPWriteNoVersion           = errors.New("SFTP destination version could not be verified")
+	ErrSFTPWriteMode                = errors.New("SFTP server did not apply the required file mode")
 )
 
 // SFTPFileInfo is transport-neutral metadata returned by the retained client.
@@ -457,6 +458,15 @@ func (m *Mux) SFTPWriteAtomic(ctx context.Context, ci *ConnInfo, req SFTPWriteRe
 		}
 		if err := ops.Chmod(tmpPath, mode); err != nil {
 			return SFTPWriteResult{}, cleanup(fmt.Errorf("setting SFTP temporary file mode: %w", err))
+		}
+		if req.ModeSet || initialExists {
+			tmpInfo, err := ops.Lstat(tmpPath)
+			if err != nil {
+				return SFTPWriteResult{}, cleanup(fmt.Errorf("verifying SFTP temporary file mode: %w", err))
+			}
+			if tmpInfo.Mode.Perm() != mode {
+				return SFTPWriteResult{}, cleanup(fmt.Errorf("%w: requested %04o, server reported %04o", ErrSFTPWriteMode, mode, tmpInfo.Mode.Perm()))
+			}
 		}
 
 		current, currentExists, err := sftpDestinationInfo(ops, resolved.Server)
