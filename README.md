@@ -178,6 +178,7 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `file_stat` / `directory_list` | Native-style path metadata and directory browsing on the current host; OOB only |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
 | `exec` / `exec_status` | Commands on the current host, with optional `cwd`; OOB background tasks with incremental polling |
+| `oob_log` | Read what happened out of band — which client ran which tool, on which host and route, and how it ended. Incremental with cursors; invisible operations by default, `include_visible` for the full call history. Never records file contents |
 
 Every tool also takes an optional `session` (id or name) to target another
 live session on the machine.
@@ -360,6 +361,40 @@ channel per host. That usually means one MFA prompt per host per session
 instead of one per OOB operation. An explicit SFTP probe is a separate retained
 channel and may cause another prompt. Lost channels are not reopened silently.
 
+### The out-of-band activity log
+
+Consent governs *whether* invisible work may happen. The activity log is the
+record of *what* did. This matters because out-of-band operations never touch
+the shared terminal — `read_screen` and `read_output` cannot show them, by
+definition.
+
+Every tool call is recorded with the client that made it (the approved MCP
+client name, plus the kernel-verified peer process), the tool, the route
+(`channel`, `sftp`, `local`, `in_band`, `terminal`), the host, the identifying
+argument, the outcome, and a monotonic sequence number. Two ways to read it:
+
+- **`Ctrl-]` → `l`** prints the recent invisible operations in your terminal.
+- **The `oob_log` tool** lets an AI client poll it incrementally, including
+  across sessions.
+
+Refused and failed operations are recorded too — an out-of-band `sudo` that the
+escalation guard turned away is exactly the kind of thing worth seeing.
+
+**File contents are never recorded.** Paths, command lines, byte counts and
+outcomes only. A log that accumulated what was read and written would be a
+secret store nobody asked for.
+
+It also works as a coordination channel: if you have two assistants on one
+session, each can check what the other already touched instead of clobbering it.
+
+Two honest limits. The log is **memory-only and bounded** (the most recent few
+hundred entries) and dies with the session. And it records **what was asked of
+AISH and what came back, not ground truth on the host** — a bug or a path that
+bypassed the tool layer would not appear. It is an audit *trail* for
+coordination and review, with the same standing as the privilege-escalation
+guardrail and the tool annotations. It is not tamper-evident, and it is not a
+security boundary.
+
 ### Wrong-host protection
 
 When you use one host as a jump box (`ssh a`, then `ssh b` from there), the
@@ -440,6 +475,10 @@ by pressing it twice.
 - **`o` — toggle out-of-band ops.** Flips invisible operation on/off for the
   running session. Turning it on is the same grant as `--oob` or answering
   `a` to an out-of-band prompt.
+- **`l` — recent out-of-band activity.** Prints the last invisible operations:
+  time, client, tool, route, host, the path or command, and how it ended.
+  Everything else in the session you already watched happen; this is the part
+  you didn't. See [the out-of-band activity log](#the-out-of-band-activity-log).
 - **`k` — revoke client access.** Disconnects every connected client and clears
   all grants for this session, so the next client to act must be approved
   again. (No effect under `--no-auth`.)

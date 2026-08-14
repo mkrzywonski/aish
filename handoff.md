@@ -1,4 +1,4 @@
-# Handoff - Windows targets after workstream C
+# Handoff - Windows targets after workstream D
 
 Current coordination record for assistants continuing work in
 `/home/mike/aish`. The design history and acceptance criteria are in
@@ -9,16 +9,16 @@ verified behavior, constraints, and exact next work.
 
 ## Current state
 
-Workstreams A, B, and C are complete. `c-sftp-writes` was fast-forwarded into
-`main`; both refs are pushed through the C closeout boundary. The next feature
-branch should be cut from clean, pushed main.
+Workstreams A, B, C, and D are complete. C was fast-forwarded into `main`
+through the C closeout boundary. D is implemented on `d-oob-activity-log`, cut
+from clean, pushed main, and is awaiting live acceptance and merge.
 
 | Workstream | State |
 |---|---|
 | **A - linearize the ring** | complete; live-validated on Linux and ConPTY |
 | **B - know the target** | complete; durable facts, passive/active identity, unknown-target safety, and MFA provenance are live-accepted |
 | **C - SFTP probe and file transport** | complete; shell-first reads and atomic writes are automated-tested and live-accepted |
-| **D - out-of-band activity log** | not started; design remains in `windows-targets-plan.md` |
+| **D - out-of-band activity log** | implemented on `d-oob-activity-log`; automated-tested and locally exercised, pending live acceptance and merge |
 
 The C write implementation is in:
 
@@ -135,6 +135,69 @@ Shell-up behavior is unchanged and remains shell-first.
 
 ---
 
+## Workstream D result
+
+### Middleware ordering
+
+The ordering re-check required before coding resolved as follows against the
+current server, and the answers are load-bearing:
+
+- The logger is registered THIRD in `AddReceivingMiddleware`, which the SDK
+  applies right-to-left, making it innermost.
+- Innermost puts it inside `connAuthMiddleware`, so the client identity is
+  resolved and every entry is attributable. A call rejected at the gate never
+  reaches the logger and is not recorded: it executed nothing, and the human
+  answered that prompt themselves.
+- Innermost puts it inside `crossSession`, which returns before calling `next`
+  when it forwards. A cross-session call is therefore recorded once, at the
+  session that executes it, never duplicated at the relay.
+- Innermost also means it holds the final `CallToolResult`. Typed handlers
+  return their output as `json.RawMessage` in `StructuredContent`, so `via` and
+  `host` are read off the result every routed handler already produces.
+- `authproto.InternalTools` and `oob_log` itself are skipped. The auth tools
+  carry keys, nonces and signatures and run before there is an identity; logging
+  `oob_log` would let a polling client crowd out what it polls for.
+- Failed and refused operations are recorded. The SDK converts handler errors
+  into `IsError` results inside the tool wrapper, which is inside this
+  middleware, so refusals arrive as results and are captured.
+
+### Visibility classification
+
+`controlTools` -> result `via` -> `terminalTools` -> `unresolved`.
+
+`session_status` needs its exception because it REPORTS the route an operation
+would take without taking it; reading `via` off its result would file every
+status poll as out-of-band work.
+
+The `unresolved` default was found by live testing and is the important one. A
+routed tool refused BEFORE `route()` resolves returns no `via`, and the first
+implementation defaulted that to visible - which hid the refused out-of-band
+`sudo` that motivated the whole workstream from the human's default view.
+Unknown routes now fail loud into the invisible view. Do not weaken this to
+reduce noise.
+
+### Content policy
+
+`logTarget` is an explicit key allowlist: `command`, `path`, `pattern`,
+`local_path`/`remote_path`, `task_id`. File content (`content`, `text`,
+`old_text`, `new_text`, `patch`) and `send_input` text are never recorded.
+Exec command lines are kept in full, capped at 1 KiB, since they are the point.
+
+`Revoke` deliberately does NOT clear the log: withdrawing a client's access
+should not erase the record of what it already did.
+
+### Surfaces
+
+- `oob_log` tool: cursor-based, cross-session capable, invisible operations by
+  default with `include_visible` for the full call history.
+- `Ctrl-]` -> `l`: recent invisible operations through the console, never the
+  PTY.
+- Pull, not push. No per-operation `Notify`.
+
+Bounded at 500 entries, memory-only, dies with the session.
+
+---
+
 ## Verification
 
 Final required local verification:
@@ -202,32 +265,27 @@ cmd.exe; no PowerShell syntax is introduced by the file path.
 
 ## Exact next work
 
-Start workstream D on a new branch from clean, pushed `main`, for example:
+Live-accept D, then merge `d-oob-activity-log` into `main`.
 
-```sh
-git switch main
-git pull --ff-only
-git switch -c d-oob-activity-log
-```
+Local verification is complete: `make check`, `go test -race ./...`, and
+`git diff --check` are clean, and the log was exercised against a live session
+over both the local route and a `ssh localhost` ControlMaster route. Refused
+escalation, `via: channel` file writes and exec, cursor paging, the
+`include_visible` filter, and the `Ctrl-]` -> `l` console view were all
+confirmed by hand, and no file content appeared in any entry.
 
-Before coding, critically re-check the D middleware ordering against the current
-server:
+Not yet done, and worth doing before merge:
 
-- authorization must have resolved client identity before logging
-- cross-session calls must be recorded at the session that executes them, not
-  duplicated at the relay
-- the logger needs the final structured result to derive `via`
-- private auth tools and `oob_log` itself need an explicit recursion/noise
-  policy
-- failed and refused operations must be logged, not only successful OOB calls
-- never store file contents; store command/path, outcome metadata, client, host,
-  route, timestamps, and monotonic sequence only
+- Live acceptance on a real remote and on an MFA host, confirming the log does
+  not itself open channels or change probe behavior.
+- Two concurrent AI clients against one session, which is the coordination case
+  the feature is justified by and the one path automated tests do not cover.
+- A restart of any long-lived AI proxy after install, so the new `oob_log` tool
+  and the revised server instructions are actually loaded.
 
-The planned surfaces remain a bounded memory-only cursor log, an `oob_log`
-tool, and a `Ctrl-]` menu view. Treat it as a coordination/audit trail, not a
-tamper-evident security log.
-
----
+Deferred by choice: a status-bar counter (`oob: 12`) as an ambient hint. The bar
+already arbitrates session badge, host, 2FA and input-required states, and the
+value of another competitor for that row is unproven.
 
 ## Invariants
 
@@ -247,6 +305,10 @@ tamper-evident security log.
   where advertised.
 - Client authorization is session-memory-only and kernel peer identity remains
   distinct from self-declared client descriptions.
+- The activity log records what was touched, never what it contained, and never
+  claims an operation was visible when its route is unknown. It is an audit
+  trail for coordination and review, not a tamper-evident log and not a security
+  boundary; do not describe it as stronger than that.
 
 ---
 
