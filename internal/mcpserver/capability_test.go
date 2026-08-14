@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"strings"
 	"testing"
 
 	"ai-ssh/internal/sshmux"
@@ -119,5 +120,112 @@ func TestOobAvailabilityUnknownUntilProbed(t *testing.T) {
 	}
 	if ib["file_grep"].State != toolUnavailable {
 		t.Errorf("in_band file_grep state = %q, want unavailable", ib["file_grep"].State)
+	}
+}
+
+// TestOobAvailabilityNonPosixHost: once a probe has conclusively identified a
+// non-POSIX login shell, every tool reads "unavailable" — and crucially the
+// detail must STOP inviting probe_host, which is what made models re-probe a
+// host that can never succeed.
+func TestOobAvailabilityNonPosixHost(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "winbox", User: "mk31", Port: "22", Sock: "/run/aish/cm-win"}
+	c.Mux.NoteShellUnusable(ci, sshmux.DialectCmd,
+		"the remote ssh login shell is Windows cmd.exe",
+		"'sh' is not recognized as an internal or external command,", true)
+
+	av := c.oobToolAvailability(route{via: "controlmaster", ci: ci, host: "winbox"})
+	for _, tool := range oobToolNames {
+		a := av[tool]
+		if a.State != toolUnavailable {
+			t.Errorf("%s state = %q, want unavailable", tool, a.State)
+		}
+		if !strings.Contains(a.Missing, "cmd.exe") {
+			t.Errorf("%s should name the dialect, got Missing=%q", tool, a.Missing)
+		}
+		if a.Install != "" {
+			t.Errorf("%s should carry no install hint — no package fixes a login shell", tool)
+		}
+		if strings.Contains(a.Detail, "probe_host to initialize") {
+			t.Errorf("%s still invites the re-probe loop: %q", tool, a.Detail)
+		}
+		if !strings.Contains(a.Detail, "run_command") {
+			t.Errorf("%s should point at run_command, got %q", tool, a.Detail)
+		}
+	}
+}
+
+// TestOobAvailabilityRetryableFailureStaysUnknown: an unclassified failure is a
+// transport fact, so the toolset stays "unknown" — but the detail has to say
+// what a retry costs rather than cheerfully suggesting one.
+func TestOobAvailabilityRetryableFailureStaysUnknown(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "flaky", User: "mk31", Port: "22", Sock: "/run/aish/cm-flaky"}
+	c.Mux.NoteShellUnusable(ci, sshmux.DialectUnknown, "", "", false)
+
+	av := c.oobToolAvailability(route{via: "controlmaster", ci: ci, host: "flaky"})
+	a := av["file_read"]
+	if a.State != toolUnknown {
+		t.Errorf("state = %q, want unknown while retries remain", a.State)
+	}
+	if !strings.Contains(a.Detail, "already failed") {
+		t.Errorf("detail should say a probe already failed, got %q", a.Detail)
+	}
+	if !strings.Contains(a.Detail, "MFA") {
+		t.Errorf("detail should say what a retry costs, got %q", a.Detail)
+	}
+}
+
+// TestInBandUnavailableOnNonPosix: the visible fallbacks are not dialect
+// neutral. file_read/file_write/exec go through RunSentinel, which types a
+// POSIX command line — on cmd.exe that is garbage, so reporting them available
+// was a wrong answer rather than a degraded one.
+func TestInBandUnavailableOnNonPosix(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "winbox", User: "mk31", Port: "22", Sock: "/run/aish/cm-win2"}
+	c.Mux.NoteShellUnusable(ci, sshmux.DialectCmd, "cmd.exe", "'sh' is not recognized", true)
+
+	ib := c.oobToolAvailability(route{via: "in_band", ci: ci, host: "winbox"})
+	for _, tool := range []string{"file_read", "file_write", "exec"} {
+		if ib[tool].State != toolUnavailable {
+			t.Errorf("in_band %s on a cmd.exe host state = %q, want unavailable", tool, ib[tool].State)
+		}
+		if !strings.Contains(ib[tool].Detail, "run_command") {
+			t.Errorf("in_band %s should point at run_command, got %q", tool, ib[tool].Detail)
+		}
+	}
+
+	// A POSIX host (or one not yet classified) keeps the fallbacks.
+	plain := c.oobToolAvailability(route{via: "in_band", host: "linuxbox"})
+	if plain["file_read"].State != toolAvailable {
+		t.Errorf("in_band file_read on an unclassified host = %q, want available", plain["file_read"].State)
+	}
+}
+
+// TestTrackingApplicableFor: [p] types a bash/zsh snippet, so offering it on
+// cmd.exe or PowerShell just puts broken shell in the user's terminal — and it
+// could not help anyway, since target_confidence on a non-POSIX host is pinned
+// at "unknown". An unclassified remote is still offered it, because most
+// remotes are POSIX and that is the case the feature exists for.
+func TestTrackingApplicableFor(t *testing.T) {
+	cases := []struct {
+		via     string
+		dialect sshmux.Dialect
+		want    bool
+	}{
+		{"local", sshmux.DialectUnknown, false},
+		{"local", sshmux.DialectPosix, false},
+		{"controlmaster", sshmux.DialectUnknown, true},
+		{"controlmaster", sshmux.DialectPosix, true},
+		{"controlmaster", sshmux.DialectCmd, false},
+		{"controlmaster", sshmux.DialectPowerShell, false},
+		{"controlmaster", sshmux.DialectNetworkOS, false},
+		{"in_band", sshmux.DialectUnknown, true},
+		{"in_band", sshmux.DialectCmd, false},
+	}
+	for _, tc := range cases {
+		if got := trackingApplicableFor(tc.via, tc.dialect); got != tc.want {
+			t.Errorf("trackingApplicableFor(%q, %q) = %v, want %v", tc.via, tc.dialect, got, tc.want)
+		}
 	}
 }

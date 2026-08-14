@@ -47,30 +47,115 @@ func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 		}
 		return m
 	case "in_band":
-		m := map[string]toolAvail{}
-		for _, n := range oobToolNames {
-			switch n {
-			case "file_read", "file_write", "exec":
-				m[n] = toolAvail{State: toolAvailable} // visible fallbacks exist
-			default:
-				m[n] = toolAvail{State: toolUnavailable, Missing: "an out-of-band route (no multiplexed channel to this host)"}
-			}
-		}
-		return m
+		return inBandAvailability(c.remoteDialect(rt))
 	}
-	caps, ok := c.Mux.CachedCapabilities(rt.ci)
+	f, ok := c.Mux.Facts(rt.ci)
 	if !ok {
 		// Not probed yet: report unknown rather than guess. This is honest, not
 		// a tollgate — the first real op still auto-probes (requireTool →
 		// EnsureProbed) and gates correctly. The AI can call probe_host to
 		// resolve these deliberately before planning a workflow.
-		m := map[string]toolAvail{}
-		for _, n := range oobToolNames {
-			m[n] = toolAvail{State: toolUnknown, Detail: "host not probed yet; call probe_host to initialize the out-of-band toolset"}
-		}
-		return m
+		return unknownAvailability("host not probed yet; call probe_host to initialize the out-of-band toolset")
 	}
-	return capabilityAvailability(caps)
+	return availability(f)
+}
+
+// availability derives per-tool state from the set of capability axes recorded
+// for a host. Only the shell axis exists today; a future SFTP axis merges here
+// — sftp is an ssh subsystem, so it can serve file_read/file_write/file_stat/
+// directory_list/upload/download on a host whose login shell is not POSIX.
+func availability(f sshmux.HostFacts) map[string]toolAvail {
+	switch f.Shell.State {
+	case sshmux.AxisUp:
+		return capabilityAvailability(f.Shell.Caps)
+	case sshmux.AxisDown:
+		return dialectUnavailability(f)
+	default:
+		return unknownAvailability("host not probed yet; call probe_host to initialize the out-of-band toolset")
+	}
+}
+
+func unknownAvailability(detail string) map[string]toolAvail {
+	m := map[string]toolAvail{}
+	for _, n := range oobToolNames {
+		m[n] = toolAvail{State: toolUnknown, Detail: detail}
+	}
+	return m
+}
+
+// dialectUnavailability reports the toolset for a host whose persistent shell
+// channel has failed. A CONCLUSIVE failure (the dialect was identified, or an
+// unclassified failure has already burned its retry budget) reads
+// "unavailable" and must never repeat the "call probe_host to initialize"
+// invitation — that phrasing is what made models re-probe a host forever. A
+// still-retryable failure stays "unknown", but says plainly what a retry costs.
+func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
+	if !f.Shell.Sticky {
+		detail := "a probe of this host already failed"
+		if f.Shell.Reason != "" {
+			detail += " (" + f.Shell.Reason + ")"
+		}
+		detail += "; a retry opens another channel and may trigger an MFA prompt, so call probe_host only if you have reason to believe it will now succeed"
+		return unknownAvailability(detail)
+	}
+
+	missing := "a POSIX shell"
+	if f.Shell.Dialect != sshmux.DialectUnknown {
+		missing = fmt.Sprintf("a POSIX shell (this host presents %s)", f.Shell.Dialect.Human())
+	}
+	detail := f.Shell.Reason
+	if detail != "" {
+		detail += ". "
+	}
+	detail += "Out-of-band tools cannot run here — use run_command to drive this host visibly. " +
+		"If the remote shell has since changed, call probe_host with force=true to re-check."
+
+	m := map[string]toolAvail{}
+	for _, n := range oobToolNames {
+		// exec is NOT exempt: with no channel there is nothing to execute on,
+		// and the visible in-band fallback is POSIX too (see inBandAvailability).
+		m[n] = toolAvail{State: toolUnavailable, Missing: missing, Detail: detail}
+	}
+	return m
+}
+
+// inBandAvailability reports what the VISIBLE fallbacks can do. They are not
+// dialect-neutral: file_read, file_write and foreground exec all go through
+// framing.RunSentinel, which types a POSIX command line with a printf sentinel.
+// On a Windows or network-device host that is garbage, so claiming them
+// available there was simply a wrong answer. Only run_command — which types the
+// command bare — survives.
+func inBandAvailability(d sshmux.Dialect) map[string]toolAvail {
+	m := map[string]toolAvail{}
+	posixHostile := d.Platform() == "windows" || d.Platform() == "network"
+	for _, n := range oobToolNames {
+		switch n {
+		case "file_read", "file_write", "exec":
+			if posixHostile {
+				m[n] = toolAvail{
+					State:   toolUnavailable,
+					Missing: fmt.Sprintf("a POSIX shell (the visible fallback types a POSIX command line, but this host presents %s)", d.Human()),
+					Detail:  "use run_command, which types the command bare and works on any shell",
+				}
+				continue
+			}
+			m[n] = toolAvail{State: toolAvailable} // visible fallbacks exist
+		default:
+			m[n] = toolAvail{State: toolUnavailable, Missing: "an out-of-band route (no multiplexed channel to this host)"}
+		}
+	}
+	return m
+}
+
+// remoteDialect returns the dialect learned from a PROBE for this route.
+// Deliberately probe-sourced only: the passive screen fingerprint is advisory
+// and may annotate a result, but must never drive a tool's state.
+func (c *Core) remoteDialect(rt route) sshmux.Dialect {
+	f, ok := c.Mux.Facts(rt.ci)
+	if !ok {
+		return sshmux.DialectUnknown
+	}
+	return f.Shell.Dialect
 }
 
 func capabilityAvailability(caps sshmux.Capabilities) map[string]toolAvail {
@@ -153,13 +238,19 @@ func (c *Core) requireTool(rt route, tool string) error {
 		return nil
 	}
 	if av.State == toolUnknown {
-		// Only reachable if EnsureProbed didn't populate the cache; surface it
+		// Only reachable if EnsureProbed didn't populate the facts; surface it
 		// rather than proceed blind.
-		return fmt.Errorf("%s: %s on %s could not be initialized (call probe_host)", tool, tool, rt.host)
+		detail := av.Detail
+		if detail == "" {
+			detail = "call probe_host"
+		}
+		return fmt.Errorf("%s could not be initialized on %s: %s", tool, rt.host, detail)
 	}
 	msg := fmt.Sprintf("%s is unavailable on %s: it needs %s", tool, rt.host, av.Missing)
 	if av.Install != "" {
 		msg += fmt.Sprintf(". With the user's approval you can install it (run_command: %s), then retry", av.Install)
+	} else if av.Detail != "" {
+		msg += ". " + av.Detail
 	}
 	return errors.New(msg)
 }

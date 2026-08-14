@@ -306,15 +306,25 @@ type sessionStatusResult struct {
 	// lands owned by this user and an op needing other privileges fails — flag the
 	// gap before ownership/privilege-sensitive operations.
 	OOBUser string `json:"oob_user,omitempty"`
-	Cwd              string               `json:"cwd,omitempty"`
-	PromptReady      bool                 `json:"prompt_ready"`
-	EchoOff          bool                 `json:"echo_off"`
-	Foreground       *state.Foreground    `json:"foreground,omitempty"`
-	Rows             int                  `json:"rows"`
-	Cols             int                  `json:"cols"`
-	AltScreen        bool                 `json:"alt_screen"`
-	LastOutputMs     int64                `json:"last_output_ms_ago"`
-	Ended            bool                 `json:"ended"`
+	// RemoteDialect names what the far end's ssh login shell actually is
+	// (posix / cmd / powershell / network_os / restricted / no_shell), learned
+	// from the capability probe. RemoteDialectSource is load-bearing: "probe" is
+	// channel-derived and authoritative, so an AI should stop trying OOB tools;
+	// a merely advisory source must never have that effect.
+	RemoteDialect       string            `json:"remote_dialect,omitempty"`
+	RemotePlatform      string            `json:"remote_platform,omitempty"`
+	RemoteDialectSource string            `json:"remote_dialect_source,omitempty"`
+	ProbeAttempts       int               `json:"probe_attempts,omitempty"`
+	OobNote             string            `json:"oob_note,omitempty"`
+	Cwd                 string            `json:"cwd,omitempty"`
+	PromptReady         bool              `json:"prompt_ready"`
+	EchoOff             bool              `json:"echo_off"`
+	Foreground          *state.Foreground `json:"foreground,omitempty"`
+	Rows                int               `json:"rows"`
+	Cols                int               `json:"cols"`
+	AltScreen           bool              `json:"alt_screen"`
+	LastOutputMs        int64             `json:"last_output_ms_ago"`
+	Ended               bool              `json:"ended"`
 }
 
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
@@ -352,6 +362,18 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	if caps, ok := c.Mux.CachedCapabilities(rt.ci); ok {
 		res.RemoteHost = &caps
 		res.OOBUser = caps.User // authoritative: `id -un` over the OOB channel
+	}
+	// Durable per-host facts: these survive the channel that discovered them, so
+	// a host whose probe failed reports what it IS rather than reverting to
+	// "unknown, call probe_host" forever. Reading facts never opens a channel.
+	if f, ok := c.Mux.Facts(rt.ci); ok {
+		if f.Shell.Dialect != sshmux.DialectUnknown {
+			res.RemoteDialect = string(f.Shell.Dialect)
+			res.RemotePlatform = f.Shell.Dialect.Platform()
+			res.RemoteDialectSource = "probe"
+		}
+		res.ProbeAttempts = f.Shell.Attempts
+		res.OobNote = f.Note()
 	}
 	if res.OOBUser == "" {
 		res.OOBUser = sshUser // ssh login user, before the host is probed

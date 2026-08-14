@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"ai-ssh/internal/paths"
+	"ai-ssh/internal/sshmux"
 )
 
 // Remote host tracking: on a remote whose shell has no OSC 7 integration, aish
@@ -48,8 +49,30 @@ func (c *Core) RemoteTrackingApplicable() (host string, applicable bool) {
 	if rt.via == "local" {
 		return "", false
 	}
+	if !trackingApplicableFor(rt.via, c.remoteDialect(rt)) {
+		return "", false
+	}
 	_, oobHost, _ := c.hostConfidence(rt)
 	return oobHost, true
+}
+
+// trackingApplicableFor is the pure policy behind RemoteTrackingApplicable,
+// isolated for testing (a live remote route needs an ssh process the test can't
+// fake).
+//
+// trackingSnippet emits bash/zsh unconditionally, so on a cmd.exe or PowerShell
+// host it merely types broken shell into the user's terminal — observed
+// producing "'__aish_osc7' is not recognized" and then a PowerShell
+// ParserError. It could not help even if it parsed: on a non-POSIX host
+// hostConfidence derives the remote hostname from a probe that cannot run, so
+// target_confidence is pinned at "unknown" regardless. An UNCLASSIFIED host is
+// still offered it — most remotes are POSIX, and that is exactly the case the
+// feature exists for.
+func trackingApplicableFor(via string, d sshmux.Dialect) bool {
+	if via == "local" {
+		return false
+	}
+	return d == sshmux.DialectUnknown || d == sshmux.DialectPosix
 }
 
 // provisionIdle is how long the shared terminal must have been quiet before we

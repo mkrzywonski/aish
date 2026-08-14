@@ -126,7 +126,10 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"available/unavailable so you can plan a workflow and, for any unavailable tool, offer to install its package " +
 			"(from the install hint) before acting. Unlike session_status this opens the channel, so it may prompt the user " +
 			"to authorize out-of-band access, and may cost a one-time MFA prompt on protected hosts. Not needed for local " +
-			"sessions. Tools also auto-probe on first use, so this is optional — it just moves the probe earlier for planning.",
+			"sessions. Tools also auto-probe on first use, so this is optional — it just moves the probe earlier for planning. " +
+			"A host that already failed conclusively (remote_dialect is a non-POSIX shell) is answered from cache without " +
+			"opening anything: do not call this repeatedly hoping for a different answer. Pass force=true only when the " +
+			"remote's login shell has actually changed.",
 	}, c.probeHost)
 }
 
@@ -349,9 +352,17 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 			"host mismatch: this result came from %q (out-of-band target) but the interactive shell appears to be on %q",
 			oobHost, interactiveHost), nil
 	case divConfirm:
-		ans, ok := c.Sess.Prompt(
-			fmt.Sprintf("Can't verify the interactive shell is still on %s — [y] write once, [p] set up the aish prompt so I can verify, [n] cancel", oobHost),
-			"ypn", 120*time.Second)
+		// Offer [p] only where the tracking snippet could actually run. On a
+		// non-POSIX host it can't, and in practice such a host never reaches
+		// here at all (EnsureProbed above returns the durable dialect error
+		// first) — but the prompt must not advertise an option that cannot work.
+		question := fmt.Sprintf("Can't verify the interactive shell is still on %s — [y] write once, [n] cancel", oobHost)
+		accept := "yn"
+		if _, canTrack := c.RemoteTrackingApplicable(); canTrack {
+			question = fmt.Sprintf("Can't verify the interactive shell is still on %s — [y] write once, [p] set up the aish prompt so I can verify, [n] cancel", oobHost)
+			accept = "ypn"
+		}
+		ans, ok := c.Sess.Prompt(question, accept, 120*time.Second)
 		switch {
 		case ok && ans == 'p':
 			c.ProvisionRemoteTracking()
@@ -372,6 +383,7 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 
 type probeHostArgs struct {
 	SessionArg
+	Force bool `json:"force,omitempty" jsonschema:"discard what aish already knows about this host and probe again; needed when the remote's login shell has changed, since a host that conclusively failed is otherwise never re-probed"`
 }
 
 type probeHostResult struct {
@@ -379,6 +391,9 @@ type probeHostResult struct {
 	Host             string               `json:"host"` // where OOB ops land
 	Probed           bool                 `json:"probed"`
 	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
+	RemoteDialect    string               `json:"remote_dialect,omitempty"`
+	RemotePlatform   string               `json:"remote_platform,omitempty"`
+	ProbeAttempts    int                  `json:"probe_attempts,omitempty"`
 	OobTools         map[string]toolAvail `json:"oob_tools"`
 	TargetConfidence string               `json:"target_confidence"`
 	Note             string               `json:"note,omitempty"`
@@ -391,17 +406,47 @@ type probeHostResult struct {
 // channel, so on an ungranted session it triggers the same OOB consent prompt,
 // and on an MFA-protected host it may prompt the human once. Unlike
 // session_status (a pure cache reader), this deliberately opens the channel.
+//
+// Two behaviours make it honest about hosts that cannot work:
+//
+//   - A host whose probe already failed conclusively answers from durable facts
+//     WITHOUT opening anything, and returns a normal result rather than an
+//     error — this is the discovery tool, so describing the host is more useful
+//     than refusing. The consent prompt is skipped too: there is no point
+//     asking for invisible access just to report that it cannot be used.
+//   - force=true discards those facts first. Until now the docstring claimed
+//     "reset button" while EnsureProbed short-circuited on cache, so it reset
+//     nothing.
 func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args probeHostArgs) (*mcp.CallToolResult, probeHostResult, error) {
+	// Non-prompting look first: capability() never asks the user for OOB consent.
+	if cap := c.capability(); cap.via == "controlmaster" {
+		if args.Force {
+			c.Mux.ForgetFacts(cap.ci)
+		} else if f, ok := c.Mux.Facts(cap.ci); ok && f.ShellBlocked() {
+			return nil, c.blockedProbeResult(cap, f), nil
+		}
+	}
+
 	rt := c.route()
 	res := probeHostResult{Via: rt.via, Host: rt.host}
 	switch rt.via {
 	case "controlmaster":
 		caps, err := c.Mux.EnsureProbed(rt.ci)
 		if err != nil {
+			// The probe just failed. Report what was learned instead of only the
+			// error, so the caller can see the dialect and stop retrying.
+			if f, ok := c.Mux.Facts(rt.ci); ok && f.Shell.State == sshmux.AxisDown {
+				return nil, c.blockedProbeResult(rt, f), nil
+			}
 			return nil, probeHostResult{}, err
 		}
 		res.Probed = true
 		res.RemoteHost = &caps
+		res.RemoteDialect = string(sshmux.DialectPosix)
+		res.RemotePlatform = sshmux.DialectPosix.Platform()
+		if f, ok := c.Mux.Facts(rt.ci); ok {
+			res.ProbeAttempts = f.Shell.Attempts
+		}
 	case "local":
 		res.Note = "local session: out-of-band tools run in-process and are always available."
 	case "in_band":
@@ -410,6 +455,23 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
 	res.OobTools = c.oobToolAvailability(rt)
 	return nil, res, nil
+}
+
+// blockedProbeResult describes a host whose shell axis is known bad, without
+// opening a channel.
+func (c *Core) blockedProbeResult(rt route, f sshmux.HostFacts) probeHostResult {
+	res := probeHostResult{
+		Via:            rt.via,
+		Host:           rt.host,
+		Probed:         false,
+		RemoteDialect:  string(f.Shell.Dialect),
+		RemotePlatform: f.Shell.Dialect.Platform(),
+		ProbeAttempts:  f.Shell.Attempts,
+		Note:           f.Note(),
+		OobTools:       availability(f),
+	}
+	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	return res
 }
 
 // downgrade turns an OOB-capable route into its visible in-band equivalent
