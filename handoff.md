@@ -47,26 +47,26 @@ a81c19c  framing, read_output: consume the linearizer
 The identity foundation landed in `9620df6`; passive screen identity landed in
 `5499871`; the MFA provenance warning landed in `345be94`; and the unknown-target
 closeout landed in `99a0ab9`. Workstream B documentation closed in `8060f16`,
-the shell-first C policy landed in `a36c139`, and SFTP checkpoint 1 landed in
-`4d72bc5`. All are merged to `main`.
+the shell-first C policy landed in `a36c139`, SFTP checkpoint 1 landed in
+`4d72bc5`, and prompt attention landed in `eaa49fd`. All are merged to `main`.
 
 ---
 
 ## Active work
 
-Branch: `prompt-attention`, based on `main` at `4d72bc5` (`sshmux: add explicit
-SFTP capability axis`). The SFTP checkpoint branch was fast-forwarded and pushed
-to `main` before this branch was created.
+Branch: `main`, through `eaa49fd` (`session: make console prompts hard to miss`).
+The worktree is clean after both checkpoint branches were fast-forwarded and
+pushed.
 
-Current objective: make every AISH console prompt difficult to miss without
+Completed objective: make every AISH console prompt difficult to miss without
 weakening prompt capture, timeout, or terminal byte-transparency guarantees.
 
 ### Status
 
-Prompt-attention implementation, full checks, build/install, and live acceptance
-are complete. Workstream C checkpoint 1 is merged.
+Prompt attention and workstream C checkpoint 1 are merged to `main`, fully
+verified, installed, and live-accepted.
 
-### Current prompt-attention checkpoint
+### Completed prompt-attention checkpoint
 
 - `Prompt` and `PromptLine` emit exactly one BEL when displayed. Queued prompts
   serialize first, so a prompt rings only when it actually becomes actionable.
@@ -324,9 +324,9 @@ The `test` session connected passwordlessly over real ControlMaster paths to
 
 ### Exact next step
 
-Commit, push, and merge `prompt-attention`. Then create the next C branch for the
-path-contract and retained-client API steps in `windows-targets-plan.md`; route
-read-only operations before attempting write semantics or availability merging.
+Create the next C branch from `main` for the path-contract and retained-client
+API steps in `windows-targets-plan.md`; route read-only operations before
+attempting write semantics or availability merging.
 
 ### Blockers or uncertainties
 
@@ -336,8 +336,7 @@ No implementation blocker.
 
 ## Next work: workstream C
 
-After the prompt-attention checkpoint is merged, follow the revised finish plan in
-`windows-targets-plan.md`: define and test the Windows
+Follow the revised finish plan in `windows-targets-plan.md`: define and test the Windows
 path contract, expose a narrow retained-client API, route read-only tools first,
 prove existing atomic-write/symlink/version guarantees over SFTP, then route
 writes and merge availability last.
@@ -425,10 +424,7 @@ These were measured directly and corrected earlier assumptions.
    channel process start time.
 2. **PSK reconnect notices can spam the terminal.** `connauth.go` notifies on
    every recognized reconnect. Notify once per client key per session instead.
-3. **Console prompt attention is complete on `prompt-attention`.** Authorization
-   prompts now emit one BEL and retain status/title state until resolution. The
-   terminal's own bell configuration determines whether BEL is audible.
-4. **README platform wording remains conservative.** Windows targets are
+3. **README platform wording remains conservative.** Windows targets are
    detected and refused quickly for POSIX OOB operations, but are not useful for
    native file operations until workstream C lands.
 ---
@@ -456,6 +452,14 @@ installed build when its AI client restarts.
 The B-closeout build was installed as `v0.2.2-23-g345be94-dirty`; the artifact
 and `/usr/local/bin/aish` both had SHA-256
 `023ce9ae65beefe52343e66aea2b2a1d29023734072c9ad25b00872013ba53fd`.
+
+The installed prompt-attention/SFTP build reports
+`v0.2.2-27-g4d72bc5-dirty`; the final tested artifact and
+`/usr/local/bin/aish` had SHA-256
+`cc7cf2651006cdb70f1e126d4a75f9dc00b35e9f39250a61bdd0af9d33287c45`.
+The source is now clean and merged through `eaa49fd`; the installed development
+version remains the correctly identified pre-commit artifact until the next
+build/install.
 
 Do not assume any previous live session still exists. `aish sessions` is
 authoritative.

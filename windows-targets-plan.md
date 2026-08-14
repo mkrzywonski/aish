@@ -431,8 +431,8 @@ cmd.exe-specific guidance and left the Windows screen unchanged. This closes B.
 
 *The capability win. Depends on B's fact model.*
 
-**Status 2026-08-14:** checkpoint 1 is implemented and live-accepted on
-`c-sftp-axis`. It adds the independent durable axis, an explicit bounded/cached
+**Status 2026-08-14:** checkpoint 1 is merged to `main` in `4d72bc5` and
+live-accepted. It adds the independent durable axis, an explicit bounded/cached
 `probe_host{sftp:true}` path over the existing ControlMaster, structural
 platform evidence, retained successful clients, and the debounced MFA
 provenance warning. No file operation or `oob_tools` availability is routed
