@@ -368,7 +368,7 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 	}
 	m.chMu.Unlock()
 
-	if opened {
+	if m.needsProbe(ci, opened) {
 		// The first op on a fresh channel may sit behind an MFA push (it opens a
 		// new session on the master). The probe runs as that first op with a
 		// two-phase timeout, confirming a POSIX shell and recording what the host
@@ -394,6 +394,25 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 		m.dropChannel(ci.Sock, ch)
 	}
 	return res, err
+}
+
+// needsProbe reports whether the capability probe must run before using ch.
+//
+// A freshly opened channel always needs it. So does a LIVE channel with no
+// recorded capabilities — which happens when probe_host{force:true} clears the
+// facts: forgetting them does not close the channel, so keying the probe on
+// "did we just open this" alone left the facts permanently empty. EnsureProbed
+// then returned zero capabilities with a nil error, every tool fell back to
+// "unknown", and the session stayed broken until the channel happened to die.
+//
+// Re-probing an existing channel is just another command on the same `sh -s`,
+// so this costs no new ssh session and cannot trigger an extra MFA push.
+func (m *Mux) needsProbe(ci *ConnInfo, opened bool) bool {
+	if opened {
+		return true
+	}
+	_, haveCaps := m.CachedCapabilities(ci)
+	return !haveCaps
 }
 
 // dropChannel forgets ch if it is still the live channel for sock.

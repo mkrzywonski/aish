@@ -154,6 +154,35 @@ func TestShellErrorText(t *testing.T) {
 	}
 }
 
+// TestNeedsProbeAfterForget is the regression test for a bug that
+// probe_host{force:true} introduced: forgetting a host's facts does NOT close
+// its channel, so keying the probe on "did we just open this channel" left the
+// facts permanently empty. EnsureProbed then returned zero capabilities with a
+// nil error, every tool reverted to "unknown", and the session stayed broken
+// until the channel happened to die.
+//
+// Re-probing a live channel is another command on the same `sh -s`, so it costs
+// no ssh session and cannot trigger an extra MFA push — which is what makes
+// re-probing the right answer rather than dropping the channel.
+func TestNeedsProbeAfterForget(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+
+	if !m.needsProbe(ci, true) {
+		t.Error("a freshly opened channel always needs the probe")
+	}
+
+	m.NoteShellUsable(ci, Capabilities{Hostname: "h", HasBase64: true})
+	if m.needsProbe(ci, false) {
+		t.Error("a live channel with recorded capabilities should not re-probe")
+	}
+
+	m.ForgetFacts(ci) // what probe_host{force:true} does
+	if !m.needsProbe(ci, false) {
+		t.Error("after a forced reset the live channel must re-probe, or the facts stay empty forever")
+	}
+}
+
 func TestShellErrorNilWhenUsable(t *testing.T) {
 	m := New(t.TempDir())
 	ci := testConn()
