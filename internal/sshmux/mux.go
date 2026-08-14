@@ -20,6 +20,13 @@ type Mux struct {
 
 	chMu     sync.Mutex
 	channels map[string]*channel // persistent OOB channels, keyed by master socket
+
+	// factsMu guards facts and is deliberately SEPARATE from chMu: session_status
+	// reads facts on every call and must never block behind openChannel's
+	// cmd.Start, which runs under chMu. Facts outlive the channel that produced
+	// them (see facts.go).
+	factsMu sync.RWMutex
+	facts   map[string]*HostFacts
 }
 
 func New(sessionDir string) *Mux {
@@ -27,7 +34,12 @@ func New(sessionDir string) *Mux {
 	if err != nil {
 		realSSH = "ssh"
 	}
-	return &Mux{dir: sessionDir, realSSH: realSSH, channels: map[string]*channel{}}
+	return &Mux{
+		dir:      sessionDir,
+		realSSH:  realSSH,
+		channels: map[string]*channel{},
+		facts:    map[string]*HostFacts{},
+	}
 }
 
 // Current returns the most recently started still-live ssh connection, or

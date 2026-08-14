@@ -140,6 +140,12 @@ func (m *Mux) EnsureProbed(ci *ConnInfo) (Capabilities, error) {
 	if c, ok := m.CachedCapabilities(ci); ok {
 		return c, nil
 	}
+	// A conclusively-failed host is refused here without opening anything, so
+	// every caller (file ops, guardTarget, exec) gets the same clear message at
+	// zero channel cost.
+	if f, ok := m.Facts(ci); ok && f.ShellBlocked() {
+		return Capabilities{}, f.ShellError()
+	}
 	if _, err := m.ChannelRun(ci, ":", minOpenTimeout); err != nil {
 		return Capabilities{}, err
 	}
@@ -147,22 +153,15 @@ func (m *Mux) EnsureProbed(ci *ConnInfo) (Capabilities, error) {
 	return c, nil
 }
 
-// CachedCapabilities returns the probed capabilities for ci's channel when the
-// channel is already open and probed. It never opens a channel or runs a
-// command, so session_status can call it without risking an MFA push. ok is
-// false when nothing has been probed yet (report the host as unknown then).
+// CachedCapabilities returns the probed capabilities for ci's target when a
+// probe has SUCCEEDED. It reads durable facts rather than the channel, so the
+// result survives channel loss, and it never opens a channel or runs a command
+// — session_status calls it, and a channel open can cost an MFA push. ok is
+// false when nothing has been probed yet, or when the probe failed.
 func (m *Mux) CachedCapabilities(ci *ConnInfo) (Capabilities, bool) {
-	if ci == nil || ci.Sock == "" {
+	f, ok := m.Facts(ci)
+	if !ok || !f.ShellUsable() {
 		return Capabilities{}, false
 	}
-	m.chMu.Lock()
-	ch := m.channels[ci.Sock]
-	m.chMu.Unlock()
-	if ch == nil {
-		return Capabilities{}, false
-	}
-	if c := ch.caps.Load(); c != nil {
-		return *c, true
-	}
-	return Capabilities{}, false
+	return f.Shell.Caps, true
 }

@@ -66,10 +66,68 @@ type channel struct {
 	stdin io.WriteCloser
 	lines chan []byte
 	dead  bool
-	// caps holds the host capabilities probed once on first use. Stored via an
-	// atomic pointer so session_status can read it without taking ch.mu (which
-	// a long-running op holds for its whole duration).
-	caps atomic.Pointer[Capabilities]
+
+	// Capabilities are NOT stored here — they live in Mux.facts, which outlives
+	// the channel. A probe result that died with its channel was the cause of
+	// two bugs; see facts.go.
+
+	// stderr collects what the remote wrote to fd 2. On a host whose login shell
+	// can't run `sh -s` this is the ONLY evidence of what the far end is (stdout
+	// comes back empty), and it used to go to the null device.
+	stderr *boundedBuf
+	// exit is the remote/ssh exit status, valid once reaped is closed.
+	exit   atomic.Int32
+	reaped chan struct{}
+}
+
+// chanStderrCap bounds the captured stderr. Fingerprints appear in the first
+// line; this is generous enough for a chatty banner without being a leak.
+const chanStderrCap = 8 << 10
+
+// reapGrace is how long evidence() waits for the process to be reaped so a
+// fast-failing remote's exit status isn't lost to a race with the read loop.
+const reapGrace = 250 * time.Millisecond
+
+// boundedBuf is an io.Writer that keeps at most cap bytes. Using a writer
+// rather than StderrPipe lets exec own the copying goroutine, so cmd.Wait
+// cannot race a reader still draining the pipe.
+type boundedBuf struct {
+	mu  sync.Mutex
+	b   []byte
+	cap int
+}
+
+func (w *boundedBuf) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if room := w.cap - len(w.b); room > 0 {
+		if len(p) > room {
+			w.b = append(w.b, p[:room]...)
+		} else {
+			w.b = append(w.b, p...)
+		}
+	}
+	return len(p), nil // never fail the child on our own buffering limit
+}
+
+func (w *boundedBuf) Bytes() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]byte(nil), w.b...)
+}
+
+// evidence returns what the remote printed and its exit status, waiting briefly
+// for the process to be reaped. Exit is -1 if it hasn't finished.
+func (ch *channel) evidence() (stderr []byte, exit int) {
+	select {
+	case <-ch.reaped:
+	case <-time.After(reapGrace):
+	}
+	e := -1
+	if v := ch.exit.Load(); v != -1 {
+		e = int(v)
+	}
+	return ch.stderr.Bytes(), e
 }
 
 func (m *Mux) openChannel(ci *ConnInfo) (*channel, error) {
@@ -89,10 +147,19 @@ func (m *Mux) openChannel(ci *ConnInfo) (*channel, error) {
 	if err != nil {
 		return nil, err
 	}
+	errBuf := &boundedBuf{cap: chanStderrCap}
+	cmd.Stderr = errBuf
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	ch := &channel{cmd: cmd, stdin: stdin, lines: make(chan []byte, 256)}
+	ch := &channel{
+		cmd:    cmd,
+		stdin:  stdin,
+		lines:  make(chan []byte, 256),
+		stderr: errBuf,
+		reaped: make(chan struct{}),
+	}
+	ch.exit.Store(-1)
 	go func() {
 		r := stdout
 		buf := make([]byte, 0, 4096)
@@ -117,7 +184,13 @@ func (m *Mux) openChannel(ci *ConnInfo) (*channel, error) {
 					ch.lines <- append([]byte(nil), buf...)
 				}
 				close(ch.lines)
+				// Wait also flushes exec's stderr copier, so ch.stderr is
+				// complete once this returns.
 				cmd.Wait()
+				if cmd.ProcessState != nil {
+					ch.exit.Store(int32(cmd.ProcessState.ExitCode()))
+				}
+				close(ch.reaped)
 				return
 			}
 		}
@@ -193,11 +266,11 @@ func (ch *channel) run(script string, timeout time.Duration) (*ChanResult, error
 // restricted shell) fails in seconds rather than blocking the full MFA window.
 // A returned sentinel proves the remote ran our printf, i.e. it is a POSIX
 // shell; the collected key=value lines are parsed into Capabilities.
-func (ch *channel) runProbe() (Capabilities, error) {
+func (ch *channel) runProbe() (Capabilities, *probeFailure) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 	if ch.dead {
-		return Capabilities{}, errChannelDead
+		return Capabilities{}, ch.failure(errChannelDead, nil)
 	}
 	nb := make([]byte, 8)
 	rand.Read(nb)
@@ -205,7 +278,7 @@ func (ch *channel) runProbe() (Capabilities, error) {
 	full := probeScript + "\nprintf '\\n" + sent + "%s@\\n' \"$?\"\n"
 	if _, err := io.WriteString(ch.stdin, full); err != nil {
 		ch.kill()
-		return Capabilities{}, errChannelDead
+		return Capabilities{}, ch.failure(errChannelDead, nil)
 	}
 
 	first := time.NewTimer(probeFirstByteTimeout)
@@ -224,7 +297,7 @@ func (ch *channel) runProbe() (Capabilities, error) {
 		case line, ok := <-ch.lines:
 			if !ok {
 				ch.kill()
-				return Capabilities{}, errChannelDead
+				return Capabilities{}, ch.failure(errChannelDead, out.Bytes())
 			}
 			if !gotFirst {
 				gotFirst = true
@@ -239,40 +312,29 @@ func (ch *channel) runProbe() (Capabilities, error) {
 			out.Write(line)
 			if out.Len() > 1<<20 {
 				ch.kill()
-				return Capabilities{}, errNotPosixShell
+				return Capabilities{}, ch.failure(errNotPosixShell, out.Bytes())
 			}
 		case <-tch:
 			ch.kill()
 			if !gotFirst {
-				return Capabilities{}, errNoShellResponse
+				return Capabilities{}, ch.failure(errNoShellResponse, out.Bytes())
 			}
-			return Capabilities{}, errNotPosixShell
+			return Capabilities{}, ch.failure(errNotPosixShell, out.Bytes())
 		}
 	}
 }
 
-// probeChannel runs runProbe and caches the result, or returns the failure so
-// the caller can drop the channel and report a clear error.
-func (m *Mux) probeChannel(ch *channel) error {
-	caps, err := ch.runProbe()
-	if err != nil {
-		return err
-	}
-	ch.caps.Store(&caps)
-	return nil
-}
-
-// probeOpenError turns a probe failure into guidance for the model.
-func probeOpenError(host string, err error) error {
-	switch {
-	case errors.Is(err, errNotPosixShell):
-		return fmt.Errorf("the host at %s did not present a POSIX shell over ssh; native file/exec tools need /bin/sh, so this looks like a non-Unix target (Windows, a network device, or a restricted shell). Use run_command to drive it visibly instead", host)
-	case errors.Is(err, errChannelDead):
-		return fmt.Errorf("the oob channel to %s closed immediately (the remote may not allow a shell session or lacks /bin/sh); use run_command instead", host)
-	case errors.Is(err, errNoShellResponse):
-		return fmt.Errorf("the oob channel to %s did not respond in time; the host may be slow or may not be a POSIX shell", host)
-	default:
-		return fmt.Errorf("opening the oob channel to %s failed: %v", host, err)
+// failure snapshots everything observable about a failed probe: the classified
+// error, whatever the remote wrote to stdout before giving up, and its stderr
+// and exit status. Call after kill() so the process is on its way to being
+// reaped.
+func (ch *channel) failure(err error, stdout []byte) *probeFailure {
+	stderr, exit := ch.evidence()
+	return &probeFailure{
+		Err:    err,
+		Stdout: append([]byte(nil), stdout...),
+		Stderr: stderr,
+		Exit:   exit,
 	}
 }
 
@@ -283,6 +345,14 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+
+	// A host already known to be unusable never opens another channel. No
+	// network, no MFA prompt, and the caller gets the same actionable message
+	// every time instead of an invitation to retry forever.
+	if f, ok := m.Facts(ci); ok && f.ShellBlocked() {
+		return nil, f.ShellError()
+	}
+
 	m.chMu.Lock()
 	ch := m.channels[ci.Sock]
 	opened := false
@@ -301,36 +371,38 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 	if opened {
 		// The first op on a fresh channel may sit behind an MFA push (it opens a
 		// new session on the master). The probe runs as that first op with a
-		// two-phase timeout, caching host facts and confirming a POSIX shell. A
-		// probe failure is fatal for this channel: drop it and return a clear
-		// error rather than letting the real op below hang or fail opaquely.
-		if perr := m.probeChannel(ch); perr != nil {
-			m.chMu.Lock()
-			if m.channels[ci.Sock] == ch {
-				delete(m.channels, ci.Sock)
-			}
-			m.chMu.Unlock()
-			return nil, probeOpenError(ci.Host, perr)
+		// two-phase timeout, confirming a POSIX shell and recording what the host
+		// can do. Either outcome becomes a durable fact, so a host that can't do
+		// this is never silently re-probed.
+		caps, pf := ch.runProbe()
+		if pf != nil {
+			m.dropChannel(ci.Sock, ch)
+			d, evidence, reason, sticky := classifyFailure(*pf)
+			return nil, m.NoteShellUnusable(ci, d, reason, evidence, sticky).ShellError()
 		}
+		m.NoteShellUsable(ci, caps)
 	}
 	res, err := ch.run(script, timeout)
 	if errors.Is(err, errChannelDead) {
-		m.chMu.Lock()
-		if m.channels[ci.Sock] == ch {
-			delete(m.channels, ci.Sock)
-		}
-		m.chMu.Unlock()
+		m.dropChannel(ci.Sock, ch)
 		return nil, fmt.Errorf("the persistent oob channel to %s was lost; retrying will open a new one (on MFA-protected hosts that triggers one push)", ci.Host)
 	}
 	if res != nil && res.TimedOut {
-		// run() killed the channel; drop it so a retry starts fresh.
-		m.chMu.Lock()
-		if m.channels[ci.Sock] == ch {
-			delete(m.channels, ci.Sock)
-		}
-		m.chMu.Unlock()
+		// run() killed the channel; drop it so a retry starts fresh. The probed
+		// capabilities survive in facts, so this no longer regresses the host's
+		// target confidence.
+		m.dropChannel(ci.Sock, ch)
 	}
 	return res, err
+}
+
+// dropChannel forgets ch if it is still the live channel for sock.
+func (m *Mux) dropChannel(sock string, ch *channel) {
+	m.chMu.Lock()
+	if m.channels[sock] == ch {
+		delete(m.channels, sock)
+	}
+	m.chMu.Unlock()
 }
 
 // closeChannels kills all persistent channels (session teardown).
