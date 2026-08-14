@@ -46,10 +46,8 @@ func (s AxisState) String() string {
 	}
 }
 
-// ShellAxis describes the persistent `sh -s` channel capability — the only
-// out-of-band axis today. A future SftpAxis sits beside it in HostFacts without
-// changing this type: sftp is an ssh subsystem, so it needs no shell and can
-// serve file operations on a host whose login shell is cmd.exe.
+// ShellAxis describes the persistent `sh -s` channel capability. SftpAxis sits
+// beside it in HostFacts because an SSH subsystem needs no login-shell grammar.
 type ShellAxis struct {
 	State    AxisState
 	Reason   string // model-facing explanation; set when State == AxisDown
@@ -59,6 +57,22 @@ type ShellAxis struct {
 	Caps     Capabilities // meaningful only when State == AxisUp
 	ProbedAt time.Time
 }
+
+// SftpAxis describes the independent SSH file-transfer subsystem. Every
+// outcome is sticky until explicitly forced because opening the subsystem may
+// trigger MFA. A successful axis can serve file operations even when Shell is
+// down on a non-POSIX login shell.
+type SftpAxis struct {
+	State      AxisState
+	Reason     string
+	RealPath   string
+	PathStyle  string
+	Extensions []string
+	Attempts   int
+	ProbedAt   time.Time
+}
+
+func (a SftpAxis) Attempted() bool { return a.State != AxisUnknown }
 
 // IdentitySource names how an authoritative target identity was learned.
 // Passive screen hints deliberately do not belong here: they are ephemeral,
@@ -119,6 +133,7 @@ func (f IdentityFacts) PlatformFact() IdentityFact {
 type HostFacts struct {
 	Sock, Host, User, Port string
 	Shell                  ShellAxis
+	SFTP                   SftpAxis
 	Identity               IdentityFacts
 	Deep                   DeepProbeResult
 }
@@ -213,7 +228,9 @@ func (m *Mux) Facts(ci *ConnInfo) (HostFacts, bool) {
 	if !ok {
 		return HostFacts{}, false
 	}
-	return *f, true
+	copy := *f
+	copy.SFTP.Extensions = append([]string(nil), f.SFTP.Extensions...)
+	return copy, true
 }
 
 // ForgetFacts discards the entire target record. Normal forced shell probing
@@ -259,6 +276,20 @@ func (m *Mux) forgetDeepFacts(ci *ConnInfo) {
 	f.Identity.DeepProbe = IdentityFact{}
 }
 
+func (m *Mux) forgetSftpFacts(ci *ConnInfo) {
+	if ci == nil || ci.Sock == "" {
+		return
+	}
+	m.factsMu.Lock()
+	defer m.factsMu.Unlock()
+	f := m.facts[ci.Sock]
+	if f == nil {
+		return
+	}
+	f.SFTP = SftpAxis{}
+	f.Identity.SFTP = IdentityFact{}
+}
+
 // CachedDeepProbe returns a prior explicit deep-probe outcome without opening
 // anything. Failed and unknown outcomes are cache hits too.
 func (m *Mux) CachedDeepProbe(ci *ConnInfo) (DeepProbeResult, bool) {
@@ -272,6 +303,23 @@ func (m *Mux) CachedDeepProbe(ci *ConnInfo) (DeepProbeResult, bool) {
 		return DeepProbeResult{}, false
 	}
 	return f.Deep, true
+}
+
+// CachedSFTPProbe returns either a successful or failed prior subsystem probe.
+// Both are durable because retrying may trigger another MFA request.
+func (m *Mux) CachedSFTPProbe(ci *ConnInfo) (SftpAxis, bool) {
+	if ci == nil || ci.Sock == "" {
+		return SftpAxis{}, false
+	}
+	m.factsMu.RLock()
+	defer m.factsMu.RUnlock()
+	f := m.facts[ci.Sock]
+	if f == nil || !f.SFTP.Attempted() {
+		return SftpAxis{}, false
+	}
+	axis := f.SFTP
+	axis.Extensions = append([]string(nil), axis.Extensions...)
+	return axis, true
 }
 
 // factsFor returns the mutable record for ci, creating it on first use.
@@ -359,6 +407,29 @@ func (m *Mux) noteDeepProbe(ci *ConnInfo, result DeepProbeResult) DeepProbeResul
 		f.noteIdentityLocked(result.Dialect, result.Platform, IdentitySourceDeepProbe, result.Evidence, result.AttemptedAt)
 	}
 	return result
+}
+
+func (m *Mux) noteSFTPProbe(ci *ConnInfo, axis SftpAxis) SftpAxis {
+	m.factsMu.Lock()
+	defer m.factsMu.Unlock()
+	f := m.factsForLocked(ci)
+	axis.Attempts = f.SFTP.Attempts + 1
+	axis.Extensions = append([]string(nil), axis.Extensions...)
+	f.SFTP = axis
+	if axis.State == AxisUp {
+		platform := ""
+		switch axis.PathStyle {
+		case "posix":
+			platform = "unix"
+		case "windows":
+			platform = "windows"
+		}
+		if platform != "" {
+			f.noteIdentityLocked(DialectUnknown, platform, IdentitySourceSFTP,
+				"SFTP realpath(.) returned "+axis.RealPath, axis.ProbedAt)
+		}
+	}
+	return axis
 }
 
 func (f *HostFacts) noteIdentityLocked(d Dialect, platform string, source IdentitySource, evidence string, observedAt time.Time) {

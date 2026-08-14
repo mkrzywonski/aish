@@ -29,7 +29,7 @@ At the merge boundary:
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
 | **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
-| **C - SFTP as probe and transport** | not started; subsystem and Duo policy empirically confirmed, shell-first selected |
+| **C - SFTP as probe and transport** | checkpoint 1 implemented on `c-sftp-axis`; automated checks pass, live Duo acceptance pending |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
 The linearization and phase-1 fact model landed in these commits:
@@ -46,22 +46,98 @@ a81c19c  framing, read_output: consume the linearizer
 
 The identity foundation landed in `9620df6`; passive screen identity landed in
 `5499871`; the MFA provenance warning landed in `345be94`; and the unknown-target
-closeout landed in `99a0ab9`. All are merged to `main`.
+closeout landed in `99a0ab9`. Workstream B documentation closed in `8060f16`,
+and the shell-first C policy landed in `a36c139`. All are merged to `main`.
 
 ---
 
 ## Active work
 
-Branch: none; workstream B is merged to `main` through `99a0ab9`.
+Branch: `c-sftp-axis`, based on `main` at `a36c139` (`docs: select shell-first
+SFTP policy`). Current changes are ready to commit after live acceptance.
 
-Completed objective: make truly unknown remote command syntax explicit and prevent
-every POSIX-framed visible fallback from running until the dialect is
-authoritatively identified as POSIX.
+Current objective: establish SFTP as a durable, independent transport axis and
+prove its authentication/user-feedback behavior before routing any file tool.
 
 ### Status
 
-The closeout implementation, automated checks, and live acceptance are
-complete. Workstream B is done.
+Checkpoint 1 implementation, automated verification, installation, and live
+acceptance are complete. Workstream B remains complete.
+
+### Current C checkpoint
+
+- Added `SftpAxis` beside `ShellAxis`, carrying state, reason, realpath, path
+  style, advertised extensions, attempts, and probe time. SFTP platform evidence
+  is authoritative through `IdentitySourceSFTP`, but never claims a command
+  dialect or changes shell capability.
+- Added a bounded `pkg/sftp.NewClientPipe` client over
+  `ssh -S <sock> -oControlMaster=no -oBatchMode=yes ... -s <host> sftp`.
+  Startup covers handshake plus `realpath(".")`; successful clients remain open
+  for later routing, while teardown kills the slave before waiting on the client.
+- Both success and failure are durable cache hits because every open may trigger
+  MFA. Calls single-flight per socket. Only `sftp=true,force=true` closes a
+  retained client and resets/retries SFTP facts; shell and deep facts survive.
+- Added explicit `probe_host{sftp:true}` and SFTP fields to `session_status`.
+  Cache reads precede authorization and open nothing. This checkpoint reports
+  capability and structural platform evidence but deliberately leaves
+  `oob_tools` and all file routes unchanged.
+- Wrapped fresh subsystem startup in `SessionAttemptSFTP`. The existing 500 ms
+  debounce takes over the status bar/title with `SFTP subsystem` and the exact
+  target until handshake plus realpath succeeds, fails, is canceled, or times
+  out. Cached calls never register activity.
+- Corrected the original C plan: config greps and binary presence are not proof
+  that an SSH server will accept a subsystem. Actual bounded open plus sticky
+  caching is the capability test.
+
+### Current C verification
+
+```text
+make check                         PASS
+go test -race ./...                PASS
+git diff --check                   PASS
+focused SFTP/MCP race tests        PASS
+```
+
+Coverage includes exact slave arguments, POSIX/Windows path classification,
+timeout/cancellation cleanup, positive and negative caching, scoped force,
+single-flight, visible MFA activity, platform-only identity, unchanged tool
+availability, and deep+sftp selector rejection.
+
+### Current C live acceptance
+
+Installed/session build: `v0.2.2-26-ga36c139-dirty`, SHA-256
+`d44e13bea0c4409d8625f9851bdad7364fb33124c14a37925011b6b475162d23`.
+
+- Duo RHEL: an immediate first SFTP probe after login completed without another
+  push and stayed under the debounce. `sftp+force` then remained pending beyond
+  five seconds, showed `SFTP subsystem -> su-mk31@noauto2.tr.txstate.edu`, and
+  caused one push. The user verified the bar before approval. It returned
+  `/home/su-mk31`; the following non-force call returned `sftp_cached:true`
+  without opening another subsystem.
+- Passwordless POSIX: a fresh probe returned `/home/mike`, path style `posix`,
+  and the server extension set. No Duo interaction occurred.
+- Windows cmd.exe: a fresh probe returned `/C:/Users/mk31`, path style
+  `windows`, and authoritative platform source `sftp`; dialect remained unknown
+  and all shell-backed `oob_tools` remained unchanged at `unknown`.
+- Windows advertised `statvfs@openssh.com` as well as `posix-rename`, so extension
+  names are capability metadata, not platform proof. Realpath shape remains the
+  structural classifier.
+- The long-lived AI proxy was still the older build and lacked the new schema,
+  so live calls used one-shot debug clients. Each intentionally generated a new
+  ephemeral key and therefore a separate verified local authorization prompt.
+  Those prompts exposed the need for an audible/persistent input-required cue.
+
+### Current C changed files
+
+`go.mod`, `go.sum`, `internal/sshmux/sftp.go`,
+`internal/sshmux/sftp_test.go`, `internal/sshmux/facts.go`,
+`internal/sshmux/mux.go`, `internal/mcpserver/tools.go`,
+`internal/mcpserver/tools_remote.go`, `internal/mcpserver/sftp_probe_test.go`,
+`internal/mcpserver/statusline_test.go`, `internal/proxy/aggregate.go`,
+`internal/proxy/proxy_test.go`, README, CLAUDE, the Windows plan, and this
+handoff.
+
+### Previous B completion
 
 ### Completed
 
@@ -208,26 +284,31 @@ The `test` session connected passwordlessly over real ControlMaster paths to
 
 ### Exact next step
 
-Create `c-sftp-axis` from updated `main` and implement the narrow
-subsystem/fact-axis checkpoint described below. Default to shell-first with lazy
-SFTP fallback because the live Duo subsystem test cost one push per SFTP open.
+Commit and push the completed `c-sftp-axis` checkpoint. Before beginning SFTP
+file routing, implement the separate prompt-attention UX checkpoint: ring the
+terminal bell when AISH presents a user prompt and keep an `INPUT REQUIRED`
+status/title signal active until the prompt is answered or times out. Then start
+the C path-contract/read-only routing steps below on a new branch.
 
 ### Blockers or uncertainties
 
-No known blocker for C's first subsystem/fact-axis checkpoint.
+No implementation blocker. Restarting the AI client will refresh the proxy and
+tool schema from the installed checkpoint build.
 
 ---
 
 ## Next work: workstream C
 
-Start the next implementation branch from updated `main`; `c-sftp-axis` is a
-suitable name. `windows-targets-plan.md` contains the current C sequence.
+After checkpoint 1 is committed, follow the revised finish plan in
+`windows-targets-plan.md`: define and test the Windows
+path contract, expose a narrow retained-client API, route read-only tools first,
+prove existing atomic-write/symlink/version guarantees over SFTP, then route
+writes and merge availability last.
 
-Do not collapse SFTP into `ShellAxis`. Add `SftpAxis` beside it, publish SFTP
-platform evidence through `IdentitySourceSFTP`, and merge tool capability only
-in `mcpserver.availability`. The first narrow checkpoint should prove subsystem
-startup, bounded failure/cache behavior, `realpath(".")` platform
-classification, and the Duo open-cost policy before routing file operations.
+Do not route file operations merely because SFTP startup succeeded. In
+particular, do not weaken atomic replacement or `if_match`, do not silently
+reopen a dropped client, and do not advertise grep/search through a transport
+that provides file I/O but no remote computation.
 
 ---
 
@@ -307,11 +388,12 @@ These were measured directly and corrected earlier assumptions.
    channel process start time.
 2. **PSK reconnect notices can spam the terminal.** `connauth.go` notifies on
    every recognized reconnect. Notify once per client key per session instead.
-3. **Console confirmation prompts can be easy to miss.** During the first
-   background-task test, the one-time unknown-target write confirmation sat
-   unanswered before any SSH session was opened. The MFA status takeover then
-   appeared correctly after the user answered. Consider a separate modal
-   `INPUT REQUIRED` status/title state for console prompts.
+3. **Console prompts need an attention signal.** Authorization prompts from the
+   one-shot debug clients repeatedly sat unnoticed during C live testing. Add a
+   terminal bell when any AISH console prompt appears and a modal
+   `INPUT REQUIRED` status/title state that persists until answer or timeout.
+   Keep prompt serialization, echo-off handling, and byte transparency intact;
+   test disabled status bars and alternate screens too.
 4. **README platform wording remains conservative.** Windows targets are
    detected and refused quickly for POSIX OOB operations, but are not useful for
    native file operations until workstream C lands.

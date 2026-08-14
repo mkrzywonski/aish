@@ -134,7 +134,9 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"remote's login shell has actually changed. Pass deep=true only to run the separate active identity probe: " +
 			"it does not initialize oob_tools, opens at most one additional SSH session (and may trigger MFA), and caches " +
 			"identified, unknown, and failed outcomes. Repeat deep calls read cache; combine deep=true with force=true only " +
-			"to explicitly pay for another active attempt.",
+			"to explicitly pay for another active attempt. Pass sftp=true only to explicitly open and diagnose the SFTP " +
+			"subsystem; it may trigger MFA, caches success and failure, records path/platform evidence, and does not yet " +
+			"route file tools. Combine sftp=true with force=true only to pay for another subsystem attempt.",
 	}, c.probeHost)
 }
 
@@ -390,8 +392,9 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 
 type probeHostArgs struct {
 	SessionArg
-	Force bool `json:"force,omitempty" jsonschema:"discard and rerun the selected probe: the persistent-shell probe normally, or only the active identity cache when deep=true"`
+	Force bool `json:"force,omitempty" jsonschema:"discard and rerun the selected probe: persistent shell normally, active identity with deep=true, or SFTP with sftp=true"`
 	Deep  bool `json:"deep,omitempty" jsonschema:"run the separate active login-shell identity command; may open one additional SSH session and trigger MFA, never changes shell capability or oob_tools, and is cached until deep+force"`
+	SFTP  bool `json:"sftp,omitempty" jsonschema:"explicitly open and diagnose the SFTP subsystem; may trigger MFA, does not route file tools yet, and is cached until sftp+force"`
 }
 
 type probeHostResult struct {
@@ -411,6 +414,13 @@ type probeHostResult struct {
 	DeepProbeCached      bool                 `json:"deep_probe_cached,omitempty"`
 	DeepProbeEvidence    string               `json:"deep_probe_evidence,omitempty"`
 	DeepProbeExit        *int                 `json:"deep_probe_exit,omitempty"`
+	SFTPStatus           string               `json:"sftp_status,omitempty"`
+	SFTPAttempts         int                  `json:"sftp_attempts,omitempty"`
+	SFTPCached           bool                 `json:"sftp_cached,omitempty"`
+	SFTPRealPath         string               `json:"sftp_realpath,omitempty"`
+	SFTPPathStyle        string               `json:"sftp_path_style,omitempty"`
+	SFTPExtensions       []string             `json:"sftp_extensions,omitempty"`
+	SFTPNote             string               `json:"sftp_note,omitempty"`
 	OobTools             map[string]toolAvail `json:"oob_tools"`
 	TargetConfidence     string               `json:"target_confidence"`
 	Note                 string               `json:"note,omitempty"`
@@ -436,10 +446,16 @@ type probeHostResult struct {
 //     docstring claimed "reset button" while EnsureProbed short-circuited on
 //     cache, so it reset nothing.
 func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args probeHostArgs) (*mcp.CallToolResult, probeHostResult, error) {
+	if args.Deep && args.SFTP {
+		return nil, probeHostResult{}, errors.New("deep and sftp select different explicit probes; request only one")
+	}
 	// Non-prompting look first: capability() never asks the user for OOB consent.
 	cap := c.capability()
 	if args.Deep {
 		return c.probeHostDeep(ctx, cap, args.Force)
+	}
+	if args.SFTP {
+		return c.probeHostSFTP(ctx, cap, args.Force)
 	}
 	if cap.via == "controlmaster" {
 		if args.Force {
@@ -488,6 +504,83 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 	res.OobTools = c.oobToolAvailability(rt)
 	c.setProbeIdentityStatus(&res, rt)
 	return nil, res, nil
+}
+
+// probeHostSFTP is an explicit first-C-checkpoint diagnostic. It proves and
+// caches subsystem startup plus structural path identity, but deliberately does
+// not merge SFTP into file-tool availability until routing lands.
+func (c *Core) probeHostSFTP(ctx context.Context, cap route, force bool) (*mcp.CallToolResult, probeHostResult, error) {
+	if cap.via != "controlmaster" {
+		res := probeHostResult{Via: cap.via, Host: cap.host}
+		if cap.via == "local" {
+			res.Note = "local session: remote SFTP probing does not apply."
+		} else {
+			res.Note = "SFTP probing requires a live ControlMaster; no subsystem was opened."
+		}
+		_, _, res.TargetConfidence = c.hostConfidence(cap)
+		res.OobTools = c.oobToolAvailability(cap)
+		c.setProbeIdentityStatus(&res, cap)
+		return nil, res, nil
+	}
+
+	if !force {
+		if axis, ok := c.Mux.CachedSFTPProbe(cap.ci); ok {
+			return nil, c.sftpProbeResult(cap, sshmux.SFTPProbeResult{Axis: axis, Cached: true}), nil
+		}
+	}
+
+	rt := c.route()
+	if rt.via != "controlmaster" {
+		res := probeHostResult{
+			Via: rt.via, Host: rt.host,
+			Note: "SFTP probe not run because out-of-band access was not authorized; no subsystem was opened.",
+		}
+		_, _, res.TargetConfidence = c.hostConfidence(rt)
+		res.OobTools = c.oobToolAvailability(rt)
+		c.setProbeIdentityStatus(&res, rt)
+		return nil, res, nil
+	}
+
+	result, err := c.Mux.ProbeSFTP(ctx, rt.ci, force)
+	if err != nil {
+		return nil, probeHostResult{}, err
+	}
+	return nil, c.sftpProbeResult(rt, result), nil
+}
+
+func (c *Core) sftpProbeResult(rt route, result sshmux.SFTPProbeResult) probeHostResult {
+	axis := result.Axis
+	res := probeHostResult{
+		Via:            rt.via,
+		Host:           rt.host,
+		SFTPStatus:     axis.State.String(),
+		SFTPAttempts:   axis.Attempts,
+		SFTPCached:     result.Cached,
+		SFTPRealPath:   axis.RealPath,
+		SFTPPathStyle:  axis.PathStyle,
+		SFTPExtensions: append([]string(nil), axis.Extensions...),
+		OobTools:       c.oobToolAvailability(rt),
+	}
+	if axis.State == sshmux.AxisUp {
+		res.SFTPNote = "SFTP subsystem startup and realpath(.) succeeded. This checkpoint records capability and identity only; file tools are not routed through SFTP yet."
+	} else {
+		reason := axis.Reason
+		if reason == "" {
+			reason = "SFTP subsystem startup failed"
+		}
+		res.SFTPNote = reason + ". This outcome is cached because another subsystem open may trigger MFA; retry only with sftp=true and force=true."
+	}
+	if f, ok := c.Mux.Facts(rt.ci); ok {
+		res.ProbeAttempts = f.Shell.Attempts
+		res.Probed = f.Shell.State == sshmux.AxisUp
+		if f.Shell.State == sshmux.AxisUp {
+			caps := f.Shell.Caps
+			res.RemoteHost = &caps
+		}
+	}
+	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	c.setProbeIdentityStatus(&res, rt)
+	return res
 }
 
 // probeHostDeep is intentionally independent from the ordinary shell probe.

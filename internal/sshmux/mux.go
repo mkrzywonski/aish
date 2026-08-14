@@ -33,6 +33,12 @@ type Mux struct {
 	deepFlights map[string]*deepFlight
 	deepRun     deepCommandRunner
 
+	sftpMu       sync.Mutex
+	sftpFlights  map[string]*sftpFlight
+	sftpSessions map[string]*sftpSession
+	sftpRun      sftpProbeRunner
+	sftpTimeout  time.Duration
+
 	attemptMu       sync.Mutex
 	attempts        map[uint64]sessionAttemptEntry
 	attemptNext     uint64
@@ -53,10 +59,14 @@ func New(sessionDir string) *Mux {
 		channels:        map[string]*channel{},
 		facts:           map[string]*HostFacts{},
 		deepFlights:     map[string]*deepFlight{},
+		sftpFlights:     map[string]*sftpFlight{},
+		sftpSessions:    map[string]*sftpSession{},
+		sftpTimeout:     sftpProbeTimeout,
 		attempts:        map[uint64]sessionAttemptEntry{},
 		attemptDebounce: sessionAttemptDebounce,
 	}
 	m.deepRun = m.runDeepCommand
+	m.sftpRun = m.runSFTPProbe
 	return m
 }
 
@@ -123,10 +133,23 @@ func (m *Mux) Command(ctx context.Context, ci *ConnInfo, remoteCmd string) *exec
 		"--", remoteCmd)
 }
 
+// SubsystemCommand builds an ssh ControlMaster slave that requests subsystem
+// directly, without invoking the target's login command grammar.
+func (m *Mux) SubsystemCommand(ci *ConnInfo, subsystem string) *exec.Cmd {
+	return exec.Command(m.realSSH,
+		"-S", ci.Sock,
+		"-oControlMaster=no",
+		"-oBatchMode=yes",
+		"-p", ci.Port,
+		"-l", ci.User,
+		"-s", ci.Host, subsystem)
+}
+
 // CloseAll asks every known master to exit (used at session teardown;
 // ControlPersist would reap them within 60s anyway).
 func (m *Mux) CloseAll() {
 	m.closeChannels()
+	m.closeSFTPSessions()
 	evDir := filepath.Join(m.dir, "ssh")
 	entries, err := os.ReadDir(evDir)
 	if err != nil {

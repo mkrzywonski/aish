@@ -325,6 +325,12 @@ type sessionStatusResult struct {
 	DeepProbeStatus      string            `json:"deep_probe_status,omitempty"`
 	DeepProbeAttempts    int               `json:"deep_probe_attempts,omitempty"`
 	DeepProbeNote        string            `json:"deep_probe_note,omitempty"`
+	SFTPStatus           string            `json:"sftp_status,omitempty"`
+	SFTPAttempts         int               `json:"sftp_attempts,omitempty"`
+	SFTPRealPath         string            `json:"sftp_realpath,omitempty"`
+	SFTPPathStyle        string            `json:"sftp_path_style,omitempty"`
+	SFTPExtensions       []string          `json:"sftp_extensions,omitempty"`
+	SFTPNote             string            `json:"sftp_note,omitempty"`
 	OobNote              string            `json:"oob_note,omitempty"`
 	Cwd                  string            `json:"cwd,omitempty"`
 	PromptReady          bool              `json:"prompt_ready"`
@@ -389,6 +395,14 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		res.DeepProbeStatus = string(f.Deep.Status)
 		res.DeepProbeAttempts = f.Deep.Attempts
 		res.DeepProbeNote = f.Deep.Reason
+		if f.SFTP.Attempted() {
+			res.SFTPStatus = f.SFTP.State.String()
+			res.SFTPAttempts = f.SFTP.Attempts
+			res.SFTPRealPath = f.SFTP.RealPath
+			res.SFTPPathStyle = f.SFTP.PathStyle
+			res.SFTPExtensions = append([]string(nil), f.SFTP.Extensions...)
+			res.SFTPNote = f.SFTP.Reason
+		}
 		res.OobNote = f.Note()
 	}
 	if rt.via != "local" {

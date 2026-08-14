@@ -168,8 +168,8 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
-| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), interactive/OOB host, target confidence, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
-| `probe_host` | Initialize the OOB toolset on the current host: open the channel, run the capability probe, resolve `oob_tools` from `unknown` to available/unavailable; may prompt for OOB consent / MFA. Optional (tools auto-probe on first use) |
+| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), interactive/OOB host, target confidence, cached SFTP status, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
+| `probe_host` | Initialize the OOB shell toolset, or explicitly diagnose identity (`deep=true`) or SFTP (`sftp=true`). Each fresh probe may prompt for OOB consent/MFA and caches its outcome; selectors are independent and `force=true` retries only the selected axis. SFTP diagnosis does not route file tools yet |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
 | `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only. Atomic, with automatic staleness protection |
@@ -215,6 +215,14 @@ the explicit "initialize" step: it opens the channel, runs the probe, and
 returns the resolved availability so the AI can plan (and offer to install a
 missing package) before acting. Tools also auto-probe on first use, so this is
 optional — it just moves the one unavoidable channel-open earlier.
+
+`probe_host` also has two explicit diagnostic selectors that never run
+implicitly. `deep=true` identifies login-shell grammar. `sftp=true` opens one
+bounded SFTP subsystem, runs `realpath(".")`, records its path style and server
+extensions, and retains a successful client. Success and failure are cached
+because either outcome may cost an MFA prompt; retry with both `sftp=true` and
+`force=true`. This first SFTP checkpoint does not change `oob_tools` or route
+file operations through that client yet.
 
 Commands used (POSIX/coreutils):
 
@@ -335,9 +343,10 @@ Out-of-band (invisible) operation is opt-in, two ways:
   **n** or a timeout does the operation visibly through the shared terminal
   instead. The grant is remembered once you've said **a**.
 
-For hosts with MFA on new SSH channels, `--oob` uses one persistent SSH
+For hosts with MFA on new SSH channels, `--oob` uses one persistent shell
 channel per host. That usually means one MFA prompt per host per session
-instead of one per OOB operation. Lost channels are not reopened silently.
+instead of one per OOB operation. An explicit SFTP probe is a separate retained
+channel and may cause another prompt. Lost channels are not reopened silently.
 
 ### Wrong-host protection
 

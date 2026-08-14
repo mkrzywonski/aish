@@ -431,6 +431,13 @@ cmd.exe-specific guidance and left the Windows screen unchanged. This closes B.
 
 *The capability win. Depends on B's fact model.*
 
+**Status 2026-08-14:** checkpoint 1 is implemented and live-accepted on
+`c-sftp-axis`. It adds the independent durable axis, an explicit bounded/cached
+`probe_host{sftp:true}` path over the existing ControlMaster, structural
+platform evidence, retained successful clients, and the debounced MFA
+provenance warning. No file operation or `oob_tools` availability is routed
+through SFTP in this checkpoint.
+
 SFTP is an ssh *subsystem*: no shell needed, runs over the existing
 ControlMaster, returns typed attributes rather than parsed command output. On a
 host whose login shell is cmd.exe it is the only route to file operations that
@@ -448,10 +455,12 @@ any client makes — answers the platform question structurally:
 | **Windows OpenSSH** | `/C:/Users/mk31` — the leading-slash-drive-letter form is unmistakable |
 
 This is *positive* identification rather than inference from failure, and costs
-nothing beyond a call already being made. Free even earlier: the `VERSION` packet
-carries the server's extension list (`posix-rename@`, `statvfs@`, `hardlink@`,
-`limits@`…), and the Win32 port's set differs from POSIX OpenSSH's — `statvfs` is
-inherently POSIX. **Verify the exact Windows list empirically.**
+nothing beyond a call already being made. The `VERSION` packet's extension list
+is useful capability metadata but not platform identity. Live Windows OpenSSH
+advertised `statvfs@openssh.com` despite its POSIX name, along with
+`posix-rename`, `hardlink`, `fsync`, `copy-data`, `expand-path`, `home-directory`,
+and `limits`. Use the realpath shape for platform; test each extension's actual
+semantics before depending on it.
 
 Marker files become a confirmation tier, distinguishing *which* POSIX. Prefer the
 readable ones:
@@ -462,18 +471,19 @@ readable ones:
 
 ### Is the subsystem available, without paying for a channel?
 
-SSH has no subsystem capability negotiation. You request one; it opens or returns
-a channel failure. There is nothing to query in advance. But it resolves anyway:
+No. SSH has no subsystem capability negotiation; requesting the subsystem is
+the only authoritative test. The earlier proposal to grep `sshd_config` or look
+for an `sftp-server` binary should not be implemented as capability detection:
+the effective configuration may use includes, may be unreadable, and may name
+an internal or wrapped subsystem, while a binary's presence does not prove that
+the server will accept the request. At most those checks provide an advisory
+prior, which does not justify more probe complexity.
 
-| Host | Known in advance? | Resolution |
-|---|---|---|
-| POSIX, shell channel up | **free** | Add a line to `probeScript`: grep `/etc/ssh/sshd_config` for `Subsystem.*sftp`, or look for `sftp-server` under `/usr/lib/openssh`, `/usr/libexec`, `/usr/libexec/openssh`. Zero extra channels. |
-| Non-POSIX, no shell channel | **impossible** | Also unnecessary — the shell probe already failed, so SFTP is the only remaining option. Nothing left to optimise. |
-
-The prior is strong enough to act on regardless: `Subsystem sftp` ships enabled
-in stock Windows OpenSSH (confirmed: `sftp-server.exe`, 10.0p2) and in every
-mainstream Linux distribution. Policy is *assume, attempt, cache the negative* —
-exactly B's sticky-fact machinery. Being wrong costs one channel open, once.
+The production policy therefore remains *attempt only when selected, then cache
+both success and failure*. Today selection is explicit via
+`probe_host{sftp:true}`. Once file routing lands, shell-first means automatic
+selection only after the shell axis is conclusively down. Being wrong costs one
+channel open once, never an automatic retry.
 
 ### Duo result and open-order policy
 
@@ -489,6 +499,20 @@ reuse avoids a new transport handshake but does not make a subsystem channel
 free. Other deployments may use authentication-time PAM and behave differently,
 so retain the policy switch, but the production default is now **shell-first**.
 
+The instrumented checkpoint reproduced the important path. An immediate first
+probe after interactive login completed without another push and therefore
+stayed inside the 500 ms debounce. A forced fresh SFTP client then remained
+pending for more than five seconds, displayed `SFTP subsystem` plus the exact
+`su-mk31@noauto2.tr.txstate.edu` target, caused one Duo push, and restored the
+normal bar after approval; the user explicitly confirmed the takeover. A repeat
+returned the sticky cache with `sftp_cached:true` and no subsystem open.
+
+The same build returned `/home/mike` on the passwordless POSIX host and
+`/C:/Users/mk31` on Windows cmd.exe. Windows gained authoritative platform-only
+identity from SFTP while dialect stayed unknown and every `oob_tools` entry
+stayed unchanged. `session_status` reported these cached facts without opening a
+channel.
+
 | If SFTP is free | If SFTP costs a push |
 |---|---|
 | Open it **first**. More likely to succeed than `sh -s`, more informative when it does, and it performs the actual file work. Shell channel then opens lazily, only for `exec` / `grep` / `search`. | **Selected default:** shell channel stays primary; SFTP opens lazily only when the shell axis is down. POSIX hosts never pay for it; non-POSIX hosts pay one extra push and gain the entire file suite. |
@@ -501,31 +525,64 @@ abandon ControlMaster reuse and the whole MFA-saving design. The escape hatch is
 `ssh -S <sock> -oControlMaster=no … -s sftp`. Pure Go, one new dependency, master
 reuse preserved.
 
-### Sequence
+### Finish plan
 
-1. Add sftp-server detection to the existing probe script — free on every host
-   with a working shell channel. — `internal/sshmux/probe.go`
-2. An `SftpAxis` beside `ShellAxis` in `HostFacts`, carrying the realpath result,
-   path style (posix/windows), and the advertised extension set.
-   — `internal/sshmux/facts.go`
-3. The SFTP client: subsystem open over the mux slave via `NewClientPipe`,
-   handshake, `realpath(".")`, classify path style, cache into facts. Dead-client
-   handling mirrors the shell channel — never reopened silently.
-   — `internal/sshmux/sftp.go`
-4. Route `file_read`, `file_write`, `file_stat`, `directory_list`, `file_upload`,
-   `file_download` through the SFTP axis when the shell axis is down.
-   **`resultVia` needs a route argument** — it currently hardcodes
-   `controlmaster → "channel"`, and an SFTP-backed op wants `via: "sftp"`.
-   — `internal/mcpserver/tools_remote.go`
-5. Extend `availability(facts)` to merge both axes, so a Windows host reports
-   file tools available and `exec`/`grep`/`search` unavailable — the honest split.
-   — `internal/mcpserver/capability.go`
-6. Path translation for Windows targets: `/C:/Users/…` on the wire versus
-   `C:\Users\…` as the user writes it. Normalise at the boundary and state the
-   convention in the tool descriptions.
-   — `internal/mcpserver/tools_remote.go`
-7. The open-order policy switch, defaulting to shell-first from the measured
-   one-push Duo subsystem result. — `internal/sshmux/facts.go`
+1. **Checkpoint 1: axis and explicit probe — complete.** `SftpAxis` is independent from `ShellAxis`; subsystem startup,
+   handshake, `realpath(".")`, extensions, attempts, and failures are durable.
+   Calls single-flight per socket, cache positive and negative outcomes, retain
+   successful clients, and only `sftp+force` closes/retries them. The activity
+   tracker owns the whole startup window so a delayed Duo request is visible as
+   `SFTP subsystem`. — `internal/sshmux/sftp.go`, `facts.go`,
+   `internal/mcpserver/tools_remote.go`
+2. **Live-accept checkpoint 1 — complete.** Duo forced-open warning/push/cache,
+   passwordless POSIX realpath, Windows structural identity and extensions, and
+   unchanged shell availability were observed on the installed build.
+3. **Define the path contract before file handlers.** Keep tool-facing paths in
+   the target's native form, normalize Windows drive/backslash input to the
+   server's observed slash-drive form at one boundary, and return unambiguous
+   target-native paths. Test drive roots, spaces, Unicode, dot segments, UNC
+   input, and rejection of relative or cross-style ambiguity. Do not infer
+   command syntax from path style. — new focused SFTP path module
+4. **Expose a narrow retained-client API with explicit death semantics.** MCP
+   code should not reach into `pkg/sftp.Client`. Add typed read/stat/list/write/
+   rename methods on the mux-side axis, serialize or safely share requests, and
+   mark a dead client unusable without reopening it. Every returned error must
+   say that a retry requires an explicit operation and may trigger MFA.
+5. **Land read-only routing first.** Route `file_read`, `file_stat`,
+   `directory_list`, and `file_download` through SFTP only when `ShellAxis` is
+   conclusively down and SFTP is up. If SFTP is unknown, the first selected file
+   operation may perform the one lazy open with the same MFA warning; if it is
+   down, refuse from cache. Preserve size limits, line slicing, hashes/version
+   tokens, target-divergence guards, and report `via:"sftp"` rather than the
+   current hardcoded channel result.
+6. **Preserve write guarantees before enabling writes.** Implement temp-in-
+   destination-directory replacement, symlink refusal, mode preservation where
+   the protocol/server supports it, and `if_match` compare-and-swap behavior.
+   Verify `posix-rename@openssh.com` and ordinary rename semantics separately on
+   Linux and Windows. If atomic replacement cannot be proven for a server, do
+   not silently weaken `file_write`; report that capability unavailable.
+7. **Route write/composed tools.** Once step 6 is proven, enable `file_write`,
+   `file_upload`, and the existing read-modify-write `file_edit`/`file_patch`
+   composition over SFTP. Keep privilege-escalation and wrong-host policy
+   unchanged. Do not claim `file_grep` or `file_search`: SFTP supplies file I/O,
+   not remote computation, and client-side recursive substitutes need a separate
+   bounded design.
+8. **Merge availability last.** Extend `availability(facts)` only after each
+   primitive preserves its current contract. With shell down/SFTP up, report the
+   implemented file tools available while `exec`, grep, and search remain
+   unavailable. With SFTP unknown, report only eligible fallback tools unknown;
+   with cached SFTP down, report them unavailable. Shell-up hosts continue using
+   the shell channel and never pay for automatic SFTP under the default policy.
+9. **Add the open-order policy switch only with a real consumer.** Default to
+   shell-first. Keep an internal/configurable policy seam for deployments where
+   SFTP is known to be authentication-free, but do not add eager behavior until
+   it has a measured test environment and routing uses it.
+10. **Acceptance and closeout.** Cover POSIX, Windows cmd.exe, Windows
+    PowerShell, passwordless, Duo-per-channel, subsystem-disabled, dropped-client,
+    concurrent-call, large-file, atomic-write, symlink, stale-version, and path
+    translation cases. Re-run B's unknown-target matrix to prove SFTP platform
+    identity never enables POSIX framing. Update README, CLAUDE, and this handoff
+    only after the live matrix confirms actual behavior.
 
 ### The larger prize (deliberately not in this pass)
 

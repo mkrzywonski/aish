@@ -25,3 +25,14 @@ func TestSessionAttemptStatusTakesOverBar(t *testing.T) {
 		}
 	}
 }
+
+func TestSFTPSessionAttemptNamesSubsystem(t *testing.T) {
+	got := sessionAttemptStatus(sshmux.SessionAttempt{
+		Kind: sshmux.SessionAttemptSFTP, Host: "duo.example", User: "mk31", Count: 1,
+	})
+	for _, want := range []string{"2FA MAY BE REQUESTED", "SFTP subsystem", "mk31@duo.example"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("SFTP modal status missing %q: %s", want, got)
+		}
+	}
+}
