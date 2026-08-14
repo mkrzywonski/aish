@@ -25,8 +25,8 @@ At the merge boundary:
 | **A - linearize the ring** | done; live-validated on Linux and a ConPTY host |
 | **B phase 1 - durable host facts and stderr classification** | done; live-validated on Windows cmd.exe and a Duo RHEL host |
 | **B identity foundation** | done; identity separated from shell capability in `9620df6` |
-| **B phase 2 - passive screen fingerprinting** | done; pure/status-only and unit-validated |
-| **B phase 3 - explicit active identity probe** | implemented and unit-validated; remote-shell matrix pending |
+| **B phase 2 - passive screen fingerprinting** | done; unit-validated and live-validated on Windows cmd.exe |
+| **B phase 3 - explicit active identity probe** | implemented; live-validated on POSIX and Windows cmd.exe, PowerShell/Duo pending |
 | **C - SFTP as probe and transport** | not started; premise empirically confirmed |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
@@ -49,7 +49,7 @@ The identity foundation landed in `9620df6`; passive screen identity landed in
 
 ## Active work
 
-Branch: none after the `b-deep-probe` checkpoint is merged
+Branch: `b-deep-live-validation` (documentation-only validation checkpoint)
 
 Implementation branch point: `5499871` (`main`)
 
@@ -59,8 +59,8 @@ opening more than one SSH session per explicit attempt.
 
 ### Status
 
-Checkpoint complete. B is code-complete; phase 3 still needs live validation on
-the target matrix below before it should be called fully live-validated.
+Implementation checkpoint complete. B is code-complete; phase 3 now has live
+coverage on POSIX and Windows cmd.exe, with the remaining matrix below.
 
 ### Completed
 
@@ -105,15 +105,32 @@ POSIX expansion shapes plus missing/incomplete/mixed responses, unset variables,
 trailing profile noise, timeout, command failure, unknown-result caching,
 deep-only force, and concurrent single-flight.
 
+### Live validation completed 2026-08-14
+
+The `test` session connected passwordlessly over real ControlMaster paths to
+`mike@home.krzywonski.me:55522` and `mk31@localhost`.
+
+- POSIX: the first deep call identified `posix/unix` from expansion grammar,
+  returned exit 0 and source `deep_probe`; a repeat returned
+  `deep_probe_cached:true`; `deep+force` made one uncached attempt. `ShellAxis`
+  remained unknown and every `oob_tools` entry remained unchanged at `unknown`.
+- Windows cmd.exe: before deep probing, passive status identified advisory
+  `cmd/windows` with source `screen` while every tool remained `unknown`. The
+  first deep call upgraded both identity sources to `deep_probe`; repeat and
+  force behavior matched POSIX, without changing shell capability or tools.
+- Independence: one subsequent ordinary shell probe classified the exact cmd
+  stderr fingerprint, moved all POSIX OOB tools to sticky `unavailable`, and
+  preserved the authoritative deep identity and its cache. A later deep call
+  remained a cache hit and did not change that availability.
+- The test session was returned to its local Bash prompt after validation.
+
 ### Live validation still required
 
 Run `probe_host{deep:true}` over real ControlMaster paths against:
 
-1. a POSIX host
-2. Windows OpenSSH with cmd.exe
-3. Windows PowerShell 5.1
-4. PowerShell 7
-5. the Duo-protected RHEL host
+1. Windows PowerShell 5.1
+2. PowerShell 7
+3. the Duo-protected RHEL host
 
 For each target, verify the first explicit call returns the correct dialect and
 source, a repeat is a cache hit with no new session/MFA event, and
@@ -128,9 +145,10 @@ whether SFTP opens first or only after the shell axis is down.
 
 ### Blockers or uncertainties
 
-- Phase 3 has fixture coverage based on locally captured cmd.exe, Windows
-  PowerShell 5.1, and POSIX behavior, but no live remote matrix in this
-  checkpoint.
+- Phase 3's PowerShell coverage is still based on locally captured Windows
+  PowerShell 5.1 behavior and fixtures. The cmd-configured Windows target cannot
+  validate a PowerShell login shell without changing OpenSSH server
+  configuration, which this checkpoint deliberately did not do.
 - Workstream C's default SFTP open order still depends on whether a subsystem
   request over the existing Duo-protected master causes another push.
 
@@ -159,7 +177,7 @@ classification, and the Duo open-cost policy before routing file operations.
 | May deep identity imply shell capability? | **No.** Identity and `sh -s` capability are independent facts |
 | SFTP | **Adopted** as workstream C; open order remains a policy switch pending a Duo test |
 | Install location | **`/usr/local/bin` only.** Multiple installed copies caused version drift |
-| Version stamping | `git describe` for development builds; the source constant changes per release |
+| Version stamping | `git describe` for Make builds; unstamped builds use embedded VCS revision/dirty metadata |
 
 ---
 
