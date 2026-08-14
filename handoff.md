@@ -26,7 +26,7 @@ At the merge boundary:
 | **B phase 1 - durable host facts and stderr classification** | done; live-validated on Windows cmd.exe and a Duo RHEL host |
 | **B identity foundation** | done; identity separated from shell capability in `9620df6` |
 | **B phase 2 - passive screen fingerprinting** | done; unit-validated and live-validated on Windows cmd.exe |
-| **B phase 3 - explicit active identity probe** | implemented; live-validated on POSIX and Windows cmd.exe, PowerShell/Duo pending |
+| **B phase 3 - explicit active identity probe** | implemented; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, and PowerShell 7; Duo pending |
 | **C - SFTP as probe and transport** | not started; premise empirically confirmed |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
@@ -60,7 +60,8 @@ opening more than one SSH session per explicit attempt.
 ### Status
 
 Implementation checkpoint complete. B is code-complete; phase 3 now has live
-coverage on POSIX and Windows cmd.exe, with the remaining matrix below.
+coverage on POSIX, cmd.exe, Windows PowerShell 5.1, and PowerShell 7, with the
+remaining Duo check below.
 
 ### Completed
 
@@ -90,7 +91,8 @@ coverage on POSIX and Windows cmd.exe, with the remaining matrix below.
 `internal/mcpserver/tools.go`, `internal/mcpserver/tools_remote.go`,
 `internal/mcpserver/capability_test.go`, `internal/proxy/aggregate.go`,
 `internal/proxy/proxy_test.go`, `CLAUDE.md`, `windows-targets-plan.md`, and this
-handoff.
+handoff. Follow-up live validation also hardened ANSI cleanup in
+`internal/sshmux/dialect.go` and `dialect_test.go`.
 
 ### Verification
 
@@ -122,17 +124,28 @@ The `test` session connected passwordlessly over real ControlMaster paths to
   stderr fingerprint, moved all POSIX OOB tools to sticky `unavailable`, and
   preserved the authoritative deep identity and its cache. A later deep call
   remained a cache hit and did not change that availability.
-- The test session was returned to its local Bash prompt after validation.
+- Windows PowerShell 5.1: OpenSSH `DefaultShell` was temporarily changed to
+  `powershell.exe`, `sshd` restarted, and the old master explicitly closed.
+  The ordinary probe classified the PowerShell 5.1 stderr form; deep probing
+  identified `powershell/windows` with source `deep_probe`, and the repeat was
+  a cache hit with unchanged tool availability.
+- PowerShell 7.6.4: the same fresh-master procedure using `pwsh.exe` produced
+  the expected interactive prompt, ordinary PowerShell classification, deep
+  expansion evidence, and cached repeat. Its redirected stderr exposed a
+  cosmetic evidence bug: rendered ANSI markers appeared as `\x1b[...]` in the
+  note. Evidence generation now strips both CSI bytes and that literal form,
+  with regression tests; classification continues to use the original bytes.
+- Restoration: the complete `HKLM\SOFTWARE\OpenSSH` key was exported before
+  testing. After both shells, test-added shell values were removed, the export
+  re-imported, `sshd` restarted, a fresh cmd.exe login verified, and the
+  temporary export deleted. The test session was returned to local Bash.
 
 ### Live validation still required
 
-Run `probe_host{deep:true}` over real ControlMaster paths against:
+Run `probe_host{deep:true}` over a real ControlMaster path against the
+Duo-protected RHEL host.
 
-1. Windows PowerShell 5.1
-2. PowerShell 7
-3. the Duo-protected RHEL host
-
-For each target, verify the first explicit call returns the correct dialect and
+For this target, verify the first explicit call returns the correct dialect and
 source, a repeat is a cache hit with no new session/MFA event, and
 `deep:true,force:true` opens exactly one new attempt. Reconfirm that shell state
 and every `oob_tools` value are byte-for-byte unchanged by deep probing.
@@ -145,10 +158,7 @@ whether SFTP opens first or only after the shell axis is down.
 
 ### Blockers or uncertainties
 
-- Phase 3's PowerShell coverage is still based on locally captured Windows
-  PowerShell 5.1 behavior and fixtures. The cmd-configured Windows target cannot
-  validate a PowerShell login shell without changing OpenSSH server
-  configuration, which this checkpoint deliberately did not do.
+- Phase 3's remaining live gap is MFA accounting on the Duo-protected host.
 - Workstream C's default SFTP open order still depends on whether a subsystem
   request over the existing Duo-protected master causes another push.
 

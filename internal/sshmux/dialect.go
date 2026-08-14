@@ -2,6 +2,7 @@ package sshmux
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -26,6 +27,8 @@ import (
 //     identifies a POSIX host that is merely missing /bin/sh.
 
 type Dialect string
+
+var evidenceANSI = regexp.MustCompile(`(?:\x1b|\\x1b)\[[0-9;?]*[ -/]*[@-~]`)
 
 const (
 	DialectUnknown    Dialect = ""
@@ -174,6 +177,10 @@ func classifyFailure(pf probeFailure) (d Dialect, evidence, reason string, stick
 // firstLine trims the evidence to a single tidy line. Remote output arrives
 // with CRLF endings on Windows hosts, so \r is stripped explicitly.
 func firstLine(s string) string {
+	// PowerShell 7 may emit either CSI bytes or their literal `\x1b[...]`
+	// rendering when stderr is redirected through ssh. Neither belongs in the
+	// durable, quoted evidence shown to models.
+	s = evidenceANSI.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]

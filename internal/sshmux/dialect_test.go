@@ -177,6 +177,26 @@ func TestClassifyEvidenceIsQuotable(t *testing.T) {
 	}
 }
 
+func TestClassifyEvidenceStripsPowerShellColorMarkers(t *testing.T) {
+	for name, stderr := range map[string]string{
+		"CSI bytes":   "\x1b[31;1m" + pwshStderr,
+		"literal CSI": `\x1b[31;1msh: \x1b[31;1mThe term 'sh' is not recognized as a name of a cmdlet`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dialect, evidence, _, _ := classifyFailure(probeFailure{Err: errChannelDead, Stderr: []byte(stderr), Exit: 1})
+			if dialect != DialectPowerShell {
+				t.Fatalf("dialect = %q, want PowerShell", dialect)
+			}
+			if strings.Contains(evidence, "31;1m") || strings.Contains(evidence, `\x1b`) || strings.ContainsRune(evidence, '\x1b') {
+				t.Errorf("evidence retained color markers: %q", evidence)
+			}
+			if !strings.HasPrefix(evidence, "sh:") {
+				t.Errorf("evidence = %q, want clean sh prefix", evidence)
+			}
+		})
+	}
+}
+
 func TestDialectHuman(t *testing.T) {
 	for d, want := range map[Dialect]string{
 		DialectCmd:        "Windows cmd.exe",

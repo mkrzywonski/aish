@@ -7,8 +7,9 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 - **Verified on**: WSL → Windows OpenSSH 10.0p2 (cmd.exe), and a Duo-protected
   RHEL 9.8 host
 - **Status**: A **done**; B phases 1-3 **implemented** (phases 1-2 live-validated;
-  phase 3 live-validated on POSIX and Windows cmd.exe, with PowerShell and Duo
-  pending). C and D not started. See `handoff.md` for current state.
+  phase 3 live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, and
+  PowerShell 7, with Duo pending). C and D not started. See `handoff.md` for
+  current state.
 
 ---
 
@@ -298,13 +299,14 @@ status when one exists.
 
 The expansion behavior was first captured locally from cmd.exe, Windows
 PowerShell 5.1, and POSIX `sh`. It has now also been validated through real
-ControlMaster paths against POSIX and Windows cmd.exe: both identified correctly,
-repeat calls hit cache, forced calls were uncached, and `oob_tools` did not move.
-On cmd.exe, the ordinary shell probe later moved tools to sticky unavailable
-without replacing deep identity; another deep call remained cached. PowerShell
-5.1, PowerShell 7, and the Duo-protected host remain in the live matrix. For Duo,
-confirm one explicit call means at most one new MFA event and every repeat is a
-cache hit.
+ControlMaster paths against POSIX, Windows cmd.exe, Windows PowerShell 5.1, and
+PowerShell 7.6.4: all identified correctly, repeat calls hit cache, forced calls
+were uncached, and `oob_tools` did not move. On each Windows shell, the separate
+ordinary probe classified its exact stderr and independently kept tools sticky
+unavailable. PowerShell 7's colorized redirected stderr also established that
+model-facing evidence must strip both CSI bytes and literal `\x1b[...]`
+renderings. The Duo-protected host remains in the live matrix: confirm one
+explicit call means at most one new MFA event and every repeat is a cache hit.
 
 ### Sequence
 
