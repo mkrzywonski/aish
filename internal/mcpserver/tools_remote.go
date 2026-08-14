@@ -783,7 +783,7 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 	if max <= 0 {
 		max = maxFileRead
 	}
-	rt, err := c.readOnlyFileRoute(ctx, "file_read")
+	rt, err := c.fileFallbackRoute(ctx, "file_read")
 	if err != nil {
 		return nil, fileReadResult{}, err
 	}
@@ -911,6 +911,9 @@ type fileWriteResult struct {
 }
 
 func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fileWriteArgs) (*mcp.CallToolResult, fileWriteResult, error) {
+	if err := validateAbsolutePathShape(args.Path); err != nil {
+		return nil, fileWriteResult{}, err
+	}
 	data := []byte(args.Content)
 	if args.Encoding == "base64" {
 		var err error
@@ -921,18 +924,27 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 	if args.IfMatch != "" && args.Append {
 		return nil, fileWriteResult{}, errors.New("if_match cannot be combined with append")
 	}
-	rt := c.route()
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	mode, modeSet, err := parseOptionalMode(args.Mode)
+	if err != nil {
 		return nil, fileWriteResult{}, err
 	}
-	if err := c.requireTool(rt, "file_write"); err != nil {
+	rt, err := c.fileFallbackRoute(ctx, "file_write")
+	if err != nil {
+		return nil, fileWriteResult{}, err
+	}
+	if rt.via != "sftp" {
+		if err := validateAbsolutePath(args.Path); err != nil {
+			return nil, fileWriteResult{}, err
+		}
+	}
+	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, fileWriteResult{}, err
 	}
 
 	// Non-append writes over an OOB route go through the atomic replace path
 	// (temp+rename, mode preserved, symlink-refusing, optional if_match CAS).
 	if !args.Append && rt.via != "in_band" {
-		if err := c.writeFileAtomic(rt, args.Path, data, args.Mode, args.IfMatch); err != nil {
+		if err := c.writeFileAtomic(ctx, rt, args.Path, data, args.Mode, args.IfMatch); err != nil {
 			return nil, fileWriteResult{}, err
 		}
 		return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host}, nil
@@ -955,9 +967,9 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 			return nil, fileWriteResult{}, err
 		}
 		f.Close()
-		if args.Mode != "" {
-			if m, err := parseMode(args.Mode); err == nil {
-				os.Chmod(path, m)
+		if modeSet {
+			if err := os.Chmod(path, mode); err != nil {
+				return nil, fileWriteResult{}, err
 			}
 		}
 
@@ -972,6 +984,11 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		}
 		if res.Exit != 0 {
 			return nil, fileWriteResult{}, fmt.Errorf("oob channel write failed: %.300s", res.Output)
+		}
+
+	case "sftp":
+		if _, err := c.Mux.SFTPAppend(ctx, rt.ci, args.Path, data, mode, modeSet); err != nil {
+			return nil, fileWriteResult{}, err
 		}
 
 	case "in_band":
@@ -995,11 +1012,7 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 			return nil, fileWriteResult{}, fmt.Errorf("in-band write failed: %.200s", res.Output)
 		}
 	}
-	via := rt.via
-	if via == "controlmaster" {
-		via = "channel"
-	}
-	return nil, fileWriteResult{BytesWritten: len(data), Via: via, Host: rt.host}, nil
+	return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host}, nil
 }
 
 // ---- file_edit ----
@@ -1020,24 +1033,28 @@ type fileEditResult struct {
 }
 
 func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args fileEditArgs) (*mcp.CallToolResult, fileEditResult, error) {
-	if err := validateAbsolutePath(args.Path); err != nil {
+	if err := validateAbsolutePathShape(args.Path); err != nil {
 		return nil, fileEditResult{}, err
 	}
 	if args.OldText == "" {
 		return nil, fileEditResult{}, errors.New("old_text must not be empty")
 	}
-	rt := c.route()
+	rt, err := c.fileFallbackRoute(ctx, "file_edit")
+	if err != nil {
+		return nil, fileEditResult{}, err
+	}
+	if rt.via != "sftp" {
+		if err := validateAbsolutePath(args.Path); err != nil {
+			return nil, fileEditResult{}, err
+		}
+	}
 	if rt.via == "in_band" {
 		return nil, fileEditResult{}, oobPrimitiveError("file_edit", rt.host)
 	}
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, fileEditResult{}, err
 	}
-	if err := c.requireTool(rt, "file_edit"); err != nil {
-		return nil, fileEditResult{}, err
-	}
-
-	data, err := c.readOOBFile(rt, args.Path, maxFileEdit)
+	data, err := c.readOOBFile(ctx, rt, args.Path, maxFileEdit)
 	if err != nil {
 		return nil, fileEditResult{}, err
 	}
@@ -1066,7 +1083,7 @@ func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args file
 	if c.canSha256(rt) {
 		ifMatch = sha256Version(data)
 	}
-	if err := c.writeFileAtomic(rt, args.Path, updated, "", ifMatch); err != nil {
+	if err := c.writeFileAtomic(ctx, rt, args.Path, updated, "", ifMatch); err != nil {
 		return nil, fileEditResult{}, err
 	}
 	if !args.ReplaceAll {
@@ -1113,7 +1130,7 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 	if err := validateAbsolutePathShape(args.Path); err != nil {
 		return nil, fileStatResult{}, err
 	}
-	rt, err := c.readOnlyFileRoute(ctx, "file_stat")
+	rt, err := c.fileFallbackRoute(ctx, "file_stat")
 	if err != nil {
 		return nil, fileStatResult{}, err
 	}
@@ -1223,7 +1240,7 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 	if max > 10000 {
 		return nil, directoryListResult{}, errors.New("max_entries must not exceed 10000")
 	}
-	rt, err := c.readOnlyFileRoute(ctx, "directory_list")
+	rt, err := c.fileFallbackRoute(ctx, "directory_list")
 	if err != nil {
 		return nil, directoryListResult{}, err
 	}
@@ -1374,28 +1391,36 @@ type transferResult struct {
 }
 
 func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
-	rt := c.route()
-	if rt.via != "controlmaster" {
-		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_write instead")
-	}
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	if err := validateAbsolutePathShape(args.RemotePath); err != nil {
 		return nil, transferResult{}, err
 	}
-	if err := c.requireTool(rt, "file_upload"); err != nil {
+	rt, err := c.fileFallbackRoute(ctx, "file_upload")
+	if err != nil {
+		return nil, transferResult{}, err
+	}
+	if rt.via != "controlmaster" && rt.via != "sftp" {
+		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_write instead")
+	}
+	if rt.via != "sftp" {
+		if err := validateAbsolutePath(args.RemotePath); err != nil {
+			return nil, transferResult{}, err
+		}
+	}
+	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, transferResult{}, err
 	}
 	data, err := os.ReadFile(expandLocal(args.LocalPath))
 	if err != nil {
 		return nil, transferResult{}, err
 	}
-	if err := c.writeFileAtomic(rt, args.RemotePath, data, "", ""); err != nil {
+	if err := c.writeFileAtomic(ctx, rt, args.RemotePath, data, "", ""); err != nil {
 		return nil, transferResult{}, err
 	}
 	return nil, transferResult{Bytes: int64(len(data)), Via: resultVia(rt), Host: rt.host}, nil
 }
 
 func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
-	rt, err := c.readOnlyFileRoute(ctx, "file_download")
+	rt, err := c.fileFallbackRoute(ctx, "file_download")
 	if err != nil {
 		return nil, transferResult{}, err
 	}
@@ -1632,7 +1657,7 @@ func (c *Core) channelOutput(ci *sshmux.ConnInfo, remoteCmd string, timeout time
 	return res.Output, nil
 }
 
-func (c *Core) readOOBFile(rt route, path string, max int) ([]byte, error) {
+func (c *Core) readOOBFile(ctx context.Context, rt route, path string, max int) ([]byte, error) {
 	switch rt.via {
 	case "local":
 		f, err := os.Open(path)
@@ -1660,6 +1685,15 @@ func (c *Core) readOOBFile(rt route, path string, max int) ([]byte, error) {
 			return nil, fmt.Errorf("file exceeds file_edit limit of %d bytes", max)
 		}
 		return data, nil
+	case "sftp":
+		read, err := c.Mux.SFTPRead(ctx, rt.ci, path, 0, max)
+		if err != nil {
+			return nil, err
+		}
+		if !read.EOF {
+			return nil, fmt.Errorf("file exceeds file_edit limit of %d bytes", max)
+		}
+		return read.Data, nil
 	default:
 		return nil, oobPrimitiveError("file_edit", rt.host)
 	}
@@ -1693,6 +1727,8 @@ func (c *Core) canSha256(rt route) bool {
 	case "controlmaster":
 		caps, ok := c.Mux.CachedCapabilities(rt.ci)
 		return ok && caps.Hasher != "" && caps.Hasher != "none"
+	case "sftp":
+		return true
 	}
 	return false
 }
@@ -1702,7 +1738,7 @@ func (c *Core) canSha256(rt route) bool {
 // symlink, and — when ifMatch is set — swapping only if the current file still
 // matches that version token. Not for append. Returns errStaleWrite /
 // errSymlinkWrite on the respective failures.
-func (c *Core) writeFileAtomic(rt route, path string, data []byte, mode, ifMatch string) error {
+func (c *Core) writeFileAtomic(ctx context.Context, rt route, path string, data []byte, mode, ifMatch string) error {
 	switch rt.via {
 	case "local":
 		return atomicWriteLocal(expandLocal(path), data, mode, ifMatch)
@@ -1734,6 +1770,26 @@ func (c *Core) writeFileAtomic(rt route, path string, data []byte, mode, ifMatch
 			return errSymlinkWrite
 		default:
 			return fmt.Errorf("oob channel write failed (exit %d): %.300s", res.Exit, res.Output)
+		}
+	case "sftp":
+		parsedMode, modeSet, err := parseOptionalMode(mode)
+		if err != nil {
+			return err
+		}
+		_, err = c.Mux.SFTPWriteAtomic(ctx, rt.ci, sshmux.SFTPWriteRequest{
+			Path: path, Data: data, Mode: parsedMode, ModeSet: modeSet, IfMatch: ifMatch,
+		})
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, sshmux.ErrSFTPWriteStale):
+			return errStaleWrite
+		case errors.Is(err, sshmux.ErrSFTPWriteNoVersion):
+			return errNoVersionWrite
+		case errors.Is(err, sshmux.ErrSFTPWriteSymlink):
+			return errSymlinkWrite
+		default:
+			return err
 		}
 	default:
 		return oobPrimitiveError("write", rt.host)
@@ -1935,6 +1991,25 @@ func parseMode(s string) (os.FileMode, error) {
 		return 0, err
 	}
 	return os.FileMode(m), nil
+}
+
+func parseOptionalMode(s string) (os.FileMode, bool, error) {
+	if s == "" {
+		return 0, false, nil
+	}
+	if len(s) < 3 || len(s) > 4 {
+		return 0, false, fmt.Errorf("mode %q must contain 3 or 4 octal digits", s)
+	}
+	for _, digit := range s {
+		if digit < '0' || digit > '7' {
+			return 0, false, fmt.Errorf("mode %q must contain only octal digits", s)
+		}
+	}
+	mode, err := parseMode(s)
+	if err != nil {
+		return 0, false, err
+	}
+	return mode.Perm(), true, nil
 }
 
 func capString(b []byte, max int) string {

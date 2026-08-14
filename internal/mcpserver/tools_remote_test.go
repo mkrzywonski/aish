@@ -263,7 +263,7 @@ func TestLocalEditClosesTOCTOU(t *testing.T) {
 	if err := os.WriteFile(path, []byte("changed underneath"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := c.writeFileAtomic(rt, path, []byte("edited"), "", sha256Version(original))
+	err := c.writeFileAtomic(context.Background(), rt, path, []byte("edited"), "", sha256Version(original))
 	if err == nil || !errors.Is(err, errStaleWrite) {
 		t.Fatalf("err = %v, want errStaleWrite", err)
 	}
@@ -281,5 +281,20 @@ func TestNumberLines(t *testing.T) {
 	// No trailing newline: last line still numbered, no spurious empty line.
 	if got := numberLines([]byte("a\nb")); got != "     1\ta\n     2\tb\n" {
 		t.Fatalf("no-final-newline numberLines = %q", got)
+	}
+}
+
+func TestParseOptionalModeRejectsAmbiguousInput(t *testing.T) {
+	for _, input := range []string{"64", "06444", "08x", "-644"} {
+		if _, _, err := parseOptionalMode(input); err == nil {
+			t.Errorf("parseOptionalMode(%q) succeeded", input)
+		}
+	}
+	mode, set, err := parseOptionalMode("0640")
+	if err != nil || !set || mode.Perm() != 0o640 {
+		t.Fatalf("parseOptionalMode(0640) = %04o, %v, %v", mode.Perm(), set, err)
+	}
+	if mode, set, err := parseOptionalMode(""); err != nil || set || mode != 0 {
+		t.Fatalf("parseOptionalMode(empty) = %04o, %v, %v", mode, set, err)
 	}
 }

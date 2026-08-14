@@ -33,7 +33,7 @@ type filePatchResult struct {
 }
 
 func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args filePatchArgs) (*mcp.CallToolResult, filePatchResult, error) {
-	if err := validateAbsolutePath(args.Path); err != nil {
+	if err := validateAbsolutePathShape(args.Path); err != nil {
 		return nil, filePatchResult{}, err
 	}
 	if strings.TrimSpace(args.Patch) == "" {
@@ -43,18 +43,22 @@ func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args fil
 	if err != nil {
 		return nil, filePatchResult{}, err
 	}
-	rt := c.route()
+	rt, err := c.fileFallbackRoute(ctx, "file_patch")
+	if err != nil {
+		return nil, filePatchResult{}, err
+	}
+	if rt.via != "sftp" {
+		if err := validateAbsolutePath(args.Path); err != nil {
+			return nil, filePatchResult{}, err
+		}
+	}
 	if rt.via == "in_band" {
 		return nil, filePatchResult{}, oobPrimitiveError("file_patch", rt.host)
 	}
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, filePatchResult{}, err
 	}
-	if err := c.requireTool(rt, "file_patch"); err != nil {
-		return nil, filePatchResult{}, err
-	}
-
-	data, err := c.readOOBFile(rt, args.Path, maxFileEdit)
+	data, err := c.readOOBFile(ctx, rt, args.Path, maxFileEdit)
 	if err != nil {
 		return nil, filePatchResult{}, err
 	}
@@ -74,7 +78,7 @@ func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args fil
 	if ifMatch == "" && c.canSha256(rt) {
 		ifMatch = sha256Version(data)
 	}
-	if err := c.writeFileAtomic(rt, args.Path, updated, "", ifMatch); err != nil {
+	if err := c.writeFileAtomic(ctx, rt, args.Path, updated, "", ifMatch); err != nil {
 		return nil, filePatchResult{}, err
 	}
 	return nil, filePatchResult{

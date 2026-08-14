@@ -2,11 +2,15 @@ package sshmux
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -17,6 +21,13 @@ import (
 // operations. Callers must explicitly force a new probe; operations never
 // reopen it because doing so may trigger MFA.
 var ErrSFTPClientDead = errors.New("retained SFTP client is unavailable")
+
+var (
+	ErrSFTPAtomicReplaceUnsupported = errors.New("SFTP server does not advertise atomic replacement")
+	ErrSFTPWriteStale               = errors.New("SFTP destination changed since it was read")
+	ErrSFTPWriteSymlink             = errors.New("refusing to replace an SFTP symlink")
+	ErrSFTPWriteNoVersion           = errors.New("SFTP destination version could not be verified")
+)
 
 // SFTPFileInfo is transport-neutral metadata returned by the retained client.
 type SFTPFileInfo struct {
@@ -41,6 +52,22 @@ type SFTPDirectoryResult struct {
 	Truncated bool
 }
 
+// SFTPWriteRequest preserves the existing atomic-write contract over a
+// retained SFTP client. ModeSet distinguishes an explicit mode from the zero
+// value; otherwise an existing mode is preserved and a new file uses 0644.
+type SFTPWriteRequest struct {
+	Path    string
+	Data    []byte
+	Mode    os.FileMode
+	ModeSet bool
+	IfMatch string
+}
+
+type SFTPWriteResult struct {
+	Path  string
+	Bytes int
+}
+
 // sftpOperations is deliberately narrower than pkg/sftp.Client. Tests can
 // exercise retained-client death and routing without exposing that dependency
 // above the mux boundary.
@@ -49,6 +76,12 @@ type sftpOperations interface {
 	Lstat(string) (SFTPFileInfo, error)
 	ReadDir(context.Context, string) ([]SFTPFileInfo, error)
 	Download(string, io.Writer) (int64, error)
+	WriteExclusive(string, []byte) error
+	Append(string, []byte) error
+	Chmod(string, os.FileMode) error
+	Remove(string) error
+	PosixRename(string, string) error
+	SHA256(string) (string, error)
 	Close() error
 }
 
@@ -102,6 +135,55 @@ func (o *pkgSFTPOperations) Download(path string, dst io.Writer) (int64, error) 
 	}
 	defer f.Close()
 	return io.Copy(dst, f)
+}
+
+func (o *pkgSFTPOperations) WriteExclusive(path string, data []byte) error {
+	f, err := o.client.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return err
+	}
+	n, writeErr := f.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	return errors.Join(writeErr, f.Close())
+}
+
+func (o *pkgSFTPOperations) Append(path string, data []byte) error {
+	f, err := o.client.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND)
+	if err != nil {
+		return err
+	}
+	n, writeErr := f.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	return errors.Join(writeErr, f.Close())
+}
+
+func (o *pkgSFTPOperations) Chmod(path string, mode os.FileMode) error {
+	return o.client.Chmod(path, mode)
+}
+
+func (o *pkgSFTPOperations) Remove(path string) error {
+	return o.client.Remove(path)
+}
+
+func (o *pkgSFTPOperations) PosixRename(oldPath, newPath string) error {
+	return o.client.PosixRename(oldPath, newPath)
+}
+
+func (o *pkgSFTPOperations) SHA256(path string) (string, error) {
+	f, err := o.client.Open(path)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	_, copyErr := io.Copy(h, f)
+	if err := errors.Join(copyErr, f.Close()); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (o *pkgSFTPOperations) Close() error { return o.client.Close() }
@@ -324,4 +406,156 @@ func (m *Mux) SFTPDownload(ctx context.Context, ci *ConnInfo, input string, dst 
 		m.retireSFTP(ci, session, err)
 	}
 	return written, err
+}
+
+// SFTPWriteAtomic replaces a regular file through an exclusive temporary file
+// in the destination directory. It requires posix-rename@openssh.com because
+// ordinary SFTP v3 rename cannot atomically overwrite an existing destination.
+func (m *Mux) SFTPWriteAtomic(ctx context.Context, ci *ConnInfo, req SFTPWriteRequest) (SFTPWriteResult, error) {
+	session, axis, err := m.retainedSFTP(ci)
+	if err != nil {
+		return SFTPWriteResult{}, err
+	}
+	resolved, err := normalizeSFTPPath(axis.PathStyle, req.Path)
+	if err != nil {
+		return SFTPWriteResult{}, err
+	}
+	if !containsString(axis.Extensions, "posix-rename@openssh.com") {
+		return SFTPWriteResult{}, fmt.Errorf("%w; refusing non-atomic remove-and-rename fallback", ErrSFTPAtomicReplaceUnsupported)
+	}
+	tmpPath, err := sftpTempPath(resolved.Server)
+	if err != nil {
+		return SFTPWriteResult{}, err
+	}
+
+	result, err := runSFTPOperation(ctx, session, ci.Host, func(ops sftpOperations) (SFTPWriteResult, error) {
+		initial, initialExists, err := sftpDestinationInfo(ops, resolved.Server)
+		if err != nil {
+			return SFTPWriteResult{}, err
+		}
+		if initialExists && initial.Mode&os.ModeSymlink != 0 {
+			return SFTPWriteResult{}, ErrSFTPWriteSymlink
+		}
+
+		mode := os.FileMode(0o644)
+		if req.ModeSet {
+			mode = req.Mode.Perm()
+		} else if initialExists {
+			mode = initial.Mode.Perm()
+		}
+		if err := ops.WriteExclusive(tmpPath, req.Data); err != nil {
+			return SFTPWriteResult{}, err
+		}
+		cleanup := func(primary error) error {
+			removeErr := ops.Remove(tmpPath)
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				removeErr = fmt.Errorf("cleaning SFTP temporary file: %w", removeErr)
+			} else {
+				removeErr = nil
+			}
+			return errors.Join(primary, removeErr)
+		}
+		if err := ops.Chmod(tmpPath, mode); err != nil {
+			return SFTPWriteResult{}, cleanup(fmt.Errorf("setting SFTP temporary file mode: %w", err))
+		}
+
+		current, currentExists, err := sftpDestinationInfo(ops, resolved.Server)
+		if err != nil {
+			return SFTPWriteResult{}, cleanup(err)
+		}
+		if currentExists && current.Mode&os.ModeSymlink != 0 {
+			return SFTPWriteResult{}, cleanup(ErrSFTPWriteSymlink)
+		}
+		if req.IfMatch != "" {
+			version, err := sftpVersion(ops, resolved.Server, current, currentExists, req.IfMatch)
+			if err != nil {
+				return SFTPWriteResult{}, cleanup(err)
+			}
+			if version != req.IfMatch {
+				return SFTPWriteResult{}, cleanup(ErrSFTPWriteStale)
+			}
+		}
+		if err := ops.PosixRename(tmpPath, resolved.Server); err != nil {
+			return SFTPWriteResult{}, cleanup(fmt.Errorf("atomic SFTP rename failed: %w", err))
+		}
+		return SFTPWriteResult{Path: resolved.Native, Bytes: len(req.Data)}, nil
+	})
+	if errors.Is(err, ErrSFTPClientDead) {
+		m.retireSFTP(ci, session, err)
+	}
+	return result, err
+}
+
+// SFTPAppend appends directly, matching the existing non-atomic append
+// contract. An explicit mode is applied after the write.
+func (m *Mux) SFTPAppend(ctx context.Context, ci *ConnInfo, input string, data []byte, mode os.FileMode, modeSet bool) (SFTPWriteResult, error) {
+	session, axis, err := m.retainedSFTP(ci)
+	if err != nil {
+		return SFTPWriteResult{}, err
+	}
+	resolved, err := normalizeSFTPPath(axis.PathStyle, input)
+	if err != nil {
+		return SFTPWriteResult{}, err
+	}
+	result, err := runSFTPOperation(ctx, session, ci.Host, func(ops sftpOperations) (SFTPWriteResult, error) {
+		if err := ops.Append(resolved.Server, data); err != nil {
+			return SFTPWriteResult{}, err
+		}
+		if modeSet {
+			if err := ops.Chmod(resolved.Server, mode.Perm()); err != nil {
+				return SFTPWriteResult{}, fmt.Errorf("setting appended SFTP file mode: %w", err)
+			}
+		}
+		return SFTPWriteResult{Path: resolved.Native, Bytes: len(data)}, nil
+	})
+	if errors.Is(err, ErrSFTPClientDead) {
+		m.retireSFTP(ci, session, err)
+	}
+	return result, err
+}
+
+func sftpDestinationInfo(ops sftpOperations, filePath string) (SFTPFileInfo, bool, error) {
+	info, err := ops.Lstat(filePath)
+	if err == nil {
+		return info, true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return SFTPFileInfo{}, false, nil
+	}
+	return SFTPFileInfo{}, false, err
+}
+
+func sftpVersion(ops sftpOperations, filePath string, info SFTPFileInfo, exists bool, token string) (string, error) {
+	if !exists {
+		return "", ErrSFTPWriteNoVersion
+	}
+	switch {
+	case strings.HasPrefix(token, "sha256:"):
+		version, err := ops.SHA256(filePath)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrSFTPWriteNoVersion, err)
+		}
+		return version, nil
+	case strings.HasPrefix(token, "mtime-size:"):
+		return fmt.Sprintf("mtime-size:%d:%d", info.ModTime.Unix(), info.Size), nil
+	default:
+		return "", errors.New("unsupported if_match token; use a version from file_read or file_stat")
+	}
+}
+
+func sftpTempPath(destination string) (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("creating SFTP temporary name: %w", err)
+	}
+	return path.Join(path.Dir(destination), ".aishtmp."+hex.EncodeToString(random[:])), nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

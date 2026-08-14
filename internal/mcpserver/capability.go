@@ -262,11 +262,11 @@ func (c *Core) requireTool(rt route, tool string) error {
 	return errors.New(msg)
 }
 
-// readOnlyFileRoute preserves the default shell-first policy while allowing
-// file primitives to fall back to a retained SFTP client on a conclusively
-// non-POSIX target. A fresh SFTP open happens at most once and is sticky in
-// either direction; a lost or failed client is never reopened here.
-func (c *Core) readOnlyFileRoute(ctx context.Context, tool string) (route, error) {
+// fileFallbackRoute preserves the default shell-first policy while allowing
+// implemented file primitives to fall back to a retained SFTP client on a
+// conclusively non-POSIX target. A fresh SFTP open happens at most once and is
+// sticky in either direction; a lost or failed client is never reopened here.
+func (c *Core) fileFallbackRoute(ctx context.Context, tool string) (route, error) {
 	rt := c.route()
 	if rt.via != "controlmaster" {
 		if err := c.requireTool(rt, tool); err != nil {
@@ -284,7 +284,7 @@ func (c *Core) readOnlyFileRoute(ctx context.Context, tool string) (route, error
 	}
 
 	facts, ok := c.Mux.Facts(rt.ci)
-	action := readOnlyFallbackAction(facts, ok)
+	action := fileFallbackAction(facts, ok)
 	if action == fallbackRefuseShell {
 		// Preserve the shell probe's exact retry/MFA guidance. A soft shell
 		// failure is not enough evidence to pay for a second subsystem.
@@ -326,7 +326,7 @@ const (
 	fallbackRefuseSFTP
 )
 
-func readOnlyFallbackAction(facts sshmux.HostFacts, ok bool) sftpFallbackAction {
+func fileFallbackAction(facts sshmux.HostFacts, ok bool) sftpFallbackAction {
 	if !ok || !facts.ShellBlocked() {
 		return fallbackRefuseShell
 	}

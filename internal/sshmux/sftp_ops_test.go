@@ -22,6 +22,13 @@ type fakeSFTPOperations struct {
 	statErr       error
 	entries       []SFTPFileInfo
 	download      []byte
+	lstatFn       func(string) (SFTPFileInfo, error)
+	writeFn       func(string, []byte) error
+	appendFn      func(string, []byte) error
+	chmodFn       func(string, os.FileMode) error
+	removeFn      func(string) error
+	renameFn      func(string, string) error
+	sha256Fn      func(string) (string, error)
 	block         <-chan struct{}
 	closed        chan struct{}
 	closeOnce     sync.Once
@@ -58,6 +65,9 @@ func (f *fakeSFTPOperations) Read(path string, offset int64, max int) ([]byte, b
 
 func (f *fakeSFTPOperations) Lstat(path string) (SFTPFileInfo, error) {
 	f.note(path)
+	if f.lstatFn != nil {
+		return f.lstatFn(path)
+	}
 	return f.stat, f.statErr
 }
 
@@ -72,6 +82,54 @@ func (f *fakeSFTPOperations) Download(path string, dst io.Writer) (int64, error)
 	return int64(n), err
 }
 
+func (f *fakeSFTPOperations) WriteExclusive(path string, data []byte) error {
+	f.note(path)
+	if f.writeFn != nil {
+		return f.writeFn(path, append([]byte(nil), data...))
+	}
+	return nil
+}
+
+func (f *fakeSFTPOperations) Append(path string, data []byte) error {
+	f.note(path)
+	if f.appendFn != nil {
+		return f.appendFn(path, append([]byte(nil), data...))
+	}
+	return nil
+}
+
+func (f *fakeSFTPOperations) Chmod(path string, mode os.FileMode) error {
+	f.note(path)
+	if f.chmodFn != nil {
+		return f.chmodFn(path, mode)
+	}
+	return nil
+}
+
+func (f *fakeSFTPOperations) Remove(path string) error {
+	f.note(path)
+	if f.removeFn != nil {
+		return f.removeFn(path)
+	}
+	return nil
+}
+
+func (f *fakeSFTPOperations) PosixRename(oldPath, newPath string) error {
+	f.note(oldPath + " -> " + newPath)
+	if f.renameFn != nil {
+		return f.renameFn(oldPath, newPath)
+	}
+	return nil
+}
+
+func (f *fakeSFTPOperations) SHA256(path string) (string, error) {
+	f.note(path)
+	if f.sha256Fn != nil {
+		return f.sha256Fn(path)
+	}
+	return "", nil
+}
+
 func (f *fakeSFTPOperations) Close() error {
 	f.closeCount.Add(1)
 	f.closeOnce.Do(func() {
@@ -83,12 +141,17 @@ func (f *fakeSFTPOperations) Close() error {
 }
 
 func installFakeSFTP(t *testing.T, style string, ops sftpOperations) (*Mux, *ConnInfo) {
+	return installFakeSFTPWithExtensions(t, style, nil, ops)
+}
+
+func installFakeSFTPWithExtensions(t *testing.T, style string, extensions []string, ops sftpOperations) (*Mux, *ConnInfo) {
 	t.Helper()
 	m := New(t.TempDir())
 	ci := testConn()
 	m.sftpRun = func(context.Context, *ConnInfo) (*sftpSession, SftpAxis) {
 		return &sftpSession{ops: ops}, SftpAxis{
-			State: AxisUp, RealPath: "/home/mike", PathStyle: style, ProbedAt: time.Now(),
+			State: AxisUp, RealPath: "/home/mike", PathStyle: style,
+			Extensions: append([]string(nil), extensions...), ProbedAt: time.Now(),
 		}
 	}
 	if _, err := m.ProbeSFTP(context.Background(), ci, false); err != nil {
@@ -270,5 +333,211 @@ func TestRetiringOldSFTPGenerationDoesNotClobberReplacement(t *testing.T) {
 	m.sftpMu.Unlock()
 	if got != replacement {
 		t.Fatal("old generation removed replacement session")
+	}
+}
+
+type fakeSFTPFile struct {
+	data []byte
+	mode os.FileMode
+}
+
+func atomicWriteFake(files map[string]fakeSFTPFile) *fakeSFTPOperations {
+	return &fakeSFTPOperations{
+		lstatFn: func(path string) (SFTPFileInfo, error) {
+			file, ok := files[path]
+			if !ok {
+				return SFTPFileInfo{}, os.ErrNotExist
+			}
+			return SFTPFileInfo{Name: path, Size: int64(len(file.data)), Mode: file.mode, ModTime: time.Unix(123, 0)}, nil
+		},
+		writeFn: func(path string, data []byte) error {
+			if _, exists := files[path]; exists {
+				return os.ErrExist
+			}
+			files[path] = fakeSFTPFile{data: data, mode: 0o600}
+			return nil
+		},
+		appendFn: func(path string, data []byte) error {
+			file := files[path]
+			file.data = append(file.data, data...)
+			if file.mode == 0 {
+				file.mode = 0o644
+			}
+			files[path] = file
+			return nil
+		},
+		chmodFn: func(path string, mode os.FileMode) error {
+			file, ok := files[path]
+			if !ok {
+				return os.ErrNotExist
+			}
+			file.mode = mode.Perm()
+			files[path] = file
+			return nil
+		},
+		removeFn: func(path string) error {
+			if _, ok := files[path]; !ok {
+				return os.ErrNotExist
+			}
+			delete(files, path)
+			return nil
+		},
+		renameFn: func(oldPath, newPath string) error {
+			file, ok := files[oldPath]
+			if !ok {
+				return os.ErrNotExist
+			}
+			files[newPath] = file
+			delete(files, oldPath)
+			return nil
+		},
+		sha256Fn: func(path string) (string, error) {
+			file, ok := files[path]
+			if !ok {
+				return "", os.ErrNotExist
+			}
+			return sha256Token(file.data), nil
+		},
+	}
+}
+
+func TestSFTPAtomicWritePreservesModeAndVersion(t *testing.T) {
+	const target = "/C:/Users/mk31/file.txt"
+	files := map[string]fakeSFTPFile{target: {data: []byte("old"), mode: 0o640}}
+	ops := atomicWriteFake(files)
+	m, ci := installFakeSFTPWithExtensions(t, "windows", []string{"posix-rename@openssh.com"}, ops)
+
+	result, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{
+		Path: `C:\Users\mk31\file.txt`, Data: []byte("replacement"), IfMatch: sha256Token([]byte("old")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Path != `C:\Users\mk31\file.txt` || result.Bytes != len("replacement") {
+		t.Fatalf("result = %+v", result)
+	}
+	if got := files[target]; string(got.data) != "replacement" || got.mode.Perm() != 0o640 {
+		t.Fatalf("installed file = %#v", got)
+	}
+	for name := range files {
+		if strings.Contains(name, ".aishtmp.") {
+			t.Fatalf("temporary file remained: %s", name)
+		}
+	}
+}
+
+func TestSFTPAtomicWriteRequiresOverwriteExtension(t *testing.T) {
+	ops := &fakeSFTPOperations{}
+	m, ci := installFakeSFTP(t, "posix", ops)
+	_, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{Path: "/tmp/file", Data: []byte("x")})
+	if !errors.Is(err, ErrSFTPAtomicReplaceUnsupported) || !strings.Contains(err.Error(), "remove-and-rename") {
+		t.Fatalf("unsupported rename error = %v", err)
+	}
+	if len(ops.paths) != 0 {
+		t.Fatalf("unsupported write touched server: %q", ops.paths)
+	}
+}
+
+func TestSFTPAtomicWriteRefusesSymlinkAndStaleVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    os.FileMode
+		ifMatch string
+		want    error
+	}{
+		{name: "symlink", mode: os.ModeSymlink | 0o777, want: ErrSFTPWriteSymlink},
+		{name: "stale", mode: 0o600, ifMatch: sha256Token([]byte("different")), want: ErrSFTPWriteStale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := map[string]fakeSFTPFile{"/tmp/file": {data: []byte("current"), mode: tc.mode}}
+			ops := atomicWriteFake(files)
+			m, ci := installFakeSFTPWithExtensions(t, "posix", []string{"posix-rename@openssh.com"}, ops)
+			_, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{
+				Path: "/tmp/file", Data: []byte("new"), IfMatch: tc.ifMatch,
+			})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+			if got := string(files["/tmp/file"].data); got != "current" {
+				t.Fatalf("destination changed to %q", got)
+			}
+			for name := range files {
+				if strings.Contains(name, ".aishtmp.") {
+					t.Fatalf("temporary file remained: %s", name)
+				}
+			}
+		})
+	}
+}
+
+func TestSFTPAtomicWriteMissingVersionDoesNotCreateDestination(t *testing.T) {
+	files := map[string]fakeSFTPFile{}
+	ops := atomicWriteFake(files)
+	m, ci := installFakeSFTPWithExtensions(t, "posix", []string{"posix-rename@openssh.com"}, ops)
+	_, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{
+		Path: "/tmp/file", Data: []byte("new"), IfMatch: "mtime-size:123:3",
+	})
+	if !errors.Is(err, ErrSFTPWriteNoVersion) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("missing-version write left files: %#v", files)
+	}
+}
+
+func TestSFTPAtomicWriteRechecksSymlinkBeforeRename(t *testing.T) {
+	files := map[string]fakeSFTPFile{"/tmp/file": {data: []byte("current"), mode: 0o600}}
+	ops := atomicWriteFake(files)
+	lstat := ops.lstatFn
+	calls := 0
+	ops.lstatFn = func(path string) (SFTPFileInfo, error) {
+		info, err := lstat(path)
+		if path == "/tmp/file" {
+			calls++
+			if calls == 2 {
+				info.Mode = os.ModeSymlink | 0o777
+			}
+		}
+		return info, err
+	}
+	m, ci := installFakeSFTPWithExtensions(t, "posix", []string{"posix-rename@openssh.com"}, ops)
+	_, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{Path: "/tmp/file", Data: []byte("new")})
+	if !errors.Is(err, ErrSFTPWriteSymlink) {
+		t.Fatalf("error = %v", err)
+	}
+	if got := string(files["/tmp/file"].data); got != "current" {
+		t.Fatalf("destination changed to %q", got)
+	}
+}
+
+func TestSFTPAtomicWriteTransportLossRetiresClient(t *testing.T) {
+	files := map[string]fakeSFTPFile{"/tmp/file": {data: []byte("current"), mode: 0o600}}
+	ops := atomicWriteFake(files)
+	ops.renameFn = func(string, string) error { return io.ErrUnexpectedEOF }
+	m, ci := installFakeSFTPWithExtensions(t, "posix", []string{"posix-rename@openssh.com"}, ops)
+	_, err := m.SFTPWriteAtomic(context.Background(), ci, SFTPWriteRequest{Path: "/tmp/file", Data: []byte("new")})
+	if !errors.Is(err, ErrSFTPClientDead) {
+		t.Fatalf("transport error = %v", err)
+	}
+	facts, _ := m.Facts(ci)
+	if facts.SFTP.State != AxisDown {
+		t.Fatalf("SFTP axis = %+v", facts.SFTP)
+	}
+}
+
+func TestSFTPAppendUsesNativePathAndExplicitMode(t *testing.T) {
+	files := map[string]fakeSFTPFile{"/C:/Users/mk31/file.txt": {data: []byte("a"), mode: 0o600}}
+	ops := atomicWriteFake(files)
+	m, ci := installFakeSFTP(t, "windows", ops)
+	result, err := m.SFTPAppend(context.Background(), ci, `C:\Users\mk31\file.txt`, []byte("b"), 0o640, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Path != `C:\Users\mk31\file.txt` || result.Bytes != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	got := files["/C:/Users/mk31/file.txt"]
+	if string(got.data) != "ab" || got.mode.Perm() != 0o640 {
+		t.Fatalf("appended file = %#v", got)
 	}
 }
