@@ -33,8 +33,9 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Name:        "file_read",
 		Annotations: readOnlyTool("Read file on session host"),
 		Description: "Read a file from the host the shared session is currently on (remote when ssh'd, local otherwise). " +
-			"Out-of-band (invisible) when authorized and a route is available; " +
-			"otherwise it works by typing through the shared terminal (visible to the user, size-limited). " +
+			"Out-of-band (invisible) when authorized and a route is available; remote reads prefer the persistent shell " +
+			"channel and may use a retained SFTP client when that shell is conclusively unavailable. " +
+			"Otherwise it works by typing through the shared terminal (visible to the user, size-limited). " +
 			"Non-UTF-8 content is returned base64 (see encoding).",
 	}, c.fileRead)
 
@@ -70,14 +71,16 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Name:        "file_stat",
 		Annotations: readOnlyTool("Inspect path on session host"),
 		Description: "Inspect an absolute path on the session's current host. Returns its type, size, permissions, and " +
-			"modification time without following a symbolic link. Requires an authorized local or remote OOB route.",
+			"modification time without following a symbolic link. Requires an authorized local or remote OOB route; " +
+			"remote reads may fall back to retained SFTP after a conclusive shell failure.",
 	}, c.fileStat)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "directory_list",
 		Annotations: readOnlyTool("List directory on session host"),
 		Description: "List direct children of an absolute directory on the session's current host, sorted by name, with " +
-			"type, size, and modification time. Requires an authorized local or remote OOB route.",
+			"type, size, and modification time. Requires an authorized local or remote OOB route; remote reads may fall " +
+			"back to retained SFTP after a conclusive shell failure.",
 	}, c.directoryList)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -93,7 +96,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Name:        "file_download",
 		Annotations: mutatingTool("Download file from session host", true, false),
 		Description: "Copy a file from the remote host of the current SSH session to the local machine over its authorized " +
-			"OOB channel. The persistent channel may require approval when first opened on MFA-protected hosts. Errors when " +
+			"OOB route. It prefers the persistent shell channel and may use retained SFTP after a conclusive shell failure. " +
+			"Opening either route may require approval on MFA-protected hosts. Errors when " +
 			"the session is local or no multiplexed channel is available — " +
 			"use file_read then.",
 	}, c.fileDownload)

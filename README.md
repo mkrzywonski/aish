@@ -221,8 +221,12 @@ implicitly. `deep=true` identifies login-shell grammar. `sftp=true` opens one
 bounded SFTP subsystem, runs `realpath(".")`, records its path style and server
 extensions, and retains a successful client. Success and failure are cached
 because either outcome may cost an MFA prompt; retry with both `sftp=true` and
-`force=true`. This first SFTP checkpoint does not change `oob_tools` or route
-file operations through that client yet.
+`force=true`. Read-only operations (`file_read`, `file_stat`,
+`directory_list`, and `file_download`) may use that client after the shell axis
+fails conclusively. During this staged checkpoint, `oob_tools` still reflects
+only shell capability and can therefore report those four tools unavailable on
+a non-POSIX host even while their SFTP fallback works; availability merging is
+deferred until the complete file contract lands.
 
 Commands used (POSIX/coreutils):
 

@@ -29,7 +29,7 @@ At the merge boundary:
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
 | **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
-| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; checkpoint 2 read-only routing implemented on `c-sftp-readonly`, live acceptance pending |
+| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; checkpoint 2 read-only routing implemented and live-accepted on `c-sftp-readonly`, merge pending |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
 The linearization and phase-1 fact model landed in these commits:
@@ -357,15 +357,39 @@ The `test` session connected passwordlessly over real ControlMaster paths to
   guidance. The Windows screen remained byte-for-byte unchanged at generation
   52 after another 700 ms wait. Durable identity survived the route downgrade.
 
+### Checkpoint 2 live acceptance
+
+The installed `v0.2.2-32-gc1a776e` build passed the read-only matrix:
+
+- A passwordless POSIX target returned `via:"channel"` for read/stat/list/
+  download. The downloaded 12-byte hostname matched the read hash, and status
+  showed no SFTP attempt.
+- A Windows cmd.exe target failed the shell probe conclusively, lazily opened
+  SFTP exactly once, and returned `via:"sftp"` for read/stat/list/download.
+  Native `C:\\...`, observed `/C:/...`, and dot-segment paths normalized to an
+  unambiguous native returned path. Relative and UNC inputs failed during
+  preflight without incrementing SFTP attempts.
+- The 92-byte `C:\\Windows\\win.ini` download matched the read SHA-256
+  `6b3d6e268dcb76e175a7db3d9e031349ab2c32654c7e57581a851e64dd6214ab`.
+  A concurrent stat/read/list against `System32` shared the retained client;
+  the 360448-byte `notepad.exe` read honored a 4096-byte cap and returned
+  base64 with `eof:false`.
+- Deliberately terminating the retained SFTP slave made the first subsequent
+  read retire it, made the next read refuse from cached-down state, and opened
+  nothing implicitly. `probe_host{sftp:true,force:true}` restored the axis;
+  later read/stat calls reused that replacement.
+- `session_status.oob_tools` intentionally remains shell-only during this
+  checkpoint and therefore says the four read-only tools are unavailable on
+  cmd.exe even while their SFTP fallback works. This is a staged limitation,
+  not the final AI capability contract; merge availability only after the full
+  file contract lands as specified by workstream C step 8.
+
 ### Exact next step
 
-Build and install `c-sftp-readonly`, restart the `test` session, then live-test
-the read-only matrix: POSIX must remain on `via:"channel"` without an SFTP open;
-Windows must return `via:"sftp"` for read/stat/list/download using native paths;
-an invalid/relative Windows path must fail without touching the file; and a
-cached SFTP client must serve repeats without another subsystem/MFA attempt.
-After live acceptance, merge checkpoint 2 before beginning atomic write/rename
-semantics. Do not merge SFTP into `oob_tools` yet.
+Commit the live-acceptance documentation, merge `c-sftp-readonly` into `main`,
+and push. Start the next branch with workstream C step 6: prove atomic write,
+rename, symlink, mode, and stale-version guarantees before exposing any SFTP
+write route. Do not merge SFTP into `oob_tools` yet.
 
 ### Blockers or uncertainties
 
@@ -492,13 +516,14 @@ The B-closeout build was installed as `v0.2.2-23-g345be94-dirty`; the artifact
 and `/usr/local/bin/aish` both had SHA-256
 `023ce9ae65beefe52343e66aea2b2a1d29023734072c9ad25b00872013ba53fd`.
 
-The installed prompt-attention/SFTP build reports
-`v0.2.2-27-g4d72bc5-dirty`; the final tested artifact and
-`/usr/local/bin/aish` had SHA-256
-`cc7cf2651006cdb70f1e126d4a75f9dc00b35e9f39250a61bdd0af9d33287c45`.
-`main` is clean and pushed through `ead8145`; checkpoint 2 is on
-`c-sftp-readonly`. The installed development version remains the earlier
-checkpoint artifact until the next build/install.
+The installed read-only SFTP build reports `v0.2.2-32-gc1a776e`; the tested
+artifact and `/usr/local/bin/aish` had identical SHA-256
+`1a511b32a90cdc1dcb7c81cde99d353d09aa3e836eac93d050c64c697d2ef347`.
+`main` is clean and pushed through `ead8145`; checkpoint 2 is live-accepted on
+`c-sftp-readonly` and awaits its documentation commit and merge. A long-lived
+AI MCP proxy may still report `v0.2.2-27-g4d72bc5-dirty` and cache the old
+diagnostic-only SFTP descriptions until that AI client restarts; forwarding to
+the current session server still works.
 
 Do not assume any previous live session still exists. `aish sessions` is
 authoritative.

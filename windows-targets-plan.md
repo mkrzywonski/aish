@@ -9,7 +9,7 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 - **Status**: A and B **done**. B is live-validated on POSIX, cmd.exe, Windows
   PowerShell 5.1, PowerShell 7, Duo-protected RHEL, and unknown/POSIX/cmd.exe
   in-band routes. C checkpoint 1 is complete and live-validated; checkpoint 2
-  read-only routing is implemented with live acceptance pending. C writes,
+  read-only routing is implemented and live-validated. C writes,
   availability merging, and D remain. See `handoff.md` for current state.
 
 ---
@@ -550,13 +550,22 @@ reuse preserved.
    rename methods on the mux-side axis, serialize or safely share requests, and
    mark a dead client unusable without reopening it. Every returned error must
    say that a retry requires an explicit operation and may trigger MFA.
-5. **Land read-only routing first — implemented; live acceptance pending.** Route `file_read`, `file_stat`,
+5. **Land read-only routing first — implemented and live-accepted.** Route `file_read`, `file_stat`,
    `directory_list`, and `file_download` through SFTP only when `ShellAxis` is
    conclusively down and SFTP is up. If SFTP is unknown, the first selected file
    operation may perform the one lazy open with the same MFA warning; if it is
    down, refuse from cache. Preserve size limits, line slicing, hashes/version
    tokens, target-divergence guards, and report `via:"sftp"` rather than the
    current hardcoded channel result.
+
+   Live acceptance on `v0.2.2-32-gc1a776e` proved that a POSIX target used the
+   shell channel for read/stat/list/download with no SFTP attempt, while a
+   Windows cmd.exe target performed one shell probe, opened SFTP once, and
+   served native-drive and slash-drive paths through `via:"sftp"`. Dot-segment
+   normalization, relative/UNC rejection without I/O, checksum-preserving
+   download, bounded binary reads, concurrent calls, retained-client reuse,
+   sticky failure after a deliberately killed client, and explicit
+   `sftp+force` recovery all behaved as designed.
 6. **Preserve write guarantees before enabling writes.** Implement temp-in-
    destination-directory replacement, symlink refusal, mode preservation where
    the protocol/server supports it, and `if_match` compare-and-swap behavior.
