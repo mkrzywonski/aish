@@ -29,7 +29,7 @@ At the merge boundary:
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
 | **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
-| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; checkpoint 2 read-only routing implemented and live-accepted on `c-sftp-readonly`, merge pending |
+| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; checkpoint 2 read-only routing merged and live-accepted in `2ea5409`; checkpoint 3 writes is next |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
 The linearization and phase-1 fact model landed in these commits:
@@ -386,10 +386,9 @@ The installed `v0.2.2-32-gc1a776e` build passed the read-only matrix:
 
 ### Exact next step
 
-Commit the live-acceptance documentation, merge `c-sftp-readonly` into `main`,
-and push. Start the next branch with workstream C step 6: prove atomic write,
-rename, symlink, mode, and stale-version guarantees before exposing any SFTP
-write route. Do not merge SFTP into `oob_tools` yet.
+On `c-sftp-writes`, begin workstream C step 6: prove atomic write, rename,
+symlink, mode, and stale-version guarantees before exposing any SFTP write
+route. Do not merge SFTP into `oob_tools` yet.
 
 ### Blockers or uncertainties
 
@@ -519,11 +518,11 @@ and `/usr/local/bin/aish` both had SHA-256
 The installed read-only SFTP build reports `v0.2.2-32-gc1a776e`; the tested
 artifact and `/usr/local/bin/aish` had identical SHA-256
 `1a511b32a90cdc1dcb7c81cde99d353d09aa3e836eac93d050c64c697d2ef347`.
-`main` is clean and pushed through `ead8145`; checkpoint 2 is live-accepted on
-`c-sftp-readonly` and awaits its documentation commit and merge. A long-lived
-AI MCP proxy may still report `v0.2.2-27-g4d72bc5-dirty` and cache the old
-diagnostic-only SFTP descriptions until that AI client restarts; forwarding to
-the current session server still works.
+Checkpoint 2 is merged and pushed on `main` through `2ea5409`; the next branch
+is `c-sftp-writes`. A long-lived AI MCP proxy may still report
+`v0.2.2-27-g4d72bc5-dirty` and cache the old diagnostic-only SFTP descriptions
+until that AI client restarts; forwarding to the current session server still
+works.
 
 Do not assume any previous live session still exists. `aish sessions` is
 authoritative.
