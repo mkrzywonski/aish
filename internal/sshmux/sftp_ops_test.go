@@ -560,3 +560,18 @@ func TestSFTPAppendUsesNativePathAndExplicitMode(t *testing.T) {
 		t.Fatalf("appended file = %#v", got)
 	}
 }
+
+func TestSFTPAppendRefusesIgnoredMode(t *testing.T) {
+	files := map[string]fakeSFTPFile{"/tmp/file": {data: []byte("a"), mode: 0o600}}
+	ops := atomicWriteFake(files)
+	ops.chmodFn = func(string, os.FileMode) error { return nil }
+	m, ci := installFakeSFTP(t, "posix", ops)
+
+	_, err := m.SFTPAppend(context.Background(), ci, "/tmp/file", []byte("b"), 0o640, true)
+	if !errors.Is(err, ErrSFTPWriteMode) || !strings.Contains(err.Error(), "server reported") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := string(files["/tmp/file"].data); got != "ab" {
+		t.Fatalf("append did not preserve its non-atomic contract: %q", got)
+	}
+}

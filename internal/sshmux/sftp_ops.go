@@ -55,7 +55,8 @@ type SFTPDirectoryResult struct {
 
 // SFTPWriteRequest preserves the existing atomic-write contract over a
 // retained SFTP client. ModeSet distinguishes an explicit mode from the zero
-// value; otherwise an existing mode is preserved and a new file uses 0644.
+// value; otherwise an existing mode is preserved and a new file uses the
+// server's native creation mode.
 type SFTPWriteRequest struct {
 	Path    string
 	Data    []byte
@@ -514,6 +515,13 @@ func (m *Mux) SFTPAppend(ctx context.Context, ci *ConnInfo, input string, data [
 		if modeSet {
 			if err := ops.Chmod(resolved.Server, mode.Perm()); err != nil {
 				return SFTPWriteResult{}, fmt.Errorf("setting appended SFTP file mode: %w", err)
+			}
+			info, err := ops.Lstat(resolved.Server)
+			if err != nil {
+				return SFTPWriteResult{}, fmt.Errorf("verifying appended SFTP file mode: %w", err)
+			}
+			if info.Mode.Perm() != mode.Perm() {
+				return SFTPWriteResult{}, fmt.Errorf("%w: requested %04o, server reported %04o", ErrSFTPWriteMode, mode.Perm(), info.Mode.Perm())
 			}
 		}
 		return SFTPWriteResult{Path: resolved.Native, Bytes: len(data)}, nil
