@@ -67,7 +67,9 @@ const serverInstructions = "Aish gives you access to human-owned shared terminal
 	"authorized. Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +
 	"when the human switches user in the shared terminal via su or sudo -i; before writing files whose ownership " +
 	"matters or running anything needing different privileges, check oob_user, and if the human's shell has " +
-	"switched users say so and prefer run_command (it runs in the shared shell's current user). Never send passwords or other " +
+	"switched users say so and prefer run_command (it runs in the shared shell's current user). Anything needing sudo, su or " +
+	"other privilege escalation must go through run_command, never exec: escalating out of band is refused, because a " +
+	"privileged command has to be one the human saw, and they type their own password. Never send passwords or other " +
 	"secrets; if echo_off is true, wait for the human. Name the target session and host in chat before the " +
 	"first substantial or destructive operation. The user approves each session on its own terminal."
 

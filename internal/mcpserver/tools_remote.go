@@ -108,7 +108,9 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"directory when the command must run somewhere other than the OOB shell's default directory. " +
 			"Out-of-band, the command runs as session_status.oob_user (the SSH login user) regardless of any su/sudo -i " +
 			"in the shared shell; for commands the user should see, or that need the shell's current identity/privileges, " +
-			"prefer run_command.",
+			"prefer run_command. sudo, su and other privilege escalation are REFUSED on the out-of-band route and must go " +
+			"through run_command: the human sees the command and types their own password, and the out-of-band channel has " +
+			"no terminal for a password prompt anyway.",
 	}, c.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -1141,6 +1143,22 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	rt := c.route()
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
 		return nil, execResult{}, err
+	}
+
+	// Privilege escalation must not happen out of band. Running sudo invisibly
+	// breaks the promise the shared terminal exists to keep — that a privileged
+	// command is one the human SAW and authorized — and on most hosts it does
+	// not even work: the channel has no TTY and its stdin is /dev/null, so a
+	// password prompt fails instead of reaching anyone. The visible routes are
+	// deliberately exempt; run_command types into the shared terminal, where the
+	// user sees the command and types their own password (and aish already
+	// refuses to inject while the terminal is collecting secret input).
+	if rt.via != "in_band" {
+		if prog, found := escalationCommand(args.Command); found {
+			return nil, execResult{}, fmt.Errorf(
+				"refusing to run %s out of band on %s: that would escalate privilege invisibly, and the out-of-band channel has no terminal for a password prompt. Use run_command instead, so the command appears in the shared terminal and the user types their own password",
+				prog, rt.host)
+		}
 	}
 
 	if rt.via == "in_band" {
