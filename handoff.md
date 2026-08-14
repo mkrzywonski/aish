@@ -45,15 +45,16 @@ a81c19c  framing, read_output: consume the linearizer
 ```
 
 The identity foundation landed in `9620df6`; passive screen identity landed in
-`5499871`. Both are merged to `main`.
+`5499871`; the MFA provenance warning landed in `345be94`; and the unknown-target
+closeout landed in `99a0ab9`. All are merged to `main`.
 
 ---
 
 ## Active work
 
-Branch: `b-unknown-target-safety`, based on `main` at `345be94`.
+Branch: none; workstream B is merged to `main` through `99a0ab9`.
 
-Current objective: make truly unknown remote command syntax explicit and prevent
+Completed objective: make truly unknown remote command syntax explicit and prevent
 every POSIX-framed visible fallback from running until the dialect is
 authoritatively identified as POSIX.
 
@@ -207,11 +208,10 @@ The `test` session connected passwordlessly over real ControlMaster paths to
 
 ### Exact next step
 
-Commit and merge the completed B closeout. For workstream C, first run the
-separate SFTP subsystem test over the existing Duo-protected master; whether it
-causes another push determines the default SFTP open-order policy. Then create
-`c-sftp-axis` from updated `main` and implement the narrow subsystem/fact-axis
-checkpoint described below.
+For workstream C, first run the separate SFTP subsystem test over the existing
+Duo-protected master; whether it causes another push determines the default
+SFTP open-order policy. Then create `c-sftp-axis` from updated `main` and
+implement the narrow subsystem/fact-axis checkpoint described below.
 
 ### Blockers or uncertainties
 
