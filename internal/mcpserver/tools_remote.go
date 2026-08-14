@@ -1301,6 +1301,19 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	if args.Background {
 		// Long-running tasks need a concurrent stream, so they get a
 		// dedicated channel (one extra MFA push on strict hosts).
+		if rt.via == "controlmaster" {
+			command, marker, err := sshmux.BackgroundCommand(commandWithCwd(args.Command, args.Cwd))
+			if err != nil {
+				return nil, execResult{}, fmt.Errorf("creating background startup marker: %w", err)
+			}
+			finishAttempt := c.Mux.BeginSessionAttempt(rt.ci, sshmux.SessionAttemptBackground)
+			cmd := c.Mux.Command(context.Background(), rt.ci, command)
+			task, err := c.Tasks.StartAfterMarker(cmd, marker, finishAttempt)
+			if err != nil {
+				return nil, execResult{}, err
+			}
+			return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host}, nil
+		}
 		cmd := c.buildExec(context.Background(), rt, args.Command, args.Cwd)
 		task, err := c.Tasks.Start(cmd)
 		if err != nil {

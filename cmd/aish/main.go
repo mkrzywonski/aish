@@ -268,6 +268,12 @@ func runMain(args []string) int {
 	// notice — the bar is the durable signal).
 	bar := session.NewStatusBar(sess, core.StatusLine, func() bool { return trm.Screen.Snapshot().AltScreen })
 	defer bar.Close() // reset the scroll region on a normal return
+	mux.SetSessionAttemptChanged(func() {
+		_, pending := mux.VisibleSessionAttempt()
+		titles.SetAuthPending(pending)
+		bar.Tick()
+	})
+	defer mux.SetSessionAttemptChanged(nil)
 	sess.OnResize(func(rows, cols uint16) { bar.SetSize(rows, cols) })
 	go func() {
 		tick := time.NewTicker(500 * time.Millisecond)

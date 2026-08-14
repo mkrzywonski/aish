@@ -202,7 +202,9 @@ func (m *Mux) DeepProbe(ctx context.Context, ci *ConnInfo, force bool) (DeepProb
 	m.deepFlights[ci.Sock] = flight
 	m.deepMu.Unlock()
 
+	finishAttempt := m.BeginSessionAttempt(ci, SessionAttemptDeep)
 	result := executeDeepProbe(ctx, ci, m.deepRun)
+	finishAttempt()
 	result = m.noteDeepProbe(ci, result)
 
 	m.deepMu.Lock()

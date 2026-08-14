@@ -1,9 +1,11 @@
 package mcpserver
 
 import (
+	"fmt"
 	"os"
 
 	"ai-ssh/internal/paths"
+	"ai-ssh/internal/sshmux"
 )
 
 // oobUser returns the identity out-of-band ops run as, computed cheaply (never
@@ -29,6 +31,9 @@ func (c *Core) StatusLine() string {
 	if name == "" {
 		name = c.Sess.ID
 	}
+	if attempt, ok := c.Mux.VisibleSessionAttempt(); ok {
+		return sessionAttemptStatus(attempt)
+	}
 	drift, ttyHost, oobHost := c.HostDrift()
 	if ttyHost == "" {
 		ttyHost = "?"
@@ -46,4 +51,17 @@ func (c *Core) StatusLine() string {
 	}
 	s += "   Ctrl-] menu" // persistent reminder of the menu hotkey for new/forgetful users
 	return s
+}
+
+func sessionAttemptStatus(attempt sshmux.SessionAttempt) string {
+	target := attempt.Host
+	if attempt.User != "" {
+		target = attempt.User + "@" + target
+	}
+	count := ""
+	if attempt.Count > 1 {
+		count = fmt.Sprintf(" (%d sessions)", attempt.Count)
+	}
+	return "AISH OPENING SSH: 2FA MAY BE REQUESTED" + count + " | " +
+		string(attempt.Kind) + " -> " + target + " | VERIFY BEFORE APPROVING"
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestClassifyDeepProbe(t *testing.T) {
@@ -272,5 +273,44 @@ func TestDeepProbeSingleFlight(t *testing.T) {
 		if errs[i] != nil || results[i].Status != DeepProbeIdentified || results[i].Dialect != DialectPosix {
 			t.Errorf("result %d = %+v, err=%v", i, results[i], errs[i])
 		}
+	}
+}
+
+func TestDeepProbeTracksOneDebouncedSessionAttempt(t *testing.T) {
+	m := New(t.TempDir())
+	m.attemptDebounce = 10 * time.Millisecond
+	ci := testConn()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	m.deepRun = func(_ context.Context, _ *ConnInfo, command string) deepCommandResult {
+		close(started)
+		<-release
+		marker := strings.Fields(command)[1]
+		return deepCommandResult{Stdout: []byte(marker + " PCTOS=%OS% PCTCOMSPEC=%COMSPEC% PSOS=:OS PSCOMSPEC=:ComSpec SH=/bin/sh\n"), Exit: 0}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = m.DeepProbe(context.Background(), ci, false)
+	}()
+	<-started
+	deadline := time.Now().Add(time.Second)
+	for {
+		if attempt, ok := m.VisibleSessionAttempt(); ok {
+			if attempt.Kind != SessionAttemptDeep || attempt.Count != 1 {
+				t.Fatalf("attempt = %+v", attempt)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("deep attempt did not become visible")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	<-done
+	if _, ok := m.VisibleSessionAttempt(); ok {
+		t.Fatal("deep attempt remained visible after completion")
 	}
 }

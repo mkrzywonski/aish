@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Mux struct {
@@ -31,6 +32,14 @@ type Mux struct {
 	deepMu      sync.Mutex
 	deepFlights map[string]*deepFlight
 	deepRun     deepCommandRunner
+
+	attemptMu       sync.Mutex
+	attempts        map[uint64]sessionAttemptEntry
+	attemptNext     uint64
+	attemptVisible  bool
+	attemptDebounce time.Duration
+	attemptTimer    *time.Timer
+	attemptChanged  func()
 }
 
 func New(sessionDir string) *Mux {
@@ -39,11 +48,13 @@ func New(sessionDir string) *Mux {
 		realSSH = "ssh"
 	}
 	m := &Mux{
-		dir:         sessionDir,
-		realSSH:     realSSH,
-		channels:    map[string]*channel{},
-		facts:       map[string]*HostFacts{},
-		deepFlights: map[string]*deepFlight{},
+		dir:             sessionDir,
+		realSSH:         realSSH,
+		channels:        map[string]*channel{},
+		facts:           map[string]*HostFacts{},
+		deepFlights:     map[string]*deepFlight{},
+		attempts:        map[uint64]sessionAttemptEntry{},
+		attemptDebounce: sessionAttemptDebounce,
 	}
 	m.deepRun = m.runDeepCommand
 	return m

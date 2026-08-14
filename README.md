@@ -361,13 +361,18 @@ do this automatically.
   next prompt.
 - **Window title**: any title set by your shell — or by a remote host over
   ssh — is rewritten to start with `⧉<label> `, gaining a `⚡` while an MCP
-  client (an AI) is actually connected, reverting when it disconnects.
+  client (an AI) is actually connected, reverting when it disconnects. It also
+  gains `[2FA?]` while AISH is opening an SSH session that may trigger MFA,
+  including while a full-screen app hides the status bar.
 - **Status bar**: a reserved bottom row showing the session badge, the host the
   terminal is on (`tty:`), and where out-of-band ops land (`oob: user@host`),
   with a `⚠` when those diverge — plus a `Ctrl-] menu` hint. It is painted from
   AISH's own state, so a stale `tty:` (e.g. still your old host after an `ssh`
   the remote never reported over OSC 7) is itself the warning. Apps get one
-  fewer row; the bar steps aside inside full-screen apps like vim/htop.
+  fewer row; the bar steps aside inside full-screen apps like vim/htop. When a
+  new SSH slave session remains pending for 500 ms, this entire row is replaced
+  by `2FA MAY BE REQUESTED`, the operation, and `user@host`; verify those details
+  before approving. Fast and cached operations never disturb the standard bar.
 
 ### The prompt does double duty — and `ssh`/`su` drops it
 

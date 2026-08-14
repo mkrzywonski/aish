@@ -26,7 +26,9 @@ At the merge boundary:
 | **B phase 1 - durable host facts and stderr classification** | done; live-validated on Windows cmd.exe and a Duo RHEL host |
 | **B identity foundation** | done; identity separated from shell capability in `9620df6` |
 | **B phase 2 - passive screen fingerprinting** | done; unit-validated and live-validated on Windows cmd.exe |
-| **B phase 3 - explicit active identity probe** | implemented; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, and PowerShell 7; Duo pending |
+| **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
+| **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
+| **B closeout - unknown-target safety** | pending; unclassified in-band remotes still expose POSIX-framed fallbacks as available |
 | **C - SFTP as probe and transport** | not started; premise empirically confirmed |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
@@ -49,8 +51,7 @@ The identity foundation landed in `9620df6`; passive screen identity landed in
 
 ## Active work
 
-Branch: none; the latest PowerShell validation checkpoint is merged to `main`
-in `a7fdc53`.
+Branch: `b-mfa-status`, based on `main` at `d115a47`.
 
 Completed objective: add an explicit, bounded, cached active identity probe
 behind `probe_host{deep:true}` without coupling identity to shell capability or
@@ -58,9 +59,8 @@ opening more than one SSH session per explicit attempt.
 
 ### Status
 
-Implementation checkpoint complete. B is code-complete; phase 3 now has live
-coverage on POSIX, cmd.exe, Windows PowerShell 5.1, and PowerShell 7, with the
-remaining Duo check below.
+Phase 3 is complete, including Duo live validation. B remains open only for the
+unknown-target closeout hardening described below.
 
 ### Completed
 
@@ -82,6 +82,11 @@ remaining Duo check below.
   explain the MFA cost, and require both `deep=true` and `force=true` to retry.
 - Updated the server instructions and repository design guidance so models use
   `oob_tools`, not deep identity, as the capability decision surface.
+- Added a reference-counted, 500 ms-debounced SSH-session attempt tracker. A
+  pending attempt replaces the status bar with a modal 2FA warning naming the
+  operation and target, and adds `[2FA?]` to the title while the bar is hidden.
+  Background tasks use a filtered random startup marker so the warning clears
+  after remote startup rather than after a long-running command exits.
 
 ### Changed files
 
@@ -91,7 +96,9 @@ remaining Duo check below.
 `internal/mcpserver/capability_test.go`, `internal/proxy/aggregate.go`,
 `internal/proxy/proxy_test.go`, `CLAUDE.md`, `windows-targets-plan.md`, and this
 handoff. Follow-up live validation also hardened ANSI cleanup in
-`internal/sshmux/dialect.go` and `dialect_test.go`.
+`internal/sshmux/dialect.go` and `dialect_test.go`. The MFA warning checkpoint
+adds `internal/sshmux/activity.go`, task startup-marker handling,
+`internal/mcpserver/statusline.go`, title integration, and focused tests.
 
 ### Verification
 
@@ -138,26 +145,55 @@ The `test` session connected passwordlessly over real ControlMaster paths to
   testing. After both shells, test-added shell values were removed, the export
   re-imported, `sshd` restarted, a fresh cmd.exe login verified, and the
   temporary export deleted. The test session was returned to local Bash.
-
-### Live validation still required
-
-Run `probe_host{deep:true}` over a real ControlMaster path against the
-Duo-protected RHEL host.
-
-For this target, verify the first explicit call returns the correct dialect and
-source, a repeat is a cache hit with no new session/MFA event, and
-`deep:true,force:true` opens exactly one new attempt. Reconfirm that shell state
-and every `oob_tools` value are byte-for-byte unchanged by deep probing.
+- Duo-protected RHEL: passive `session_status`/screen reads caused no push. The
+  interactive login caused one expected push; the first ordinary probe caused
+  one expected push to open the persistent shell channel; its repeat returned
+  immediately with `probe_attempts:1` and no push. The first explicit deep probe
+  caused one expected push and identified `posix/unix`; its cached repeat
+  returned in milliseconds with no push. `deep:true,force:true` caused exactly
+  one expected push, replaced only the deep cache, and its following repeat was
+  cached with no push. Ordinary shell attempts remained `1`, and all
+  `oob_tools` values stayed available throughout. A final `file_stat` completed
+  over the original persistent channel in 45 ms without a push, confirming that
+  deep probing did not replace or drop it. No unexpected Duo notifications were
+  observed.
+- MFA warning UI: on the freshly installed build, an 8.9-second ordinary probe
+  showed the modal `OOB shell probe` warning and its 23 ms cache hit did not.
+  First and forced deep probes showed `deep identity probe` for 4.0 and 5.5
+  seconds; 12-16 ms cache hits remained invisible. A dedicated background task
+  showed `background command`; its startup marker restored the standard bar
+  after Duo approval while the two-second task continued, and the marker was
+  absent from captured output. The user confirmed each takeover and restoration
+  visually.
+- Non-MFA regression check: on the passwordless POSIX host, ordinary probing
+  completed in 202 ms, first and forced deep probes in 66 and 75 ms, and
+  background startup in 9 ms. Cache hits completed in 9-15 ms. Each path was
+  followed by at least 700 ms idle time to expose a stale debounce callback.
+  The user observed no takeover, title marker, flicker, or interruption. This
+  confirms that the warning is conspicuous when Duo is pending and effectively
+  invisible when authentication finishes within the 500 ms debounce.
 
 ### Exact next step
 
-Create a fresh branch from updated `main` for workstream C. Before choosing its
-SFTP open order, run the Duo subsystem test described below; that result decides
-whether SFTP opens first or only after the shell axis is down.
+Close the remaining B unknown-target safety gaps before creating a fresh branch
+from updated `main` for workstream C. Before choosing C's SFTP open order, run
+the separate Duo subsystem test described below; today's shell/deep-probe test
+did not establish whether SFTP itself causes another push.
 
 ### Blockers or uncertainties
 
-- Phase 3's remaining live gap is MFA accounting on the Duo-protected host.
+- An unclassified ControlMaster target is conservative: `oob_tools` reports
+  `unknown`, and direct OOB tool use auto-probes before executing. An
+  unclassified `in_band` target is not: `file_read`, `file_write`, and `exec`
+  are advertised as available even though their visible fallback uses POSIX
+  sentinel framing. Mark these tools unknown or unavailable until POSIX is
+  established; keep bare `run_command` available with an explicit
+  command-syntax warning.
+- Unknown remote identity is represented by omitted `remote_dialect` and
+  `remote_platform` fields rather than an explicit state. Add an unambiguous
+  identity status (`unknown`, `advisory`, or `authoritative`) so models do not
+  confuse missing identity with `target_confidence`, which measures host
+  targeting instead.
 - Workstream C's default SFTP open order still depends on whether a subsystem
   request over the existing Duo-protected master causes another push.
 
@@ -249,13 +285,19 @@ These were measured directly and corrected earlier assumptions.
    channel process start time.
 2. **PSK reconnect notices can spam the terminal.** `connauth.go` notifies on
    every recognized reconnect. Notify once per client key per session instead.
-3. **`--oob` suppresses the natural MFA warning point.** Without it, `route()`
-   prompts before the first invisible operation. With it, an MFA push can arrive
-   unannounced. Consider one notification before the first channel open per
-   host.
+3. **Console confirmation prompts can be easy to miss.** During the first
+   background-task test, the one-time unknown-target write confirmation sat
+   unanswered before any SSH session was opened. The MFA status takeover then
+   appeared correctly after the user answered. Consider a separate modal
+   `INPUT REQUIRED` status/title state for console prompts.
 4. **README platform wording remains conservative.** Windows targets are
    detected and refused quickly for POSIX OOB operations, but are not useful for
    native file operations until workstream C lands.
+5. **Unknown-target signaling is route-dependent.** ControlMaster routes expose
+   explicit per-tool `unknown` states and auto-probe before acting, but an
+   unclassified `in_band` route currently assumes its POSIX-framed
+   `file_read`/`file_write`/`exec` fallbacks are usable. Make availability fail
+   closed and publish explicit identity status before closing B.
 
 ---
 
@@ -273,6 +315,11 @@ aish version
 
 `version_info` through MCP reports proxy and session versions together. If they
 disagree, stale installed binaries are the likely cause.
+
+The MFA warning build was installed as `v0.2.2-22-gd115a47-dirty`; the artifact
+and `/usr/local/bin/aish` had identical SHA-256 hashes. The existing long-lived
+proxy still reported `v0.2.2-18-g5561c90` during testing and will pick up the
+installed build when its AI client restarts.
 
 Do not assume any previous live session still exists. `aish sessions` is
 authoritative.

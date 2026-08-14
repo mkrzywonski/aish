@@ -6,10 +6,10 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 - **Repo**: aish; see `handoff.md` for the active branch
 - **Verified on**: WSL → Windows OpenSSH 10.0p2 (cmd.exe), and a Duo-protected
   RHEL 9.8 host
-- **Status**: A **done**; B phases 1-3 **implemented** (phases 1-2 live-validated;
-  phase 3 live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, and
-  PowerShell 7, with Duo pending). C and D not started. See `handoff.md` for
-  current state.
+- **Status**: A **done**; B phases 1-3 **implemented and live-validated** on
+  POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo-protected RHEL;
+  B unknown-target closeout hardening remains. C and D not started. See
+  `handoff.md` for current state.
 
 ---
 
@@ -305,8 +305,74 @@ were uncached, and `oob_tools` did not move. On each Windows shell, the separate
 ordinary probe classified its exact stderr and independently kept tools sticky
 unavailable. PowerShell 7's colorized redirected stderr also established that
 model-facing evidence must strip both CSI bytes and literal `\x1b[...]`
-renderings. The Duo-protected host remains in the live matrix: confirm one
-explicit call means at most one new MFA event and every repeat is a cache hit.
+renderings. The Duo-protected host produced exactly one push for the first
+ordinary channel open, one for the first explicit deep probe, and one for
+`deep:true,force:true`; ordinary and deep cache hits produced no push. Deep
+probing did not change shell state or `oob_tools`; a subsequent `file_stat`
+reused the original persistent channel in 45 ms without another push. This
+completes phase 3's live matrix. The separate workstream-C question of whether
+an SFTP subsystem open causes another Duo push remains untested.
+
+### MFA provenance warning
+
+Invisible ControlMaster slave sessions now publish a user-visible provenance
+signal before they can produce an unexplained MFA prompt. `sshmux` tracks every
+new persistent-shell, deep-probe, and dedicated-background session attempt. If
+an attempt remains pending for 500 ms, the normal status bar is replaced by a
+modal `2FA MAY BE REQUESTED` line naming the operation and `user@host`; the
+window title simultaneously gains `[2FA?]` for alternate-screen or disabled-bar
+coverage. Completion restores the normal bar and title. Fast, cached, and
+persistent-channel-reuse paths never become visible.
+
+The lifecycle boundary is deliberately later than `cmd.Start()`, which only
+means the local ssh child exists. Persistent sessions clear after their initial
+capability probe, deep sessions after the bounded identity command, and
+background tasks after a random remote startup marker. The marker is filtered
+from task output and proves that authentication finished, allowing a silent
+long-running task to restore the bar without waiting for process exit.
+
+Live Duo validation measured an 8.9-second ordinary open, 4.0-second initial
+deep probe, and 5.5-second forced deep probe; each showed the matching modal and
+caused one expected push. Cache hits completed in 12-23 ms with no takeover or
+push. A dedicated background task showed its modal through Duo approval, then
+restored the standard bar while the command continued for two seconds. The user
+confirmed that the warning made the push source clear.
+
+The complementary passwordless-POSIX regression test measured a 202 ms ordinary
+probe, 66-75 ms fresh deep probes, 9 ms background startup, and 9-15 ms cache
+hits. No takeover, title marker, flicker, or interruption was visible. Additional
+700 ms idle windows after each operation confirmed that completed attempts did
+not leave a stale debounce callback capable of taking over the bar later.
+
+### Closeout hardening: truly unknown targets
+
+The ControlMaster route now handles an unknown target conservatively: before a
+probe, every `oob_tools` entry is explicitly `unknown`, and a direct tool call
+auto-probes before executing. The `in_band` route still has a narrower version
+of the original defect. When no authoritative dialect is known,
+`inBandAvailability` advertises `file_read`, `file_write`, and `exec` as
+available even though all three type POSIX sentinel framing into the visible
+terminal. An unknown appliance, restricted CLI, or non-POSIX shell can
+therefore receive invalid commands based on an implicit POSIX assumption.
+
+Identity signaling is also implicit: `remote_dialect` and `remote_platform`
+use `omitempty`, so a truly unknown identity is represented by absent fields.
+`target_confidence: unknown` does not fill this role; it describes whether the
+interactive and OOB hosts are known to match.
+
+Before closing B:
+
+1. Publish an explicit remote identity status: `unknown`, `advisory`, or
+   `authoritative`.
+2. On an unclassified `in_band` route, mark POSIX-framed tools unknown or
+   unavailable rather than available. Keep `run_command` usable because it
+   types the caller's command bare, but state that command syntax is unknown.
+3. Preserve the current ControlMaster behavior: unknown before probing,
+   automatic probe-and-gate on direct tool use, and no capability decision from
+   advisory screen evidence.
+4. Add matrix tests for unknown identity with and without a ControlMaster,
+   including a direct tool call that must not type POSIX framing when no dialect
+   has been established.
 
 ### Sequence
 
@@ -568,7 +634,7 @@ Independently real; several shippable on their own.
 
 | | Defect | Consequence |
 |---|---|---|
-| live | `in_band` reports `file_read`, `file_write`, `exec` as available on any remote | Those fallbacks run through `RunSentinel`, which is pure POSIX. On cmd.exe it's garbage. Only `run_command` genuinely works — the availability map is a wrong answer, not a degraded one. |
+| live | `in_band` reports `file_read`, `file_write`, `exec` as available when the remote dialect is unknown | Those fallbacks run through `RunSentinel`, which is pure POSIX. Recognized Windows/network targets are now refused, but a truly unknown target still receives an implicit POSIX assumption. Only bare `run_command` is dialect-neutral at the transport layer. |
 | live | `probe_host` documents itself as the "explicit reset button" | It calls `EnsureProbed`, which short-circuits on cache — so it resets nothing. The `force` flag makes the docstring true. |
 | live | Positive capabilities die with the channel on timeout | `target_confidence` silently regresses `same` → `unknown`, re-arming the one-time write confirmation the user already answered. |
 | live | `CachedCapabilities` takes `chMu`; `openChannel`'s `cmd.Start()` runs under it | `session_status` can already stall behind a channel open today. |

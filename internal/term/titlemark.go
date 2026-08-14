@@ -20,6 +20,7 @@ type TitleMarker struct {
 	out       io.Writer
 	connected atomic.Bool
 	drift     atomic.Bool // host/target drift detected (⚠)
+	auth      atomic.Bool // aish is opening an SSH session that may trigger 2FA
 	label     string      // session name or id, shown next to the marker glyph
 
 	// stream state machine
@@ -52,6 +53,9 @@ func (t *TitleMarker) marker() string {
 	if t.drift.Load() {
 		m += "⚠"
 	}
+	if t.auth.Load() {
+		m += "[2FA?]"
+	}
 	return m + " "
 }
 
@@ -66,6 +70,15 @@ func (t *TitleMarker) SetConnected(yes bool) {
 // freely.
 func (t *TitleMarker) SetDrift(yes bool) {
 	if t.drift.Swap(yes) != yes {
+		t.Refresh()
+	}
+}
+
+// SetAuthPending mirrors the modal status-bar warning into the terminal title,
+// where it remains visible if the bar is disabled or an alternate screen owns
+// the terminal.
+func (t *TitleMarker) SetAuthPending(yes bool) {
+	if t.auth.Swap(yes) != yes {
 		t.Refresh()
 	}
 }

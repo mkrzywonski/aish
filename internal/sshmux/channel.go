@@ -356,7 +356,14 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 	m.chMu.Lock()
 	ch := m.channels[ci.Sock]
 	opened := false
+	var finishAttempt func()
 	if ch == nil {
+		finishAttempt = m.BeginSessionAttempt(ci, SessionAttemptShell)
+		defer func() {
+			if finishAttempt != nil {
+				finishAttempt()
+			}
+		}()
 		var err error
 		ch, err = m.openChannel(ci)
 		if err != nil {
@@ -381,6 +388,10 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 			return nil, m.NoteShellUnusable(ci, d, reason, evidence, sticky).ShellError()
 		}
 		m.NoteShellUsable(ci, caps)
+		if opened {
+			finishAttempt()
+			finishAttempt = nil
+		}
 	}
 	res, err := ch.run(script, timeout)
 	if errors.Is(err, errChannelDead) {
