@@ -34,28 +34,41 @@ type SFTPProbeResult struct {
 }
 
 type sftpSession struct {
-	client *sftp.Client
-	cmd    *exec.Cmd
-	done   chan error
-	once   sync.Once
+	client      *sftp.Client
+	ops         sftpOperations
+	cmd         *exec.Cmd
+	processDone chan struct{}
+	processErr  error
+	opMu        sync.Mutex
+	dead        bool
+	once        sync.Once
 }
 
 func (s *sftpSession) Close() {
 	if s == nil {
 		return
 	}
+	s.opMu.Lock()
+	s.dead = true
+	s.shutdownLocked()
+	s.opMu.Unlock()
+}
+
+func (s *sftpSession) shutdownLocked() {
 	s.once.Do(func() {
 		// Killing the slave first guarantees the client's receive loop sees EOF;
 		// Client.Close waits for that loop and could otherwise block indefinitely.
 		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}
-		if s.client != nil {
+		if s.ops != nil {
+			_ = s.ops.Close()
+		} else if s.client != nil {
 			_ = s.client.Close()
 		}
-		if s.done != nil {
+		if s.processDone != nil {
 			select {
-			case <-s.done:
+			case <-s.processDone:
 			case <-time.After(2 * time.Second):
 			}
 		}
@@ -133,10 +146,10 @@ func (m *Mux) runSFTPProbe(parent context.Context, ci *ConnInfo) (*sftpSession, 
 		return nil, sftpProbeFailure("could not start the SFTP subsystem", err, stderr, attemptedAt)
 	}
 
-	session := &sftpSession{cmd: cmd, done: make(chan error, 1)}
+	session := &sftpSession{cmd: cmd, processDone: make(chan struct{})}
 	go func() {
-		session.done <- cmd.Wait()
-		close(session.done)
+		session.processErr = cmd.Wait()
+		close(session.processDone)
 	}()
 
 	var startupComplete atomic.Bool
@@ -173,6 +186,7 @@ func (m *Mux) runSFTPProbe(parent context.Context, ci *ConnInfo) (*sftpSession, 
 		return nil, sftpStartupFailure(parent, startupTimedOut.Load(), timeout, "handshake", err, stderr, attemptedAt)
 	}
 	session.client = client
+	session.ops = &pkgSFTPOperations{client: client}
 	realPath, err := client.RealPath(".")
 	if err != nil {
 		finishStartup()

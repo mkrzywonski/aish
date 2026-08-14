@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -61,9 +62,9 @@ func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 }
 
 // availability derives per-tool state from the set of capability axes recorded
-// for a host. Only the shell axis exists today; a future SFTP axis merges here
-// — sftp is an ssh subsystem, so it can serve file_read/file_write/file_stat/
-// directory_list/upload/download on a host whose login shell is not POSIX.
+// for a host. Shell remains the only advertised axis until every SFTP-backed
+// primitive preserves its existing contract; read-only routing is staged first
+// and deliberately bypasses this merge point only inside its handlers.
 func availability(f sshmux.HostFacts) map[string]toolAvail {
 	switch f.Shell.State {
 	case sshmux.AxisUp:
@@ -259,4 +260,82 @@ func (c *Core) requireTool(rt route, tool string) error {
 		msg += ". " + av.Detail
 	}
 	return errors.New(msg)
+}
+
+// readOnlyFileRoute preserves the default shell-first policy while allowing
+// file primitives to fall back to a retained SFTP client on a conclusively
+// non-POSIX target. A fresh SFTP open happens at most once and is sticky in
+// either direction; a lost or failed client is never reopened here.
+func (c *Core) readOnlyFileRoute(ctx context.Context, tool string) (route, error) {
+	rt := c.route()
+	if rt.via != "controlmaster" {
+		if err := c.requireTool(rt, tool); err != nil {
+			return route{}, err
+		}
+		return rt, nil
+	}
+
+	_, shellErr := c.Mux.EnsureProbed(rt.ci)
+	if shellErr == nil {
+		if err := c.requireTool(rt, tool); err != nil {
+			return route{}, err
+		}
+		return rt, nil
+	}
+
+	facts, ok := c.Mux.Facts(rt.ci)
+	action := readOnlyFallbackAction(facts, ok)
+	if action == fallbackRefuseShell {
+		// Preserve the shell probe's exact retry/MFA guidance. A soft shell
+		// failure is not enough evidence to pay for a second subsystem.
+		if ok {
+			if err := facts.ShellError(); err != nil {
+				return route{}, err
+			}
+		}
+		if shellErr != nil {
+			return route{}, shellErr
+		}
+		return route{}, fmt.Errorf("%s could not establish the shell-first out-of-band route to %s", tool, rt.host)
+	}
+
+	axis := facts.SFTP
+	if action == fallbackProbeSFTP {
+		probe, err := c.Mux.ProbeSFTP(ctx, rt.ci, false)
+		if err != nil {
+			return route{}, err
+		}
+		axis = probe.Axis
+	}
+	if axis.State != sshmux.AxisUp {
+		reason := axis.Reason
+		if reason == "" {
+			reason = "the SFTP subsystem is unavailable"
+		}
+		return route{}, fmt.Errorf("%s is unavailable on %s: the POSIX shell route is conclusively down and the cached SFTP fallback failed (%s). It will not be retried automatically; retry only with probe_host using sftp=true and force=true, which may trigger MFA", tool, rt.host, reason)
+	}
+	return route{via: "sftp", ci: rt.ci, host: rt.host}, nil
+}
+
+type sftpFallbackAction uint8
+
+const (
+	fallbackRefuseShell sftpFallbackAction = iota
+	fallbackProbeSFTP
+	fallbackUseSFTP
+	fallbackRefuseSFTP
+)
+
+func readOnlyFallbackAction(facts sshmux.HostFacts, ok bool) sftpFallbackAction {
+	if !ok || !facts.ShellBlocked() {
+		return fallbackRefuseShell
+	}
+	switch facts.SFTP.State {
+	case sshmux.AxisUnknown:
+		return fallbackProbeSFTP
+	case sshmux.AxisUp:
+		return fallbackUseSFTP
+	default:
+		return fallbackRefuseSFTP
+	}
 }

@@ -135,14 +135,15 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"it does not initialize oob_tools, opens at most one additional SSH session (and may trigger MFA), and caches " +
 			"identified, unknown, and failed outcomes. Repeat deep calls read cache; combine deep=true with force=true only " +
 			"to explicitly pay for another active attempt. Pass sftp=true only to explicitly open and diagnose the SFTP " +
-			"subsystem; it may trigger MFA, caches success and failure, records path/platform evidence, and does not yet " +
-			"route file tools. Combine sftp=true with force=true only to pay for another subsystem attempt.",
+			"subsystem; it may trigger MFA, caches success and failure, records path/platform evidence, and retains a " +
+			"successful client for read-only fallback when the shell axis is conclusively down. Combine sftp=true with " +
+			"force=true only to pay for another subsystem attempt.",
 	}, c.probeHost)
 }
 
 // route decides where file/exec operations go.
 type route struct {
-	via  string // "local" | "controlmaster" | "in_band"
+	via  string // "local" | "controlmaster" | "sftp" | "in_band"
 	ci   *sshmux.ConnInfo
 	host string
 }
@@ -336,10 +337,10 @@ func divergencePolicy(confidence string, kind opKind, alreadyConfirmed bool) div
 // write is checked against the real remote host. It returns a warning to attach
 // to a read result, or an error that fails the operation closed.
 func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
-	if rt.via != "controlmaster" {
+	if rt.via != "controlmaster" && rt.via != "sftp" {
 		return "", nil
 	}
-	if kind == opMutate {
+	if kind == opMutate && rt.via == "controlmaster" {
 		// Probe now (opening the channel if needed) so the confidence check sees
 		// the real remote hostname rather than "unknown-because-unprobed".
 		if _, perr := c.Mux.EnsureProbed(rt.ci); perr != nil {
@@ -394,7 +395,7 @@ type probeHostArgs struct {
 	SessionArg
 	Force bool `json:"force,omitempty" jsonschema:"discard and rerun the selected probe: persistent shell normally, active identity with deep=true, or SFTP with sftp=true"`
 	Deep  bool `json:"deep,omitempty" jsonschema:"run the separate active login-shell identity command; may open one additional SSH session and trigger MFA, never changes shell capability or oob_tools, and is cached until deep+force"`
-	SFTP  bool `json:"sftp,omitempty" jsonschema:"explicitly open and diagnose the SFTP subsystem; may trigger MFA, does not route file tools yet, and is cached until sftp+force"`
+	SFTP  bool `json:"sftp,omitempty" jsonschema:"explicitly open and diagnose the SFTP subsystem; may trigger MFA, retains a successful client for read-only fallback, and is cached until sftp+force"`
 }
 
 type probeHostResult struct {
@@ -506,9 +507,10 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 	return nil, res, nil
 }
 
-// probeHostSFTP is an explicit first-C-checkpoint diagnostic. It proves and
-// caches subsystem startup plus structural path identity, but deliberately does
-// not merge SFTP into file-tool availability until routing lands.
+// probeHostSFTP proves and caches subsystem startup plus structural path
+// identity. A successful client can serve read-only fallback, but SFTP remains
+// deliberately absent from reported availability until the transport contract
+// is complete for every advertised primitive.
 func (c *Core) probeHostSFTP(ctx context.Context, cap route, force bool) (*mcp.CallToolResult, probeHostResult, error) {
 	if cap.via != "controlmaster" {
 		res := probeHostResult{Via: cap.via, Host: cap.host}
@@ -562,7 +564,7 @@ func (c *Core) sftpProbeResult(rt route, result sshmux.SFTPProbeResult) probeHos
 		OobTools:       c.oobToolAvailability(rt),
 	}
 	if axis.State == sshmux.AxisUp {
-		res.SFTPNote = "SFTP subsystem startup and realpath(.) succeeded. This checkpoint records capability and identity only; file tools are not routed through SFTP yet."
+		res.SFTPNote = "SFTP subsystem startup and realpath(.) succeeded. The retained client can serve read-only file fallback after a conclusive shell-axis failure; SFTP is not merged into oob_tools availability yet."
 	} else {
 		reason := axis.Reason
 		if reason == "" {
@@ -777,8 +779,8 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 	if max <= 0 {
 		max = maxFileRead
 	}
-	rt := c.route()
-	if err := c.requireTool(rt, "file_read"); err != nil {
+	rt, err := c.readOnlyFileRoute(ctx, "file_read")
+	if err != nil {
 		return nil, fileReadResult{}, err
 	}
 	warning, _ := c.guardTarget(rt, opRead)
@@ -822,6 +824,13 @@ func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args file
 			dec = dec[:max]
 		}
 		data = dec
+
+	case "sftp":
+		read, err := c.Mux.SFTPRead(ctx, rt.ci, args.Path, args.Offset, max)
+		if err != nil {
+			return nil, fileReadResult{}, err
+		}
+		data, eof = read.Data, read.EOF
 
 	case "in_band":
 		if max > maxInBand {
@@ -1097,15 +1106,20 @@ func (r *fileStatResult) setMtimeVersion() {
 }
 
 func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args fileStatArgs) (*mcp.CallToolResult, fileStatResult, error) {
-	if err := validateAbsolutePath(args.Path); err != nil {
+	if err := validateAbsolutePathShape(args.Path); err != nil {
 		return nil, fileStatResult{}, err
 	}
-	rt := c.route()
+	rt, err := c.readOnlyFileRoute(ctx, "file_stat")
+	if err != nil {
+		return nil, fileStatResult{}, err
+	}
 	if rt.via == "in_band" {
 		return nil, fileStatResult{}, oobPrimitiveError("file_stat", rt.host)
 	}
-	if err := c.requireTool(rt, "file_stat"); err != nil {
-		return nil, fileStatResult{}, err
+	if rt.via != "sftp" {
+		if err := validateAbsolutePath(args.Path); err != nil {
+			return nil, fileStatResult{}, err
+		}
 	}
 	warning, _ := c.guardTarget(rt, opRead)
 
@@ -1119,6 +1133,19 @@ func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args file
 		res.Size = info.Size()
 		res.Mode = fmt.Sprintf("%04o", info.Mode().Perm())
 		res.ModifiedUnix = info.ModTime().Unix()
+		res.setMtimeVersion()
+		return nil, res, nil
+	}
+	if rt.via == "sftp" {
+		info, err := c.Mux.SFTPStat(ctx, rt.ci, args.Path)
+		if err != nil {
+			return nil, fileStatResult{}, err
+		}
+		res.Path = info.Path
+		res.Type = localFileType(info.Mode)
+		res.Size = info.Size
+		res.Mode = fmt.Sprintf("%04o", info.Mode.Perm())
+		res.ModifiedUnix = info.ModTime.Unix()
 		res.setMtimeVersion()
 		return nil, res, nil
 	}
@@ -1182,7 +1209,7 @@ type directoryListResult struct {
 }
 
 func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args directoryListArgs) (*mcp.CallToolResult, directoryListResult, error) {
-	if err := validateAbsolutePath(args.Path); err != nil {
+	if err := validateAbsolutePathShape(args.Path); err != nil {
 		return nil, directoryListResult{}, err
 	}
 	max := args.MaxEntries
@@ -1192,12 +1219,17 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 	if max > 10000 {
 		return nil, directoryListResult{}, errors.New("max_entries must not exceed 10000")
 	}
-	rt := c.route()
+	rt, err := c.readOnlyFileRoute(ctx, "directory_list")
+	if err != nil {
+		return nil, directoryListResult{}, err
+	}
 	if rt.via == "in_band" {
 		return nil, directoryListResult{}, oobPrimitiveError("directory_list", rt.host)
 	}
-	if err := c.requireTool(rt, "directory_list"); err != nil {
-		return nil, directoryListResult{}, err
+	if rt.via != "sftp" {
+		if err := validateAbsolutePath(args.Path); err != nil {
+			return nil, directoryListResult{}, err
+		}
 	}
 	warning, _ := c.guardTarget(rt, opRead)
 
@@ -1222,10 +1254,23 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 		}
 		return nil, res, nil
 	}
+	if rt.via == "sftp" {
+		dir, err := c.Mux.SFTPReadDir(ctx, rt.ci, args.Path, max)
+		if err != nil {
+			return nil, directoryListResult{}, err
+		}
+		for _, info := range dir.Entries {
+			res.Entries = append(res.Entries, directoryEntry{
+				Name: info.Name, Type: localFileType(info.Mode), Size: info.Size, ModifiedUnix: info.ModTime.Unix(),
+			})
+		}
+		sort.Slice(res.Entries, func(i, j int) bool { return res.Entries[i].Name < res.Entries[j].Name })
+		res.Truncated = dir.Truncated
+		return nil, res, nil
+	}
 
 	caps, _ := c.Mux.CachedCapabilities(rt.ci)
 	var entries []directoryEntry
-	var err error
 	if caps.FindPrint && caps.HeadZ {
 		entries, err = c.dirListGNU(rt.ci, args.Path, max)
 	} else {
@@ -1319,6 +1364,7 @@ type transferArgs struct {
 
 type transferResult struct {
 	Bytes   int64  `json:"bytes"`
+	Via     string `json:"via"`
 	Host    string `json:"host"`
 	Warning string `json:"warning,omitempty"`
 }
@@ -1341,18 +1387,42 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 	if err := c.writeFileAtomic(rt, args.RemotePath, data, "", ""); err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(len(data)), Host: rt.host}, nil
+	return nil, transferResult{Bytes: int64(len(data)), Via: resultVia(rt), Host: rt.host}, nil
 }
 
 func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
-	rt := c.route()
-	if rt.via != "controlmaster" {
-		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_read instead")
-	}
-	if err := c.requireTool(rt, "file_download"); err != nil {
+	rt, err := c.readOnlyFileRoute(ctx, "file_download")
+	if err != nil {
 		return nil, transferResult{}, err
 	}
+	if rt.via != "controlmaster" && rt.via != "sftp" {
+		return nil, transferResult{}, errors.New("no authorized multiplexed SSH channel (session is local, OOB was not enabled before SSH, or the channel is unavailable); use file_read instead")
+	}
 	warning, _ := c.guardTarget(rt, opRead)
+	if rt.via == "sftp" {
+		localPath := expandLocal(args.LocalPath)
+		tmp, err := os.CreateTemp(filepath.Dir(localPath), ".aish-download-*")
+		if err != nil {
+			return nil, transferResult{}, err
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		n, copyErr := c.Mux.SFTPDownload(ctx, rt.ci, args.RemotePath, tmp)
+		closeErr := tmp.Close()
+		if copyErr != nil {
+			return nil, transferResult{}, copyErr
+		}
+		if closeErr != nil {
+			return nil, transferResult{}, closeErr
+		}
+		if err := os.Chmod(tmpPath, 0o644); err != nil {
+			return nil, transferResult{}, err
+		}
+		if err := os.Rename(tmpPath, localPath); err != nil {
+			return nil, transferResult{}, err
+		}
+		return nil, transferResult{Bytes: n, Via: "sftp", Host: rt.host, Warning: warning}, nil
+	}
 	out, err := c.channelOutput(rt.ci, "base64 < "+sshmux.Quote(args.RemotePath), 120*time.Second)
 	if err != nil {
 		return nil, transferResult{}, err
@@ -1364,7 +1434,7 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 	if err := os.WriteFile(expandLocal(args.LocalPath), dec, 0o644); err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(len(dec)), Host: rt.host, Warning: warning}, nil
+	return nil, transferResult{Bytes: int64(len(dec)), Via: resultVia(rt), Host: rt.host, Warning: warning}, nil
 }
 
 // ---- exec / exec_status ----
@@ -1734,6 +1804,26 @@ func validateAbsolutePath(path string) error {
 		return fmt.Errorf("path %q must be absolute", path)
 	}
 	return nil
+}
+
+// validateAbsolutePathShape rejects relative paths before any shell/SFTP probe
+// can open a channel. The selected transport applies the authoritative syntax
+// check afterward; this preflight intentionally recognizes both POSIX and
+// drive-absolute Windows forms without translating either.
+func validateAbsolutePathShape(path string) error {
+	if path == "" {
+		return errors.New("path must not be empty")
+	}
+	if strings.HasPrefix(path, `\\`) {
+		return fmt.Errorf("UNC path %q is not supported by the drive-based Windows SFTP namespace", path)
+	}
+	if filepath.IsAbs(path) {
+		return nil
+	}
+	if len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/') {
+		return nil
+	}
+	return fmt.Errorf("path %q must be absolute", path)
 }
 
 func oobPrimitiveError(tool, host string) error {

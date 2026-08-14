@@ -29,7 +29,7 @@ At the merge boundary:
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
 | **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
-| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; automated and POSIX/Windows/Duo live acceptance complete |
+| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; checkpoint 2 read-only routing implemented on `c-sftp-readonly`, live acceptance pending |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
 The linearization and phase-1 fact model landed in these commits:
@@ -54,16 +54,49 @@ the shell-first C policy landed in `a36c139`, SFTP checkpoint 1 landed in
 
 ## Active work
 
-Branch: `main`, through `87e3a0c` (`docs: hand off completed SFTP and prompt checkpoints`).
-Both checkpoint branches were fast-forwarded and pushed.
+Branch: `c-sftp-readonly`, based on `main` through `ead8145` (`docs: correct prompt bell handoff`).
 
-Completed objective: make every AISH console prompt difficult to miss without
-weakening prompt capture, timeout, or terminal byte-transparency guarantees.
+Active objective: finish and live-accept C checkpoint 2 without weakening the
+existing read contracts or silently reopening an MFA-sensitive subsystem.
 
 ### Status
 
 Prompt attention and workstream C checkpoint 1 are merged to `main`, fully
-verified, installed, and live-accepted.
+verified, installed, and live-accepted. C checkpoint 2 passes automated
+verification on its branch; installation and live acceptance are next.
+
+### Active C checkpoint 2
+
+- A pure SFTP path contract keeps tool inputs target-native. POSIX accepts only
+  unambiguous absolute POSIX paths. Windows accepts drive-absolute native paths
+  and the observed `/C:/...` server form, canonicalizes separators/dot segments,
+  rejects root escape, relative paths, UNC, and cross-style ambiguity, sends one
+  slash-drive form to the server, and returns native `C:\...` paths.
+- `sshmux` now exposes narrow retained-client read/stat/list/download methods;
+  MCP does not access `pkg/sftp.Client`. Operations serialize per client and
+  honor cancellation by retiring the client.
+- Transport loss removes that client, changes the durable SFTP axis to cached
+  down, and returns explicit `sftp=true,force=true` plus MFA guidance. No file
+  operation silently reopens it. A generation guard prevents an old failed
+  operation from marking a concurrently forced replacement down.
+- `file_read`, `file_stat`, `directory_list`, and `file_download` select SFTP
+  only after the shell axis is conclusively/sticky down. Unknown, soft-failed,
+  and working shell axes retain shell-first behavior. Cached SFTP failure refuses
+  without another open.
+- Read limits, offset/EOF behavior, UTF-8/base64 encoding, line numbers,
+  SHA-256/mtime-size versions, Lstat symlink identity, sorted/truncated listing,
+  target warnings, and `via:"sftp"` are preserved. SFTP downloads stream to a
+  local temp file and rename only after success.
+- Writes, edit/patch composition, grep/search/exec, and `oob_tools` availability
+  are unchanged. They must not be enabled until their own contracts land.
+
+Checkpoint 2 automated verification:
+
+```text
+make check                         PASS
+go test -race ./...                PASS
+git diff --check                   PASS
+```
 
 ### Completed prompt-attention checkpoint
 
@@ -326,9 +359,13 @@ The `test` session connected passwordlessly over real ControlMaster paths to
 
 ### Exact next step
 
-Create the next C branch from `main` for the path-contract and retained-client
-API steps in `windows-targets-plan.md`; route read-only operations before
-attempting write semantics or availability merging.
+Build and install `c-sftp-readonly`, restart the `test` session, then live-test
+the read-only matrix: POSIX must remain on `via:"channel"` without an SFTP open;
+Windows must return `via:"sftp"` for read/stat/list/download using native paths;
+an invalid/relative Windows path must fail without touching the file; and a
+cached SFTP client must serve repeats without another subsystem/MFA attempt.
+After live acceptance, merge checkpoint 2 before beginning atomic write/rename
+semantics. Do not merge SFTP into `oob_tools` yet.
 
 ### Blockers or uncertainties
 
@@ -459,9 +496,9 @@ The installed prompt-attention/SFTP build reports
 `v0.2.2-27-g4d72bc5-dirty`; the final tested artifact and
 `/usr/local/bin/aish` had SHA-256
 `cc7cf2651006cdb70f1e126d4a75f9dc00b35e9f39250a61bdd0af9d33287c45`.
-The source is now clean and merged through `eaa49fd`; the installed development
-version remains the correctly identified pre-commit artifact until the next
-build/install.
+`main` is clean and pushed through `ead8145`; checkpoint 2 is on
+`c-sftp-readonly`. The installed development version remains the earlier
+checkpoint artifact until the next build/install.
 
 Do not assume any previous live session still exists. `aish sessions` is
 authoritative.

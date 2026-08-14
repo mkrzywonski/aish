@@ -8,8 +8,9 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
   RHEL 9.8 host
 - **Status**: A and B **done**. B is live-validated on POSIX, cmd.exe, Windows
   PowerShell 5.1, PowerShell 7, Duo-protected RHEL, and unknown/POSIX/cmd.exe
-  in-band routes. C checkpoint 1 is complete and live-validated; C routing and
-  D remain. See `handoff.md` for current state.
+  in-band routes. C checkpoint 1 is complete and live-validated; checkpoint 2
+  read-only routing is implemented with live acceptance pending. C writes,
+  availability merging, and D remain. See `handoff.md` for current state.
 
 ---
 
@@ -538,18 +539,18 @@ reuse preserved.
 2. **Live-accept checkpoint 1 — complete.** Duo forced-open warning/push/cache,
    passwordless POSIX realpath, Windows structural identity and extensions, and
    unchanged shell availability were observed on the installed build.
-3. **Define the path contract before file handlers.** Keep tool-facing paths in
+3. **Define the path contract before file handlers — implemented on checkpoint 2 branch.** Keep tool-facing paths in
    the target's native form, normalize Windows drive/backslash input to the
    server's observed slash-drive form at one boundary, and return unambiguous
    target-native paths. Test drive roots, spaces, Unicode, dot segments, UNC
    input, and rejection of relative or cross-style ambiguity. Do not infer
    command syntax from path style. — new focused SFTP path module
-4. **Expose a narrow retained-client API with explicit death semantics.** MCP
+4. **Expose a narrow retained-client API with explicit death semantics — read-only half implemented.** MCP
    code should not reach into `pkg/sftp.Client`. Add typed read/stat/list/write/
    rename methods on the mux-side axis, serialize or safely share requests, and
    mark a dead client unusable without reopening it. Every returned error must
    say that a retry requires an explicit operation and may trigger MFA.
-5. **Land read-only routing first.** Route `file_read`, `file_stat`,
+5. **Land read-only routing first — implemented; live acceptance pending.** Route `file_read`, `file_stat`,
    `directory_list`, and `file_download` through SFTP only when `ShellAxis` is
    conclusively down and SFTP is up. If SFTP is unknown, the first selected file
    operation may perform the one lazy open with the same MFA warning; if it is

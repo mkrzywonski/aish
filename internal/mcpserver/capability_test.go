@@ -390,3 +390,40 @@ func TestTrackingApplicableFor(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyFallbackActionRequiresConclusiveShellFailure(t *testing.T) {
+	tests := []struct {
+		name  string
+		facts sshmux.HostFacts
+		ok    bool
+		want  sftpFallbackAction
+	}{
+		{name: "no facts", want: fallbackRefuseShell},
+		{name: "shell unknown", ok: true, want: fallbackRefuseShell},
+		{name: "shell up", ok: true, facts: sshmux.HostFacts{Shell: sshmux.ShellAxis{State: sshmux.AxisUp}}, want: fallbackRefuseShell},
+		{name: "soft shell failure", ok: true, facts: sshmux.HostFacts{Shell: sshmux.ShellAxis{State: sshmux.AxisDown}}, want: fallbackRefuseShell},
+		{name: "probe sftp", ok: true, facts: sshmux.HostFacts{Shell: sshmux.ShellAxis{State: sshmux.AxisDown, Sticky: true}}, want: fallbackProbeSFTP},
+		{name: "use sftp", ok: true, facts: sshmux.HostFacts{Shell: sshmux.ShellAxis{State: sshmux.AxisDown, Sticky: true}, SFTP: sshmux.SftpAxis{State: sshmux.AxisUp}}, want: fallbackUseSFTP},
+		{name: "cached sftp failure", ok: true, facts: sshmux.HostFacts{Shell: sshmux.ShellAxis{State: sshmux.AxisDown, Sticky: true}, SFTP: sshmux.SftpAxis{State: sshmux.AxisDown}}, want: fallbackRefuseSFTP},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := readOnlyFallbackAction(tt.facts, tt.ok); got != tt.want {
+				t.Errorf("action = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateAbsolutePathShapeRecognizesBothTargetStyles(t *testing.T) {
+	for _, path := range []string{"/etc/hosts", `C:\Users\mk31\file`, "D:/work/file", "/C:/Users/mk31/file"} {
+		if err := validateAbsolutePathShape(path); err != nil {
+			t.Errorf("validateAbsolutePathShape(%q): %v", path, err)
+		}
+	}
+	for _, path := range []string{"", "relative/file", `C:file`, `\\server\share\file`} {
+		if err := validateAbsolutePathShape(path); err == nil {
+			t.Errorf("validateAbsolutePathShape(%q) succeeded", path)
+		}
+	}
+}
