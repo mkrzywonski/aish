@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -55,9 +56,11 @@ Usage:
   aish version
 `
 
-var version = "0.4.0"
+var version = "dev"
 
 func main() {
+	version = resolveVersion(version)
+
 	// Busybox-style dispatch: when invoked through the PATH shim symlink
 	// named "ssh", act as the ssh wrapper.
 	if filepath.Base(os.Args[0]) == "ssh" {
@@ -94,6 +97,41 @@ func main() {
 		fmt.Fprintf(os.Stderr, "aish: unknown command %q\n%s", sub, usage)
 		os.Exit(2)
 	}
+}
+
+func resolveVersion(stamped string) string {
+	if stamped != "" && stamped != "dev" {
+		return stamped
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	return versionFromSettings(info.Settings)
+}
+
+func versionFromSettings(settings []debug.BuildSetting) string {
+	revision := ""
+	dirty := false
+	for _, setting := range settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value == "true"
+		}
+	}
+	if revision == "" {
+		return "dev"
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	result := "g" + revision
+	if dirty {
+		result += "-dirty"
+	}
+	return result
 }
 
 func runMain(args []string) int {

@@ -2,20 +2,20 @@
 #
 # Both shipping paths already inject their own version at link time
 # (.goreleaser.yaml from the git tag, package.nix from its rev), so the
-# `var version` constant in cmd/aish/main.go is only ever the fallback for a
-# build that injects nothing — notably `go install ./cmd/aish`, which is what
-# the README tells people to run. Bump that constant per RELEASE.
+# `var version` constant in cmd/aish/main.go is the fallback for a build that
+# injects nothing. At runtime, those builds derive a `g<revision>[-dirty]`
+# identity from Go's embedded VCS metadata.
 #
 # Every build in between takes its identity from git instead:
 #
-#   v0.4.0                     exactly the tagged release
-#   v0.4.0-3-gabc1234          three commits past the tag
-#   v0.4.0-3-gabc1234-dirty    ...and built from a modified tree
+#   v0.2.2                     exactly the tagged release
+#   v0.2.2-3-gabc1234          three commits past the tag
+#   v0.2.2-3-gabc1234-dirty    ...and built from a modified tree
 #
 # The -dirty suffix is the point. It distinguishes a binary built from
 # uncommitted changes from one built clean at the same commit — something a
 # hand-maintained version number cannot express, and the exact confusion that
-# arises when two different builds both call themselves 0.4.0.
+# arises when two different builds report the same release number.
 #
 # Go is not on PATH on the NixOS box; shell.nix provides it:
 #

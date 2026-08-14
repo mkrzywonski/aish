@@ -5,7 +5,7 @@
 
 buildGoModule {
   pname = "aish";
-  version = "0.4.0-${rev}";
+  version = rev;
 
   src = lib.cleanSource ./.;
 
@@ -15,7 +15,7 @@ buildGoModule {
 
   subPackages = [ "cmd/aish" ];
 
-  ldflags = [ "-s" "-w" "-X main.version=0.4.0-${rev}" ];
+  ldflags = [ "-s" "-w" "-X main.version=${rev}" ];
 
   meta = with lib; {
     description = "AI-shareable terminal: human and MCP client drive one shared shell session";

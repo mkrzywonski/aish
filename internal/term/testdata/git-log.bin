@@ -1,9 +1,9 @@
 Script started on 2026-08-14 07:51:31-05:00 [<not executed on terminal>]
-* [33m44e6b89[m[33m ([m[1;36mHEAD -> [m[1;32mlinearize-ring[m[33m, [m[1;33mtag: v0.4.0[m[33m)[m build: stamp dev builds from git describe
+* [33m44e6b89[m[33m ([m[1;36mHEAD -> [m[1;32mlinearize-ring[m[33m, [m[1;33mtag: v0.2.2[m[33m)[m build: stamp dev builds from git describe
 * [33m06875b5[m docs: record the durable-facts model and the linearization invariant
 * [33m157323e[m mcpserver: report what a host is instead of inviting a re-probe
 * [33mc4656ff[m sshmux: record durable host facts and identify non-POSIX shells
-* [33ma81c19c[m framing, read_output: consume the linearizer; bump to 0.4.0
+* [33ma81c19c[m framing, read_output: consume the linearizer
 * [33m08ea05a[m term: linearize absolute cursor movement into line breaks
 * [33m5b9e27d[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/feature/psk-auth[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m proxy: add version_info tool
 * [33m9544fb5[m bump to 0.3.0; document PSK auth in README and Quick setup guide

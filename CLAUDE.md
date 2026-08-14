@@ -25,13 +25,12 @@ resolve PATH differently, so two copies means sessions and proxy can silently ru
 different builds — which has already caused one debugging detour.
 
 Dev builds stamp `main.version` from `git describe --tags --always --dirty`, so a
-binary built from a modified tree reports e.g. `v0.4.0-3-gabc1234-dirty` and can
-never be confused with a clean build of the same commit. The `var version`
-constant in `cmd/aish/main.go` is ONLY the fallback for builds that inject
-nothing — notably `go install ./cmd/aish`, which is what the README tells users
-to run — so bump it per RELEASE, not per build. Release artifacts take their
-version from the git tag (`.goreleaser.yaml`) and nix builds from `package.nix`;
-keep those two and the constant in step when cutting a release.
+binary built from a modified tree reports e.g. `v0.2.2-3-gabc1234-dirty` and can
+never be confused with a clean build of the same commit. Builds without a linker
+stamp, notably `go install ./cmd/aish`, derive `g<revision>[-dirty]` at runtime
+from Go's embedded VCS metadata instead of carrying a hand-maintained release
+fallback. Release artifacts take their version from the Git tag
+(`.goreleaser.yaml`) and Nix builds identify themselves by the flake revision.
 
 ## Testing changes without a real terminal
 

@@ -17,8 +17,8 @@ At the merge boundary:
 - the worktree and pushed `linearize-ring` branch were clean
 - `main` was a direct ancestor, so the merge was fast-forward only
 - `go test ./...` and `go vet ./...` passed
-- the release source reports `0.4.0`, but no `v0.4.0` Git tag exists in this
-  clone; `make version` therefore derives from `v0.2.2`
+- development builds derive their identity from the latest Git tag, commit, and
+  dirty state; the latest tag in this clone is `v0.2.2`
 
 | Workstream | State |
 |---|---|
@@ -38,7 +38,7 @@ b4b82c5  term: measure the linearization blast radius against real captures
 06875b5  docs: record the durable-facts model and the linearization invariant
 157323e  mcpserver: report what a host is instead of inviting a re-probe
 c4656ff  sshmux: record durable host facts and identify non-POSIX shells
-a81c19c  framing, read_output: consume the linearizer; bump to 0.4.0
+a81c19c  framing, read_output: consume the linearizer
 08ea05a  term: linearize absolute cursor movement into line breaks
 ```
 
@@ -226,10 +226,7 @@ These were measured directly and corrected earlier assumptions.
    prompts before the first invisible operation. With it, an MFA push can arrive
    unannounced. Consider one notification before the first channel open per
    host.
-4. **The `v0.4.0` release tag is absent.** The source and package files report
-   `0.4.0`, but `make version` currently reports a development version based on
-   `v0.2.2`. Decide whether to tag the merged `main` before the next release.
-5. **README platform wording remains conservative.** Windows targets are
+4. **README platform wording remains conservative.** Windows targets are
    detected and refused quickly for POSIX OOB operations, but are not useful for
    native file operations until workstream C lands.
 
