@@ -1,0 +1,9 @@
+# Terminal capture corpus: raw bytes recorded from a real PTY. These files ARE
+# the escape sequences under test, so line-ending conversion would silently
+# corrupt them — and with core.autocrlf enabled (any Windows checkout) that is
+# the default behaviour for anything git classifies as text. The current
+# captures happen to contain NUL bytes, so git's own heuristic detects them as
+# binary, but that is luck rather than a guarantee: a regenerated capture
+# without NULs would be mangled, and the resulting test failure would be
+# baffling. Mark them explicitly instead.
+internal/term/testdata/*.bin binary

@@ -1,0 +1,28 @@
+Script started on 2026-08-14 07:51:31-05:00 [<not executed on terminal>]
+* [33m44e6b89[m[33m ([m[1;36mHEAD -> [m[1;32mlinearize-ring[m[33m, [m[1;33mtag: v0.4.0[m[33m)[m build: stamp dev builds from git describe
+* [33m06875b5[m docs: record the durable-facts model and the linearization invariant
+* [33m157323e[m mcpserver: report what a host is instead of inviting a re-probe
+* [33mc4656ff[m sshmux: record durable host facts and identify non-POSIX shells
+* [33ma81c19c[m framing, read_output: consume the linearizer; bump to 0.4.0
+* [33m08ea05a[m term: linearize absolute cursor movement into line breaks
+* [33m5b9e27d[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/feature/psk-auth[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m proxy: add version_info tool
+* [33m9544fb5[m bump to 0.3.0; document PSK auth in README and Quick setup guide
+* [33m39330ce[m auth: add PSK-based grant persistence for MCP proxy reconnects
+* [33m9293571[m[33m ([m[1;33mtag: v0.2.2[m[33m)[m statusbar: add a Ctrl-] menu toggle to turn the bar on/off; bump to 0.2.2
+* [33m9b92372[m[33m ([m[1;33mtag: v0.2.1[m[33m)[m statusbar: span the full terminal width; bump to 0.2.1
+* [33mf04c202[m gitignore: ignore local nixos-aish.md notes
+* [33m72797cb[m statusbar: re-assert scroll region after full-screen apps
+* [33m409a643[m nix: bump package version base to 0.2.0
+* [33m2789acf[m docs: remove OOB/test scratchpad docs from the public repo
+* [33ma3a4d5a[m docs: drop the completed remote-parity implementation plan
+* [33m9f52e9d[m[33m ([m[1;33mtag: v0.2.0[m[33m)[m docs: README polish for v0.2.0; bump dev version
+* [33m58408f3[m Update README.md
+* [33mcf64fba[m Revise usage instructions for AISH
+* [33m44fb51a[m Update README with build options
+* [33mc0f705d[m Revise README for clarity on OS support and installation
+* [33mb1f8551[m ui: show the Ctrl-] menu hotkey in the status bar
+* [33m02330fd[m Updates to README
+* [33m5ed19a1[m ui: fix status-bar line doubling — shrink the PTY to match the region
+* [33m3e29e61[m docs: lead with build-from-source, Go instructions uncollapsed
+
+Script done on 2026-08-14 07:51:32-05:00 [COMMAND_EXIT_CODE="0"]

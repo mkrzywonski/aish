@@ -1,0 +1,20 @@
+Script started on 2026-08-14 07:51:32-05:00 [<not executed on terminal>]
+[32m[K22[m[K[36m[K:[m[K// no known cursor row — but CUP is ABSOLUTE, which makes the [01;31m[Klinearize[m[Kr
+[32m[K33[m[K[36m[K:[m[K// Guarantees, all covered by tests in [01;31m[Klinearize[m[K_test.go:
+[32m[K50[m[K[36m[K:[m[K// [01;31m[Klinearize[m[KDisabled is an undocumented escape hatch (AISH_NO_LINEARIZE=1) so a
+[32m[K52[m[K[36m[K:[m[Kvar [01;31m[Klinearize[m[KDisabled = os.Getenv("AISH_NO_LINEARIZE") != ""
+[32m[K61[m[K[36m[K:[m[K	if [01;31m[Klinearize[m[KDisabled {
+[32m[K97[m[K[36m[K:[m[Ktype [01;31m[Klinearize[m[Kr struct {
+[32m[K109[m[K[36m[K:[m[Kfunc newLinearizer(size, rows int) *[01;31m[Klinearize[m[Kr {
+[32m[K118[m[K[36m[K:[m[K	return &[01;31m[Klinearize[m[Kr{
+[32m[K128[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) walk(b []byte, onBreak func(end int) bool) {
+[32m[K148[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) text(p []byte, base int, onBreak func(end int) bool) (stop bool) {
+[32m[K170[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) dirty() bool {
+[32m[K179[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) nl(n int) {
+[32m[K202[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) vertical(target, col int) {
+[32m[K233[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) down(n int) {
+[32m[K243[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) up(n int) {
+[32m[K257[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) escape(seq []byte) {
+[32m[K291[m[K[36m[K:[m[Kfunc (l *[01;31m[Klinearize[m[Kr) csi(seq []byte) {
+
+Script done on 2026-08-14 07:51:32-05:00 [COMMAND_EXIT_CODE="0"]

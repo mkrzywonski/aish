@@ -2,6 +2,8 @@ package term
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -133,13 +135,21 @@ func TestLinearizeMidStreamNeverFuses(t *testing.T) {
 // --- Properties -----------------------------------------------------------
 
 // dropBreaks removes the bytes Linearize is allowed to insert.
+//
+// Deliberately byte-wise rather than bytes.Map: Map decodes UTF-8, so on the
+// arbitrary binary that quick.Check generates every invalid byte becomes
+// U+FFFD, and inserting a newline shifts how the following bytes decode. That
+// made this helper report mismatches that had nothing to do with Linearize —
+// and, worse, made the property flaky, since quick.Check seeds randomly and
+// only sometimes produced input that tripped it.
 func dropBreaks(b []byte) []byte {
-	return bytes.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' {
-			return -1
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c != '\n' && c != '\r' {
+			out = append(out, c)
 		}
-		return r
-	}, b)
+	}
+	return out
 }
 
 // TestPropContentPreserved is P1, the ceiling on how wrong a mistake can be:
@@ -254,6 +264,97 @@ func escapeSoupCorpus() []string {
 		out = append(out, sb.String())
 	}
 	return out
+}
+
+// --- Real capture corpus --------------------------------------------------
+
+// TestCorpusRealCaptures runs the properties over byte streams recorded from
+// real programs on a real PTY (see testdata/README.md). The synthetic corpus
+// above is me guessing what terminals emit; this is what they actually emit,
+// and it is the difference between reasoning about the blast radius on
+// ordinary Linux sessions and measuring it.
+func TestCorpusRealCaptures(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("testdata", "*.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("capture corpus is missing; see testdata/README.md to regenerate")
+	}
+
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			lin := Linearize(b, 24)
+			strip := StripEscapes(b)
+
+			// P1: linearization may only add line structure, never lose text.
+			if !bytes.Equal(dropBreaks(lin), dropBreaks(strip)) {
+				t.Error("content changed beyond added line breaks")
+			}
+			// P3: bounded growth on real input, not just adversarial input.
+			if len(lin) >= 2*len(b)+16 {
+				t.Errorf("growth unbounded: %d bytes in, %d out", len(b), len(lin))
+			}
+			// P2: the load-bearing one. A stream with no vertical-movement
+			// construct must come back byte-identical, which is what makes
+			// "ordinary Linux sessions are unaffected" a measurement.
+			if !hasVerticalMove(b) {
+				if !bytes.Equal(lin, strip) {
+					t.Error("a stream containing no vertical movement was modified")
+				}
+				return
+			}
+			t.Logf("contains vertical movement: %d bytes in, %d stripped, %d linearized",
+				len(b), len(strip), len(lin))
+		})
+	}
+}
+
+// TestCorpusCoversBothCases guards the corpus itself. If the captures with
+// vertical movement were ever dropped, TestCorpusRealCaptures would still pass
+// while silently testing nothing interesting.
+func TestCorpusCoversBothCases(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join("testdata", "*.bin"))
+	var withMove, withoutMove int
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hasVerticalMove(b) {
+			withMove++
+		} else {
+			withoutMove++
+		}
+	}
+	if withoutMove == 0 {
+		t.Error("corpus has no capture free of vertical movement — the no-op property is untested on real data")
+	}
+	if withMove == 0 {
+		t.Error("corpus has no capture containing vertical movement — linearization is untested on real data")
+	}
+}
+
+// TestLinearizeDisabledFallsBackToStripping covers the AISH_NO_LINEARIZE
+// escape hatch. It exists to rescue a live session without a rebuild, so it
+// has to work at the moment it is reached for.
+func TestLinearizeDisabledFallsBackToStripping(t *testing.T) {
+	linearizeDisabled = true
+	defer func() { linearizeDisabled = false }()
+
+	got := Linearize([]byte(conptyCapture), 24)
+	want := StripEscapes([]byte(conptyCapture))
+	if !bytes.Equal(got, want) {
+		t.Errorf("with linearization disabled:\n got %q\nwant %q", got, want)
+	}
+	// And the bug is back, which is the proof the switch really disabled it.
+	if !strings.Contains(string(got), "AISH-START Microsoft Windows") {
+		t.Error("expected the disabled path to reproduce plain stripping, fused lines and all")
+	}
 }
 
 // --- FirstBreak -----------------------------------------------------------
