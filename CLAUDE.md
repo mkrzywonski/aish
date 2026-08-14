@@ -16,7 +16,13 @@ nix-shell --run "make"            # build ./aish, version stamped from git
 nix-shell --run "make check"      # go vet + full test suite (run before committing)
 nix-shell --run "make version"    # what this build would stamp, without building
 nix-shell -p go --run "go test ./internal/term/"   # a single package
+sudo make install                 # deploy to /usr/local/bin (build as yourself first)
 ```
+
+Install to **`/usr/local/bin` only** (`make install`, PREFIX-overridable). One
+location is a deliberate rule: a login shell and the MCP proxy's non-login shell
+resolve PATH differently, so two copies means sessions and proxy can silently run
+different builds — which has already caused one debugging detour.
 
 Dev builds stamp `main.version` from `git describe --tags --always --dirty`, so a
 binary built from a modified tree reports e.g. `v0.4.0-3-gabc1234-dirty` and can

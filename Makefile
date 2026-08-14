@@ -27,13 +27,27 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
+# One install location, on purpose. Two copies on different PATH precedences —
+# a login shell finding one and the MCP proxy's non-login shell finding another
+# — means sessions and proxy can silently run different builds.
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+
 .PHONY: build install test vet check fmt version clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o aish ./cmd/aish
 
+# Usage:  make build && sudo make install
+#
+# Deliberately does NOT depend on build: building under sudo would produce a
+# root-owned binary, and `git describe` run as root trips git's dubious-ownership
+# check, silently stamping the binary "dev" instead of the real version. Build as
+# yourself, install as root.
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/aish
+	@test -f aish || { echo "no ./aish — run 'make build' as your own user first, so the version stamp is right"; exit 1; }
+	install -m 755 aish $(DESTDIR)$(BINDIR)/aish
+	@echo "installed $(DESTDIR)$(BINDIR)/aish -> $$($(DESTDIR)$(BINDIR)/aish version)"
 
 test:
 	go test ./...
