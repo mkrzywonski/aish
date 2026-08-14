@@ -63,8 +63,8 @@ const serverInstructions = "Aish gives you access to human-owned shared terminal
 	"never disables a tool. " +
 	"If probe evidence makes oob_tools " +
 	"unavailable, do not re-probe; drive the host with run_command instead. Deep identity probing is diagnostic, " +
-	"explicit, and may trigger MFA; never use it instead of oob_tools. Explicit SFTP probing may also trigger MFA " +
-	"and is diagnostic, not file routing. Every " +
+	"explicit, and may trigger MFA; never use it instead of oob_tools. Explicit SFTP may trigger MFA; only a sticky " +
+	"shell failure permits read-only SFTP file routing. Every " +
 	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +
 	"exec, file_*, and directory_list for native-like work on the session's current host when OOB is " +
 	"authorized. Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +
