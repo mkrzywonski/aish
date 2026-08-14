@@ -152,3 +152,40 @@ func TestScreenIdentityHintDoesNotAffectCapabilityState(t *testing.T) {
 		t.Errorf("screen hint changed authoritative remote dialect to %q", got)
 	}
 }
+
+func TestRemoteIdentityStatus(t *testing.T) {
+	tests := []struct {
+		name           string
+		dialectSource  string
+		platformSource string
+		want           string
+	}{
+		{name: "no evidence", want: remoteIdentityUnknown},
+		{name: "screen dialect", dialectSource: screenIdentitySource, want: remoteIdentityAdvisory},
+		{name: "screen platform", platformSource: screenIdentitySource, want: remoteIdentityAdvisory},
+		{name: "shell probe", dialectSource: string(sshmux.IdentitySourceShellProbe), want: remoteIdentityAuthoritative},
+		{name: "deep probe", dialectSource: string(sshmux.IdentitySourceDeepProbe), want: remoteIdentityAuthoritative},
+		{name: "SFTP platform", platformSource: string(sshmux.IdentitySourceSFTP), want: remoteIdentityAuthoritative},
+		{name: "authoritative wins", dialectSource: screenIdentitySource, platformSource: string(sshmux.IdentitySourceSFTP), want: remoteIdentityAuthoritative},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := remoteIdentityStatus(tc.dialectSource, tc.platformSource); got != tc.want {
+				t.Errorf("status = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthoritativePlatformDoesNotClaimCommandSyntax(t *testing.T) {
+	status := remoteIdentityStatus("", string(sshmux.IdentitySourceSFTP))
+	if status != remoteIdentityAuthoritative {
+		t.Fatalf("status = %q, want authoritative platform evidence", status)
+	}
+	note := defaultRemoteIdentityNote(status, "")
+	for _, phrase := range []string{"does not establish", "command syntax", "do not assume POSIX"} {
+		if !strings.Contains(note, phrase) {
+			t.Errorf("platform-only note missing %q: %q", phrase, note)
+		}
+	}
+}

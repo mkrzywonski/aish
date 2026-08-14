@@ -10,6 +10,12 @@ import (
 
 const screenIdentitySource = "screen"
 
+const (
+	remoteIdentityUnknown       = "unknown"
+	remoteIdentityAdvisory      = "advisory"
+	remoteIdentityAuthoritative = "authoritative"
+)
+
 var (
 	windowsVersionLine = regexp.MustCompile(`(?i)Microsoft Windows \[Version [^\]]+\]`)
 	powerShellPrompt   = regexp.MustCompile(`(?i)^\s*PS\s+(?:[A-Z]:\\|Microsoft\.PowerShell\.Core\\FileSystem::\\\\)[^>\r\n]*>\s*$`)
@@ -82,4 +88,35 @@ func applyScreenIdentityHint(res *sessionStatusResult, hint screenIdentityHint) 
 	if used {
 		res.RemoteIdentityNote = "Advisory screen fingerprint only: " + hint.Evidence + ". This does not change out-of-band tool availability; probe evidence takes precedence."
 	}
+}
+
+// remoteIdentityStatus makes the absence and quality of remote identity
+// evidence explicit. Any durable source is authoritative; screen evidence is
+// advisory and must never unlock a command transport.
+func remoteIdentityStatus(dialectSource, platformSource string) string {
+	status := remoteIdentityUnknown
+	for _, source := range []string{dialectSource, platformSource} {
+		if source == "" {
+			continue
+		}
+		if source != screenIdentitySource {
+			return remoteIdentityAuthoritative
+		}
+		status = remoteIdentityAdvisory
+	}
+	return status
+}
+
+const unknownRemoteIdentityNote = "Remote shell identity and command syntax are unknown. run_command types commands verbatim; use syntax established from the user or target context and do not assume POSIX."
+
+const unknownRemoteDialectNote = "Remote platform evidence does not establish the shell dialect or command syntax. run_command types commands verbatim; use syntax established from the user or target context and do not assume POSIX."
+
+func defaultRemoteIdentityNote(status, dialectSource string) string {
+	if dialectSource != "" {
+		return ""
+	}
+	if status == remoteIdentityUnknown {
+		return unknownRemoteIdentityNote
+	}
+	return unknownRemoteDialectNote
 }

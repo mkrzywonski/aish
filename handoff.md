@@ -28,7 +28,7 @@ At the merge boundary:
 | **B phase 2 - passive screen fingerprinting** | done; unit-validated and live-validated on Windows cmd.exe |
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
-| **B closeout - unknown-target safety** | pending; unclassified in-band remotes still expose POSIX-framed fallbacks as available |
+| **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
 | **C - SFTP as probe and transport** | not started; premise empirically confirmed |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
@@ -51,16 +51,16 @@ The identity foundation landed in `9620df6`; passive screen identity landed in
 
 ## Active work
 
-Branch: `b-mfa-status`, based on `main` at `d115a47`.
+Branch: `b-unknown-target-safety`, based on `main` at `345be94`.
 
-Completed objective: add an explicit, bounded, cached active identity probe
-behind `probe_host{deep:true}` without coupling identity to shell capability or
-opening more than one SSH session per explicit attempt.
+Current objective: make truly unknown remote command syntax explicit and prevent
+every POSIX-framed visible fallback from running until the dialect is
+authoritatively identified as POSIX.
 
 ### Status
 
-Phase 3 is complete, including Duo live validation. B remains open only for the
-unknown-target closeout hardening described below.
+The closeout implementation, automated checks, and live acceptance are
+complete. Workstream B is done.
 
 ### Completed
 
@@ -87,6 +87,18 @@ unknown-target closeout hardening described below.
   operation and target, and adds `[2FA?]` to the title while the bar is hidden.
   Background tasks use a filtered random startup marker so the warning clears
   after remote startup rather than after a long-running command exits.
+- Added `remote_identity_status` (`unknown`, `advisory`, or `authoritative`) to
+  remote `session_status` and `probe_host` results. Unknown identity carries an
+  explicit command-syntax warning; authoritative platform-only evidence still
+  states that it does not establish a shell dialect.
+- Changed in-band availability from a platform denylist to a dialect allowlist:
+  only authoritative `posix` enables `file_read`, `file_write`, or foreground
+  `exec`. Unknown is reported as `unknown`; cmd, PowerShell, network, restricted,
+  and no-shell identities are unavailable.
+- Added the missing `requireTool("exec")` enforcement. Before this closeout,
+  `exec` could bypass its reported availability and reach `RunSentinel` on an
+  unknown target. Routes now retain their `ConnInfo` identity key when a tracked
+  SSH connection loses its ControlMaster, preserving durable facts in-band.
 
 ### Changed files
 
@@ -99,6 +111,9 @@ handoff. Follow-up live validation also hardened ANSI cleanup in
 `internal/sshmux/dialect.go` and `dialect_test.go`. The MFA warning checkpoint
 adds `internal/sshmux/activity.go`, task startup-marker handling,
 `internal/mcpserver/statusline.go`, title integration, and focused tests.
+The unknown-target closeout changes `internal/mcpserver/capability.go`,
+`tools.go`, `tools_remote.go`, `screen_identity.go`, their focused tests,
+`internal/proxy/aggregate.go`, README/CLAUDE guidance, and the planning docs.
 
 ### Verification
 
@@ -172,28 +187,34 @@ The `test` session connected passwordlessly over real ControlMaster paths to
   The user observed no takeover, title marker, flicker, or interruption. This
   confirms that the warning is conspicuous when Duo is pending and effectively
   invisible when authentication finishes within the 500 ms debounce.
+- Unknown-target closeout: the installed build first connected to the same
+  passwordless POSIX host with explicit `ControlMaster=no,ControlPath=none`,
+  intentionally removing all authoritative identity. Status reported
+  `remote_identity_status:unknown`; `file_read`, `file_write`, and `exec` were
+  non-available with a command-syntax warning. Direct `file_read` and `exec`
+  calls both refused, and screen generation/content remained identical after a
+  700 ms stale-timer check, proving no sentinel bytes were typed.
+- Known POSIX in-band: after an ordinary probe established authoritative
+  `posix`, OOB was disabled and the access prompt declined. Foreground `exec`
+  completed visibly with exit 0 and `via:in_band`, proving safe fallback was not
+  over-blocked.
+- Recognized non-POSIX in-band: cmd.exe first appeared as `advisory` from the
+  screen, then its 81 ms ordinary probe upgraded identity to authoritative and
+  made every POSIX tool unavailable. After OOB was disabled and access prompts
+  declined, direct `file_read` and `exec` refused with cmd.exe-specific
+  guidance. The Windows screen remained byte-for-byte unchanged at generation
+  52 after another 700 ms wait. Durable identity survived the route downgrade.
 
 ### Exact next step
 
-Close the remaining B unknown-target safety gaps before creating a fresh branch
-from updated `main` for workstream C. Before choosing C's SFTP open order, run
-the separate Duo subsystem test described below; today's shell/deep-probe test
-did not establish whether SFTP itself causes another push.
+Commit and merge the completed B closeout. For workstream C, first run the
+separate SFTP subsystem test over the existing Duo-protected master; whether it
+causes another push determines the default SFTP open-order policy. Then create
+`c-sftp-axis` from updated `main` and implement the narrow subsystem/fact-axis
+checkpoint described below.
 
 ### Blockers or uncertainties
 
-- An unclassified ControlMaster target is conservative: `oob_tools` reports
-  `unknown`, and direct OOB tool use auto-probes before executing. An
-  unclassified `in_band` target is not: `file_read`, `file_write`, and `exec`
-  are advertised as available even though their visible fallback uses POSIX
-  sentinel framing. Mark these tools unknown or unavailable until POSIX is
-  established; keep bare `run_command` available with an explicit
-  command-syntax warning.
-- Unknown remote identity is represented by omitted `remote_dialect` and
-  `remote_platform` fields rather than an explicit state. Add an unambiguous
-  identity status (`unknown`, `advisory`, or `authoritative`) so models do not
-  confuse missing identity with `target_confidence`, which measures host
-  targeting instead.
 - Workstream C's default SFTP open order still depends on whether a subsystem
   request over the existing Duo-protected master causes another push.
 
@@ -293,12 +314,6 @@ These were measured directly and corrected earlier assumptions.
 4. **README platform wording remains conservative.** Windows targets are
    detected and refused quickly for POSIX OOB operations, but are not useful for
    native file operations until workstream C lands.
-5. **Unknown-target signaling is route-dependent.** ControlMaster routes expose
-   explicit per-tool `unknown` states and auto-probe before acting, but an
-   unclassified `in_band` route currently assumes its POSIX-framed
-   `file_read`/`file_write`/`exec` fallbacks are usable. Make availability fail
-   closed and publish explicit identity status before closing B.
-
 ---
 
 ## Verification and deployment
@@ -320,6 +335,10 @@ The MFA warning build was installed as `v0.2.2-22-gd115a47-dirty`; the artifact
 and `/usr/local/bin/aish` had identical SHA-256 hashes. The existing long-lived
 proxy still reported `v0.2.2-18-g5561c90` during testing and will pick up the
 installed build when its AI client restarts.
+
+The B-closeout build was installed as `v0.2.2-23-g345be94-dirty`; the artifact
+and `/usr/local/bin/aish` both had SHA-256
+`023ce9ae65beefe52343e66aea2b2a1d29023734072c9ad25b00872013ba53fd`.
 
 Do not assume any previous live session still exists. `aish sessions` is
 authoritative.

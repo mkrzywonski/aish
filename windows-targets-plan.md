@@ -6,10 +6,9 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 - **Repo**: aish; see `handoff.md` for the active branch
 - **Verified on**: WSL → Windows OpenSSH 10.0p2 (cmd.exe), and a Duo-protected
   RHEL 9.8 host
-- **Status**: A **done**; B phases 1-3 **implemented and live-validated** on
-  POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo-protected RHEL;
-  B unknown-target closeout hardening remains. C and D not started. See
-  `handoff.md` for current state.
+- **Status**: A and B **done**. B is live-validated on POSIX, cmd.exe, Windows
+  PowerShell 5.1, PowerShell 7, Duo-protected RHEL, and unknown/POSIX/cmd.exe
+  in-band routes. C and D not started. See `handoff.md` for current state.
 
 ---
 
@@ -346,33 +345,46 @@ not leave a stale debounce callback capable of taking over the bar later.
 
 ### Closeout hardening: truly unknown targets
 
-The ControlMaster route now handles an unknown target conservatively: before a
+The ControlMaster route handles an unknown target conservatively: before a
 probe, every `oob_tools` entry is explicitly `unknown`, and a direct tool call
-auto-probes before executing. The `in_band` route still has a narrower version
-of the original defect. When no authoritative dialect is known,
-`inBandAvailability` advertises `file_read`, `file_write`, and `exec` as
-available even though all three type POSIX sentinel framing into the visible
-terminal. An unknown appliance, restricted CLI, or non-POSIX shell can
-therefore receive invalid commands based on an implicit POSIX assumption.
+auto-probes before executing. The closeout now applies the same fail-closed rule
+to `in_band`: only an authoritative `posix` dialect enables `file_read`,
+`file_write`, and foreground `exec`. Unknown identity reports those tools as
+`unknown`; every identified non-POSIX dialect, including `restricted` and
+`no_shell` whose coarse platform is empty, reports them unavailable.
 
-Identity signaling is also implicit: `remote_dialect` and `remote_platform`
-use `omitempty`, so a truly unknown identity is represented by absent fields.
-`target_confidence: unknown` does not fill this role; it describes whether the
-interactive and OOB hosts are known to match.
+`session_status` and `probe_host` now publish `remote_identity_status` as
+`unknown`, `advisory`, or `authoritative`. `target_confidence` remains separate:
+it describes whether interactive and OOB targets match, not whether command
+syntax is known. Platform-only evidence may be authoritative while
+`remote_dialect` is absent, so the result explicitly warns that command syntax
+is still unknown and framing remains disabled.
 
-Before closing B:
+The execution gate matches the advertised state. `exec` now calls
+`requireTool`, closing a bypass that could previously reach `RunSentinel`
+despite the availability map. A tracked SSH route also retains its `ConnInfo`
+when falling back in-band, so durable identity survives loss of the master.
 
-1. Publish an explicit remote identity status: `unknown`, `advisory`, or
-   `authoritative`.
-2. On an unclassified `in_band` route, mark POSIX-framed tools unknown or
-   unavailable rather than available. Keep `run_command` usable because it
-   types the caller's command bare, but state that command syntax is unknown.
-3. Preserve the current ControlMaster behavior: unknown before probing,
-   automatic probe-and-gate on direct tool use, and no capability decision from
-   advisory screen evidence.
-4. Add matrix tests for unknown identity with and without a ControlMaster,
-   including a direct tool call that must not type POSIX framing when no dialect
-   has been established.
+Automated closeout coverage includes:
+
+1. The full unknown/POSIX/cmd/PowerShell/network/restricted/no-shell in-band
+   dialect matrix.
+2. Direct `file_read` and `exec` handler calls with a deliberately nil framing
+   engine; unknown identity returns before any terminal bytes can be emitted.
+3. Unknown, advisory, authoritative, and authoritative-platform-only identity
+   states, including durable identity retained after in-band fallback.
+4. Existing ControlMaster unknown-before-probe and advisory-screen isolation
+   tests.
+
+Live acceptance completed on the installed build. An intentionally untracked
+passwordless POSIX connection (`ControlMaster=no,ControlPath=none`) reported
+explicit unknown identity; direct `file_read` and `exec` refused, and the screen
+generation/content remained unchanged after a 700 ms stale-timer window. An
+authoritatively probed POSIX connection, downgraded by disabling OOB and
+declining access, completed foreground exec with `via:in_band`. Finally,
+cmd.exe moved from advisory screen identity to authoritative shell-probe
+identity; after the same downgrade both direct operations refused with
+cmd.exe-specific guidance and left the Windows screen unchanged. This closes B.
 
 ### Sequence
 

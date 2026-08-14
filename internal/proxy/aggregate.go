@@ -57,10 +57,11 @@ type pooledConn struct {
 const serverInstructions = "Aish gives you access to human-owned shared terminal sessions and to the current host " +
 	"inside each session, including a remote host reached by SSH. Your native shell and filesystem tools " +
 	"remain local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
-	"SSH'd into there, use aish tools instead. Start with list_sessions, choose the intended session, then " +
-	"call session_status; recheck status after SSH transitions. On a newly-SSH'd host the OOB file/search " +
-	"tools start `unknown`; call probe_host once to initialize them, then always plan against oob_tools. A " +
-	"remote_dialect_source of `screen` is advisory and never disables a tool. If probe evidence makes oob_tools " +
+	"SSH'd into there, use aish tools instead. Start with list_sessions, select the session, then call " +
+	"session_status; recheck after SSH transitions. New SSH hosts have `unknown` OOB tools; call probe_host once, " +
+	"then always plan against oob_tools. remote_identity_status is unknown, advisory, or authoritative. Unknown or " +
+	"advisory never implies POSIX; remote_dialect_source `screen` is advisory and never disables a tool. " +
+	"If probe evidence makes oob_tools " +
 	"unavailable, do not re-probe; drive the host with run_command instead. Deep identity probing is diagnostic, " +
 	"explicit, and may trigger MFA; never use it to decide availability in place of oob_tools. Every " +
 	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +

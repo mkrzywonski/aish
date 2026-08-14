@@ -1,10 +1,12 @@
 package mcpserver
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"ai-ssh/internal/sshmux"
+	"ai-ssh/internal/term"
 )
 
 func TestCapabilityAvailabilityGNU(t *testing.T) {
@@ -111,11 +113,14 @@ func TestOobAvailabilityUnknownUntilProbed(t *testing.T) {
 		}
 	}
 
-	// in_band: the visible fallbacks are available, the rest unavailable.
+	// An unclassified in_band route must not assume the visible shell is POSIX.
 	ib := c.oobToolAvailability(route{via: "in_band", host: "web"})
 	for _, tool := range []string{"file_read", "file_write", "exec"} {
-		if ib[tool].State != toolAvailable {
-			t.Errorf("in_band %s state = %q, want available", tool, ib[tool].State)
+		if ib[tool].State != toolUnknown {
+			t.Errorf("unclassified in_band %s state = %q, want unknown", tool, ib[tool].State)
+		}
+		if !strings.Contains(ib[tool].Detail, "do not assume POSIX") {
+			t.Errorf("unclassified in_band %s lacks syntax warning: %q", tool, ib[tool].Detail)
 		}
 	}
 	if ib["file_grep"].State != toolUnavailable {
@@ -172,6 +177,9 @@ func TestBlockedProbeResultReportsIdentitySources(t *testing.T) {
 	if res.RemoteDialect != string(sshmux.DialectCmd) || res.RemotePlatform != "windows" {
 		t.Errorf("identity = %q/%q, want cmd/windows", res.RemoteDialect, res.RemotePlatform)
 	}
+	if res.RemoteIdentityStatus != remoteIdentityAuthoritative {
+		t.Errorf("identity status = %q, want authoritative", res.RemoteIdentityStatus)
+	}
 }
 
 func TestDeepProbeResultReportsIdentityWithoutChangingAvailability(t *testing.T) {
@@ -193,6 +201,9 @@ func TestDeepProbeResultReportsIdentityWithoutChangingAvailability(t *testing.T)
 	}
 	if res.RemoteDialectSource != string(sshmux.IdentitySourceDeepProbe) || res.RemotePlatformSource != string(sshmux.IdentitySourceDeepProbe) {
 		t.Errorf("identity sources = %q/%q, want deep_probe", res.RemoteDialectSource, res.RemotePlatformSource)
+	}
+	if res.RemoteIdentityStatus != remoteIdentityAuthoritative {
+		t.Errorf("identity status = %q, want authoritative", res.RemoteIdentityStatus)
 	}
 	if res.Probed || res.RemoteHost != nil {
 		t.Errorf("deep identity claimed shell capability: %+v", res)
@@ -221,6 +232,37 @@ func TestDeepProbeFailureNoteStopsImplicitRetries(t *testing.T) {
 	}
 }
 
+func TestDeepProbeWithoutControlMasterReportsUnknownSyntax(t *testing.T) {
+	c := localOOBCore(t)
+	_, res, err := c.probeHostDeep(context.Background(), route{via: "in_band", host: "mystery"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RemoteIdentityStatus != remoteIdentityUnknown {
+		t.Errorf("identity status = %q, want unknown", res.RemoteIdentityStatus)
+	}
+	for _, phrase := range []string{"command syntax", "do not assume POSIX"} {
+		if !strings.Contains(res.RemoteIdentityNote, phrase) {
+			t.Errorf("identity note missing %q: %q", phrase, res.RemoteIdentityNote)
+		}
+	}
+}
+
+func TestProbeResultRetainsIdentityWhenTransportFallsBackInBand(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "winbox", Sock: "/run/aish/cm-gone"}
+	c.Mux.NoteIdentity(ci, sshmux.DialectPowerShell, "windows", sshmux.IdentitySourceDeepProbe, "PSOS=Windows_NT")
+	res := probeHostResult{Via: "in_band", Host: "winbox"}
+	c.setProbeIdentityStatus(&res, route{via: "in_band", ci: ci, host: "winbox"})
+
+	if res.RemoteDialect != string(sshmux.DialectPowerShell) || res.RemotePlatform != "windows" {
+		t.Errorf("identity = %q/%q, want powershell/windows", res.RemoteDialect, res.RemotePlatform)
+	}
+	if res.RemoteIdentityStatus != remoteIdentityAuthoritative {
+		t.Errorf("identity status = %q, want authoritative", res.RemoteIdentityStatus)
+	}
+}
+
 // TestOobAvailabilityRetryableFailureStaysUnknown: an unclassified failure is a
 // transport fact, so the toolset stays "unknown" — but the detail has to say
 // what a retry costs rather than cheerfully suggesting one.
@@ -242,29 +284,82 @@ func TestOobAvailabilityRetryableFailureStaysUnknown(t *testing.T) {
 	}
 }
 
-// TestInBandUnavailableOnNonPosix: the visible fallbacks are not dialect
-// neutral. file_read/file_write/exec go through RunSentinel, which types a
-// POSIX command line — on cmd.exe that is garbage, so reporting them available
-// was a wrong answer rather than a degraded one.
-func TestInBandUnavailableOnNonPosix(t *testing.T) {
+// TestInBandAvailabilityRequiresPosixIdentity is the route/dialect matrix for
+// visible sentinel framing. Only proven POSIX is allowed: unknown cannot be
+// guessed, and every known non-POSIX dialect must fail closed even when its
+// coarse platform is empty (restricted/no_shell).
+func TestInBandAvailabilityRequiresPosixIdentity(t *testing.T) {
 	c := localOOBCore(t)
-	ci := &sshmux.ConnInfo{Host: "winbox", User: "mk31", Port: "22", Sock: "/run/aish/cm-win2"}
-	c.Mux.NoteShellUnusable(ci, sshmux.DialectCmd, "cmd.exe", "'sh' is not recognized", true)
+	tests := []struct {
+		name    string
+		dialect sshmux.Dialect
+		want    string
+	}{
+		{name: "unknown", dialect: sshmux.DialectUnknown, want: toolUnknown},
+		{name: "posix", dialect: sshmux.DialectPosix, want: toolAvailable},
+		{name: "cmd", dialect: sshmux.DialectCmd, want: toolUnavailable},
+		{name: "powershell", dialect: sshmux.DialectPowerShell, want: toolUnavailable},
+		{name: "network", dialect: sshmux.DialectNetworkOS, want: toolUnavailable},
+		{name: "restricted", dialect: sshmux.DialectRestricted, want: toolUnavailable},
+		{name: "no shell", dialect: sshmux.DialectNoShell, want: toolUnavailable},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ci := &sshmux.ConnInfo{Host: tc.name, Sock: "/run/aish/cm-matrix-" + string(rune('a'+i))}
+			if tc.dialect != sshmux.DialectUnknown {
+				c.Mux.NoteIdentity(ci, tc.dialect, tc.dialect.Platform(), sshmux.IdentitySourceDeepProbe, "test identity")
+			}
+			ib := c.oobToolAvailability(route{via: "in_band", ci: ci, host: tc.name})
+			for _, tool := range []string{"file_read", "file_write", "exec"} {
+				if ib[tool].State != tc.want {
+					t.Errorf("%s state = %q, want %q", tool, ib[tool].State, tc.want)
+				}
+				if tc.want != toolAvailable && !strings.Contains(ib[tool].Detail, "run_command") {
+					t.Errorf("%s should point at run_command, got %q", tool, ib[tool].Detail)
+				}
+			}
+		})
+	}
+}
 
-	ib := c.oobToolAvailability(route{via: "in_band", ci: ci, host: "winbox"})
-	for _, tool := range []string{"file_read", "file_write", "exec"} {
-		if ib[tool].State != toolUnavailable {
-			t.Errorf("in_band %s on a cmd.exe host state = %q, want unavailable", tool, ib[tool].State)
-		}
-		if !strings.Contains(ib[tool].Detail, "run_command") {
-			t.Errorf("in_band %s should point at run_command, got %q", tool, ib[tool].Detail)
+// TestUnknownInBandFileReadStopsBeforeFraming drives the real file_read
+// handler with Engine deliberately nil. A regression that reaches RunSentinel
+// will panic; the safe path returns the identity error before emitting bytes.
+func TestUnknownInBandFileReadStopsBeforeFraming(t *testing.T) {
+	c := localOOBCore(t)
+	events := make(chan term.Event, 1)
+	events <- term.Event{Kind: term.EvCwd, Host: "mystery-appliance", Cwd: "/"}
+	close(events)
+	c.Tracker.Consume(events)
+
+	_, _, err := c.fileRead(context.Background(), nil, fileReadArgs{Path: "/etc/hostname"})
+	if err == nil {
+		t.Fatal("unknown in-band file_read unexpectedly proceeded")
+	}
+	for _, phrase := range []string{"not safe", "syntax is unknown", "do not assume POSIX"} {
+		if !strings.Contains(err.Error(), phrase) {
+			t.Errorf("error missing %q: %v", phrase, err)
 		}
 	}
+}
 
-	// A POSIX host (or one not yet classified) keeps the fallbacks.
-	plain := c.oobToolAvailability(route{via: "in_band", host: "linuxbox"})
-	if plain["file_read"].State != toolAvailable {
-		t.Errorf("in_band file_read on an unclassified host = %q, want available", plain["file_read"].State)
+// TestUnknownInBandExecStopsBeforeFraming covers exec separately: unlike the
+// file handlers, it historically failed to enforce its reported availability.
+func TestUnknownInBandExecStopsBeforeFraming(t *testing.T) {
+	c := localOOBCore(t)
+	events := make(chan term.Event, 1)
+	events <- term.Event{Kind: term.EvCwd, Host: "mystery-appliance", Cwd: "/"}
+	close(events)
+	c.Tracker.Consume(events)
+
+	_, _, err := c.execTool(context.Background(), nil, execArgs{Command: "show version"})
+	if err == nil {
+		t.Fatal("unknown in-band exec unexpectedly proceeded")
+	}
+	for _, phrase := range []string{"not safe", "syntax is unknown", "do not assume POSIX"} {
+		if !strings.Contains(err.Error(), phrase) {
+			t.Errorf("error missing %q: %v", phrase, err)
+		}
 	}
 }
 

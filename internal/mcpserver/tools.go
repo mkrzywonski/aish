@@ -22,7 +22,9 @@ func registerTools(s *mcp.Server, c *Core) {
 		Name:        "run_command",
 		Annotations: commandTool("Run visible command"),
 		Description: "Run a shell command in the shared terminal (visible to the user) and return its output. " +
-			"Works transparently whether the session is local or inside ssh. An exact exit_code is included when " +
+			"Works whether the session is local or inside ssh, but does not translate command syntax: when " +
+			"remote_dialect is absent or remote_identity_status is not authoritative, use syntax established from the " +
+			"user or target context and do not assume POSIX. An exact exit_code is included when " +
 			"shell integration is active (framing \"osc133\"); otherwise (framing \"idle\") completion is inferred " +
 			"from output quiescence and no exit code is available — judge success from the output, or run echo $? " +
 			"as a follow-up. Errors if a full-screen app is active or the terminal is waiting for secret input.",
@@ -75,6 +77,8 @@ func registerTools(s *mcp.Server, c *Core) {
 			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
 			"on this machine. Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
 			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Also reports oob_user: the " +
+			"remote_identity_status field explicitly distinguishes unknown, advisory screen evidence, and authoritative " +
+			"probe evidence; unknown or advisory identity never enables POSIX-framed fallback tools. " +
 			"identity out-of-band exec/file_* run as, which stays the SSH login user even after the human switches user in " +
 			"the shared shell (su/sudo -i) — check it before ownership/privilege-sensitive operations. Every tool accepts a " +
 			"session argument to run against one of those other sessions instead.",
@@ -315,6 +319,7 @@ type sessionStatusResult struct {
 	RemotePlatform       string            `json:"remote_platform,omitempty"`
 	RemoteDialectSource  string            `json:"remote_dialect_source,omitempty"`
 	RemotePlatformSource string            `json:"remote_platform_source,omitempty"`
+	RemoteIdentityStatus string            `json:"remote_identity_status,omitempty"`
 	RemoteIdentityNote   string            `json:"remote_identity_note,omitempty"`
 	ProbeAttempts        int               `json:"probe_attempts,omitempty"`
 	DeepProbeStatus      string            `json:"deep_probe_status,omitempty"`
@@ -388,6 +393,10 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	}
 	if rt.via != "local" {
 		applyScreenIdentityHint(&res, fingerprintScreenIdentity(snap))
+		res.RemoteIdentityStatus = remoteIdentityStatus(res.RemoteDialectSource, res.RemotePlatformSource)
+		if res.RemoteIdentityNote == "" {
+			res.RemoteIdentityNote = defaultRemoteIdentityNote(res.RemoteIdentityStatus, res.RemoteDialectSource)
+		}
 	}
 	if res.OOBUser == "" {
 		res.OOBUser = sshUser // ssh login user, before the host is probed

@@ -168,7 +168,7 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
-| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus interactive/OOB host, target confidence, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
+| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), interactive/OOB host, target confidence, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
 | `probe_host` | Initialize the OOB toolset on the current host: open the channel, run the capability probe, resolve `oob_tools` from `unknown` to available/unavailable; may prompt for OOB consent / MFA. Optional (tools auto-probe on first use) |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
@@ -184,8 +184,11 @@ live session on the machine.
 
 Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
 (`--oob`, the Ctrl-] runtime toggle, or an interactive grant). Without one,
-`file_read`/`file_write` and foreground `exec` can fall back in-band — typed
-visibly through the shared terminal, size-capped — while `file_edit`,
+`file_read`/`file_write` and foreground `exec` can fall back in-band only when
+the remote dialect is authoritatively identified as POSIX. Unknown, advisory,
+and non-POSIX identities fail closed rather than receiving POSIX sentinel
+framing. The safe fallback is typed visibly through the shared terminal and
+size-capped, while `file_edit`,
 `file_patch`, `file_grep`/`file_search`, `file_stat`, `directory_list`,
 `file_upload`/`file_download`, and background `exec` refuse with guidance. For
 remote OOB access, grant it before starting the SSH connection so the shim can
@@ -447,8 +450,10 @@ so, and your retry is the consent for the reopen. Background `exec` tasks need
 a concurrent stream and use a dedicated channel each. Your interactive
 connection becomes the multiplexing master; file and exec tools open extra
 channels over it. If you pass your own `-S`/`-o Control*` options, the shim
-backs off entirely. Hosts without a usable channel degrade to in-band
-operation through the shared terminal (marked `via: "in_band"` in results).
+backs off entirely. Hosts without a usable channel can use in-band operation
+through the shared terminal (marked `via: "in_band"` in results), but framed
+file/exec fallbacks require an authoritative POSIX dialect. `run_command`
+remains available for other targets and types the caller's syntax verbatim.
 
 Shell integration (OSC 133/7) is injected via `--rcfile` (bash) / `ZDOTDIR`
 (zsh), sourcing your own rc first. Shells without integration (plain

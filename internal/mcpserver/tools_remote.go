@@ -157,7 +157,9 @@ func (c *Core) capability() route {
 		}
 		// ssh is up but no usable master (not authorized at connect, user
 		// override, server refusal): typing through the shared terminal.
-		return route{via: "in_band", host: ci.Host}
+		// Keep ci so durable identity facts can still gate dialect-specific
+		// visible fallbacks after the multiplexed route disappears.
+		return route{via: "in_band", ci: ci, host: ci.Host}
 	}
 	// No shim-tracked ssh. If the foreground process is an ssh the shim
 	// didn't see (or OSC 7 reports a foreign host), stay honest: in-band.
@@ -401,6 +403,8 @@ type probeHostResult struct {
 	RemotePlatform       string               `json:"remote_platform,omitempty"`
 	RemoteDialectSource  string               `json:"remote_dialect_source,omitempty"`
 	RemotePlatformSource string               `json:"remote_platform_source,omitempty"`
+	RemoteIdentityStatus string               `json:"remote_identity_status,omitempty"`
+	RemoteIdentityNote   string               `json:"remote_identity_note,omitempty"`
 	ProbeAttempts        int                  `json:"probe_attempts,omitempty"`
 	DeepProbeStatus      string               `json:"deep_probe_status,omitempty"`
 	DeepProbeAttempts    int                  `json:"deep_probe_attempts,omitempty"`
@@ -478,10 +482,11 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 	case "local":
 		res.Note = "local session: out-of-band tools run in-process and are always available."
 	case "in_band":
-		res.Note = "no out-of-band channel to this host; file_read/file_write/exec fall back to the visible terminal and the other tools are unavailable."
+		res.Note = "no out-of-band channel to this host; only tools safe for the authoritative remote shell identity can use visible-terminal fallbacks."
 	}
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
 	res.OobTools = c.oobToolAvailability(rt)
+	c.setProbeIdentityStatus(&res, rt)
 	return nil, res, nil
 }
 
@@ -499,6 +504,7 @@ func (c *Core) probeHostDeep(ctx context.Context, cap route, force bool) (*mcp.C
 		}
 		_, _, res.TargetConfidence = c.hostConfidence(cap)
 		res.OobTools = c.oobToolAvailability(cap)
+		c.setProbeIdentityStatus(&res, cap)
 		return nil, res, nil
 	}
 
@@ -517,6 +523,7 @@ func (c *Core) probeHostDeep(ctx context.Context, cap route, force bool) (*mcp.C
 		}
 		_, _, res.TargetConfidence = c.hostConfidence(rt)
 		res.OobTools = c.oobToolAvailability(rt)
+		c.setProbeIdentityStatus(&res, rt)
 		return nil, res, nil
 	}
 
@@ -563,6 +570,7 @@ func (c *Core) deepProbeResult(rt route, deep sshmux.DeepProbeResult) probeHostR
 	}
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
 	res.OobTools = c.oobToolAvailability(rt)
+	c.setProbeIdentityStatus(&res, rt)
 	return res
 }
 
@@ -599,7 +607,32 @@ func (c *Core) blockedProbeResult(rt route, f sshmux.HostFacts) probeHostResult 
 		OobTools:             availability(f),
 	}
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	c.setProbeIdentityStatus(&res, rt)
 	return res
+}
+
+func (c *Core) setProbeIdentityStatus(res *probeHostResult, rt route) {
+	if res.Via == "local" {
+		return
+	}
+	// Some no-ControlMaster results return before the ordinary probe path, but
+	// the tracked connection may still have durable identity from an earlier
+	// shell or deep probe. Preserve it in the result rather than regressing to
+	// unknown merely because the transport is currently in-band.
+	if f, ok := c.Mux.Facts(rt.ci); ok {
+		if dialect := f.Identity.DialectFact(); res.RemoteDialectSource == "" && dialect.Dialect != sshmux.DialectUnknown {
+			res.RemoteDialect = string(dialect.Dialect)
+			res.RemoteDialectSource = string(dialect.Source)
+		}
+		if platform := f.Identity.PlatformFact(); res.RemotePlatformSource == "" && platform.Platform != "" {
+			res.RemotePlatform = platform.Platform
+			res.RemotePlatformSource = string(platform.Source)
+		}
+	}
+	res.RemoteIdentityStatus = remoteIdentityStatus(res.RemoteDialectSource, res.RemotePlatformSource)
+	if res.RemoteIdentityNote == "" {
+		res.RemoteIdentityNote = defaultRemoteIdentityNote(res.RemoteIdentityStatus, res.RemoteDialectSource)
+	}
 }
 
 // downgrade turns an OOB-capable route into its visible in-band equivalent
@@ -1268,6 +1301,9 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	}
 	rt := c.route()
 	if _, err := c.guardTarget(rt, opMutate); err != nil {
+		return nil, execResult{}, err
+	}
+	if err := c.requireTool(rt, "exec"); err != nil {
 		return nil, execResult{}, err
 	}
 

@@ -122,24 +122,30 @@ func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
 // inBandAvailability reports what the VISIBLE fallbacks can do. They are not
 // dialect-neutral: file_read, file_write and foreground exec all go through
 // framing.RunSentinel, which types a POSIX command line with a printf sentinel.
-// On a Windows or network-device host that is garbage, so claiming them
-// available there was simply a wrong answer. Only run_command — which types the
-// command bare — survives.
+// That framing is unsafe on any shell other than an authoritatively identified
+// POSIX shell, so availability is allowlisted rather than inferred from platform.
+// Only run_command — which types the command bare — survives unknown and
+// non-POSIX identities.
 func inBandAvailability(d sshmux.Dialect) map[string]toolAvail {
 	m := map[string]toolAvail{}
-	posixHostile := d.Platform() == "windows" || d.Platform() == "network"
 	for _, n := range oobToolNames {
 		switch n {
 		case "file_read", "file_write", "exec":
-			if posixHostile {
+			switch d {
+			case sshmux.DialectPosix:
+				m[n] = toolAvail{State: toolAvailable}
+			case sshmux.DialectUnknown:
+				m[n] = toolAvail{
+					State:  toolUnknown,
+					Detail: "remote command syntax is unknown; refusing to type POSIX sentinel framing into the shared terminal. Use run_command only with syntax appropriate for the target; do not assume POSIX",
+				}
+			default:
 				m[n] = toolAvail{
 					State:   toolUnavailable,
 					Missing: fmt.Sprintf("a POSIX shell (the visible fallback types a POSIX command line, but this host presents %s)", d.Human()),
-					Detail:  "use run_command, which types the command bare and works on any shell",
+					Detail:  "use run_command with syntax appropriate for this shell; it types the command bare",
 				}
-				continue
 			}
-			m[n] = toolAvail{State: toolAvailable} // visible fallbacks exist
 		default:
 			m[n] = toolAvail{State: toolUnavailable, Missing: "an out-of-band route (no multiplexed channel to this host)"}
 		}
@@ -244,7 +250,7 @@ func (c *Core) requireTool(rt route, tool string) error {
 		if detail == "" {
 			detail = "call probe_host"
 		}
-		return fmt.Errorf("%s could not be initialized on %s: %s", tool, rt.host, detail)
+		return fmt.Errorf("%s is not safe to use on %s: %s", tool, rt.host, detail)
 	}
 	msg := fmt.Sprintf("%s is unavailable on %s: it needs %s", tool, rt.host, av.Missing)
 	if av.Install != "" {
