@@ -36,3 +36,17 @@ func TestSFTPSessionAttemptNamesSubsystem(t *testing.T) {
 		}
 	}
 }
+
+func TestInputRequiredStatusTakesOverBar(t *testing.T) {
+	got := inputRequiredStatus()
+	for _, want := range []string{"AISH INPUT REQUIRED", "answer the prompt", "ESC CANCELS"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("input modal missing %q: %s", want, got)
+		}
+	}
+	for _, absent := range []string{"tty:", "oob:", "Ctrl-]"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("input modal retained standard field %q: %s", absent, got)
+		}
+	}
+}

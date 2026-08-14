@@ -2,14 +2,15 @@ package session
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 )
 
 // Console: aish talking to the human through the real terminal WITHOUT going
-// through the PTY. Output is written straight to os.Stdout (the user sees it;
-// the shell, the scrollback Ring, and read_screen never do). Input, while a
+// through the PTY. Output uses Session.Stdout (the user sees it; the shell, the
+// scrollback Ring, and read_screen never do). Input, while a
 // prompt is active, is captured off the stdin pump before it reaches the
 // shell — so the user's keypress is consumed by aish and no bytes land at the
 // shell prompt. This is the sanctioned second exception to byte-transparency
@@ -30,7 +31,35 @@ func (s *Session) Notify(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	fmt.Fprintf(os.Stdout, "\r\n%s🔒 aish%s %s\r\n", promptColor, promptReset, msg)
+	fmt.Fprintf(s.consoleWriter(), "\r\n%s🔒 aish%s %s\r\n", promptColor, promptReset, msg)
+}
+
+func (s *Session) consoleWriter() io.Writer {
+	if s.Stdout != nil {
+		return s.Stdout
+	}
+	return os.Stdout
+}
+
+// beginPromptAttention publishes the durable presentation state before the
+// prompt takes outMu. The returned function must run after outMu is released,
+// otherwise a repaint callback could deadlock in Session.WriteOut.
+func (s *Session) beginPromptAttention() func() {
+	s.promptOn.Store(true)
+	s.promptChanged()
+	return func() {
+		s.promptOn.Store(false)
+		s.promptChanged()
+	}
+}
+
+func (s *Session) promptChanged() {
+	s.promptCbMu.Lock()
+	changed := s.promptCb
+	s.promptCbMu.Unlock()
+	if changed != nil {
+		changed()
+	}
 }
 
 // beginCapture diverts stdin from the shell to a fresh channel and returns it,
@@ -134,13 +163,18 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 	s.promptMu.Lock()
 	defer s.promptMu.Unlock()
 	ch, cancel, done := s.beginCapture()
-	defer done()
+	finishAttention := s.beginPromptAttention()
+	defer func() {
+		done()
+		finishAttention()
+	}()
 
 	// Hold output for the whole interaction so the frozen screen doesn't
 	// scroll under the prompt; draw the question.
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	fmt.Fprintf(os.Stdout, "\r\n%s%s [%s]%s ", promptColor, question, keyHint(accept), promptReset)
+	out := s.consoleWriter()
+	fmt.Fprintf(out, "\a\r\n%s%s [%s]%s ", promptColor, question, keyHint(accept), promptReset)
 
 	deadline := time.After(timeout)
 	for {
@@ -148,22 +182,22 @@ func (s *Session) Prompt(question, accept string, timeout time.Duration) (byte, 
 		case b := <-ch:
 			if b == 0x1b { // Esc cancels — but not a mouse/focus/arrow escape sequence
 				if isLoneEscape(ch) {
-					fmt.Fprintf(os.Stdout, "(cancelled)\r\n")
+					fmt.Fprintf(out, "(cancelled)\r\n")
 					return 0, false
 				}
 				continue // drained an escape sequence; keep waiting for a choice
 			}
 			lb := lower(b)
 			if strings.IndexByte(accept, lb) >= 0 {
-				fmt.Fprintf(os.Stdout, "%c\r\n", lb) // echo the choice
+				fmt.Fprintf(out, "%c\r\n", lb) // echo the choice
 				return lb, true
 			}
 			// ignore anything else (stray Enter, arrow keys, etc.)
 		case <-cancel: // a second menu key aborted the prompt
-			fmt.Fprintf(os.Stdout, "(cancelled)\r\n")
+			fmt.Fprintf(out, "(cancelled)\r\n")
 			return 0, false
 		case <-deadline:
-			fmt.Fprintf(os.Stdout, "(timed out)\r\n")
+			fmt.Fprintf(out, "(timed out)\r\n")
 			return 0, false
 		}
 	}
@@ -176,11 +210,16 @@ func (s *Session) PromptLine(question string, timeout time.Duration) (string, bo
 	s.promptMu.Lock()
 	defer s.promptMu.Unlock()
 	ch, cancel, done := s.beginCapture()
-	defer done()
+	finishAttention := s.beginPromptAttention()
+	defer func() {
+		done()
+		finishAttention()
+	}()
 
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	fmt.Fprintf(os.Stdout, "\r\n%s%s%s ", promptColor, question, promptReset)
+	out := s.consoleWriter()
+	fmt.Fprintf(out, "\a\r\n%s%s%s ", promptColor, question, promptReset)
 
 	var line []byte
 	deadline := time.After(timeout)
@@ -189,28 +228,28 @@ func (s *Session) PromptLine(question string, timeout time.Duration) (string, bo
 		case b := <-ch:
 			switch {
 			case b == '\r' || b == '\n':
-				fmt.Fprint(os.Stdout, "\r\n")
+				fmt.Fprint(out, "\r\n")
 				return string(line), true
 			case b == 0x1b: // Esc cancels — but not a mouse/focus/arrow escape sequence
 				if isLoneEscape(ch) {
-					fmt.Fprint(os.Stdout, "\r\n")
+					fmt.Fprint(out, "\r\n")
 					return "", false
 				}
 				// drained an escape sequence; ignore it and keep reading the line
 			case b == 0x7f || b == 0x08: // backspace
 				if len(line) > 0 {
 					line = line[:len(line)-1]
-					fmt.Fprint(os.Stdout, "\b \b")
+					fmt.Fprint(out, "\b \b")
 				}
 			case b >= 0x20 && b < 0x7f: // printable
 				line = append(line, b)
-				fmt.Fprintf(os.Stdout, "%c", b)
+				fmt.Fprintf(out, "%c", b)
 			}
 		case <-cancel: // a second menu key aborted the prompt
-			fmt.Fprint(os.Stdout, "\r\n")
+			fmt.Fprint(out, "\r\n")
 			return "", false
 		case <-deadline:
-			fmt.Fprint(os.Stdout, "\r\n")
+			fmt.Fprint(out, "\r\n")
 			return "", false
 		}
 	}

@@ -385,6 +385,13 @@ do this automatically.
   new SSH slave session remains pending for 500 ms, this entire row is replaced
   by `2FA MAY BE REQUESTED`, the operation, and `user@host`; verify those details
   before approving. Fast and cached operations never disturb the standard bar.
+- **Input-required alert**: when AISH asks an authorization, confirmation, or
+  menu question, it emits one terminal bell and replaces the status bar with
+  `AISH INPUT REQUIRED` until the prompt is answered, cancelled, or times out.
+  The title simultaneously gains `[INPUT?]`, so the state remains visible when
+  the bar is disabled or a full-screen app owns the terminal. Terminals may map
+  BEL to a sound, visual flash, or nothing; the persistent bar/title signal does
+  not depend on bell settings.
 
 ### The prompt does double duty — and `ssh`/`su` drops it
 

@@ -34,6 +34,9 @@ func (c *Core) StatusLine() string {
 	if attempt, ok := c.Mux.VisibleSessionAttempt(); ok {
 		return sessionAttemptStatus(attempt)
 	}
+	if c.Sess.PromptActive() {
+		return inputRequiredStatus()
+	}
 	drift, ttyHost, oobHost := c.HostDrift()
 	if ttyHost == "" {
 		ttyHost = "?"
@@ -51,6 +54,10 @@ func (c *Core) StatusLine() string {
 	}
 	s += "   Ctrl-] menu" // persistent reminder of the menu hotkey for new/forgetful users
 	return s
+}
+
+func inputRequiredStatus() string {
+	return "AISH INPUT REQUIRED | answer the prompt above | ESC CANCELS"
 }
 
 func sessionAttemptStatus(attempt sshmux.SessionAttempt) string {

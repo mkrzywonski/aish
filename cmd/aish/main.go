@@ -274,6 +274,11 @@ func runMain(args []string) int {
 		bar.Tick()
 	})
 	defer mux.SetSessionAttemptChanged(nil)
+	sess.SetPromptChanged(func() {
+		titles.SetInputPending(sess.PromptActive())
+		bar.Tick()
+	})
+	defer sess.SetPromptChanged(nil)
 	sess.OnResize(func(rows, cols uint16) { bar.SetSize(rows, cols) })
 	go func() {
 		tick := time.NewTicker(500 * time.Millisecond)

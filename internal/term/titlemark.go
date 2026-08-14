@@ -21,6 +21,7 @@ type TitleMarker struct {
 	connected atomic.Bool
 	drift     atomic.Bool // host/target drift detected (⚠)
 	auth      atomic.Bool // aish is opening an SSH session that may trigger 2FA
+	input     atomic.Bool // aish is waiting for console input
 	label     string      // session name or id, shown next to the marker glyph
 
 	// stream state machine
@@ -56,6 +57,9 @@ func (t *TitleMarker) marker() string {
 	if t.auth.Load() {
 		m += "[2FA?]"
 	}
+	if t.input.Load() {
+		m += "[INPUT?]"
+	}
 	return m + " "
 }
 
@@ -79,6 +83,14 @@ func (t *TitleMarker) SetDrift(yes bool) {
 // the terminal.
 func (t *TitleMarker) SetAuthPending(yes bool) {
 	if t.auth.Swap(yes) != yes {
+		t.Refresh()
+	}
+}
+
+// SetInputPending mirrors a console prompt into the title for disabled-bar and
+// alternate-screen coverage.
+func (t *TitleMarker) SetInputPending(yes bool) {
+	if t.input.Swap(yes) != yes {
 		t.Refresh()
 	}
 }
@@ -110,7 +122,9 @@ func (t *TitleMarker) emitTitleLocked() {
 		title = []byte("aish")
 	}
 	seq := append([]byte("\x1b]0;"+t.marker()), title...)
-	seq = append(seq, 0x07)
+	// Use ST rather than BEL so title-only refreshes cannot be mistaken for an
+	// audible alert now that console prompts deliberately emit one standalone BEL.
+	seq = append(seq, 0x1b, '\\')
 	t.out.Write(seq)
 	t.pending = false
 }

@@ -47,12 +47,15 @@ type Session struct {
 	// screen; promptMu serializes prompts; capturing/capCh divert stdin from
 	// the shell to an active prompt; capCancel lets the input pump cancel the
 	// active prompt out of band (a second menu key).
-	outMu     sync.Mutex
-	promptMu  sync.Mutex
-	capturing atomic.Bool
-	capMu     sync.Mutex
-	capCh     chan byte
-	capCancel chan struct{}
+	outMu      sync.Mutex
+	promptMu   sync.Mutex
+	capturing  atomic.Bool
+	promptOn   atomic.Bool
+	promptCbMu sync.Mutex
+	promptCb   func()
+	capMu      sync.Mutex
+	capCh      chan byte
+	capCancel  chan struct{}
 
 	// menuKey (default Ctrl-]) opened the aish menu when typed at the shell;
 	// onMenu runs the menu. Swallowed from the shell input when triggered.
@@ -95,6 +98,18 @@ func New(id string, argv []string, extraEnv []string) *Session {
 // SetMenu registers the handler invoked when the user presses the aish menu
 // key (Ctrl-]) at the terminal. It runs on its own goroutine.
 func (s *Session) SetMenu(fn func()) { s.onMenu = fn }
+
+// SetPromptChanged installs the presentation callback for console prompt
+// visibility. The callback runs outside Session locks when a displayed prompt
+// starts or ends.
+func (s *Session) SetPromptChanged(fn func()) {
+	s.promptCbMu.Lock()
+	s.promptCb = fn
+	s.promptCbMu.Unlock()
+}
+
+// PromptActive reports whether AISH is currently waiting for console input.
+func (s *Session) PromptActive() bool { return s.promptOn.Load() }
 
 // AddTap registers an additional writer that receives every byte the PTY
 // emits. Taps must not block; slow consumers should buffer internally.

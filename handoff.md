@@ -29,7 +29,7 @@ At the merge boundary:
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
 | **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
-| **C - SFTP as probe and transport** | checkpoint 1 implemented on `c-sftp-axis`; automated checks pass, live Duo acceptance pending |
+| **C - SFTP as probe and transport** | checkpoint 1 merged in `4d72bc5`; automated and POSIX/Windows/Duo live acceptance complete |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
 The linearization and phase-1 fact model landed in these commits:
@@ -47,24 +47,64 @@ a81c19c  framing, read_output: consume the linearizer
 The identity foundation landed in `9620df6`; passive screen identity landed in
 `5499871`; the MFA provenance warning landed in `345be94`; and the unknown-target
 closeout landed in `99a0ab9`. Workstream B documentation closed in `8060f16`,
-and the shell-first C policy landed in `a36c139`. All are merged to `main`.
+the shell-first C policy landed in `a36c139`, and SFTP checkpoint 1 landed in
+`4d72bc5`. All are merged to `main`.
 
 ---
 
 ## Active work
 
-Branch: `c-sftp-axis`, based on `main` at `a36c139` (`docs: select shell-first
-SFTP policy`). Current changes are ready to commit after live acceptance.
+Branch: `prompt-attention`, based on `main` at `4d72bc5` (`sshmux: add explicit
+SFTP capability axis`). The SFTP checkpoint branch was fast-forwarded and pushed
+to `main` before this branch was created.
 
-Current objective: establish SFTP as a durable, independent transport axis and
-prove its authentication/user-feedback behavior before routing any file tool.
+Current objective: make every AISH console prompt difficult to miss without
+weakening prompt capture, timeout, or terminal byte-transparency guarantees.
 
 ### Status
 
-Checkpoint 1 implementation, automated verification, installation, and live
-acceptance are complete. Workstream B remains complete.
+Prompt-attention implementation, full checks, build/install, and live acceptance
+are complete. Workstream C checkpoint 1 is merged.
 
-### Current C checkpoint
+### Current prompt-attention checkpoint
+
+- `Prompt` and `PromptLine` emit exactly one BEL when displayed. Queued prompts
+  serialize first, so a prompt rings only when it actually becomes actionable.
+- `Session.PromptActive` spans display through answer, cancellation, or timeout.
+  Start/end callbacks run outside `outMu`; this is required because title/status
+  repainting writes through the same output gate.
+- The normal status row is replaced by `AISH INPUT REQUIRED`; the title gains
+  `[INPUT?]` for disabled-bar and alternate-screen coverage. A simultaneous 2FA
+  attempt retains safety-critical bar priority while the title can show both.
+- Console output now uses the session's user-visible writer rather than a hard
+  coded `os.Stdout`, preserving title processing and making bell/lifecycle tests
+  deterministic. No prompt byte enters the PTY, Ring, or screen model.
+- Focused race coverage verifies one bell, active/inactive transitions, answer
+  and timeout cleanup, modal wording, title restoration, and combined
+  `[2FA?][INPUT?]` state.
+- Generated title refreshes now use the OSC string terminator (`ESC \\`) rather
+  than BEL, and a regression test guarantees title-only changes cannot become
+  audible alerts.
+
+### Prompt-attention live acceptance
+
+Installed/session build: `v0.2.2-27-g4d72bc5-dirty`, final tested SHA-256
+`cc7cf2651006cdb70f1e126d4a75f9dc00b35e9f39250a61bdd0af9d33287c45`.
+
+- Fresh debug-client authorization produced the `AISH INPUT REQUIRED` bar
+  takeover and `[INPUT?]` title marker, then restored both immediately after
+  approval.
+- The first run was silent because the active Windows Terminal Ubuntu profile
+  inherited `bellStyle:none`. After the profile was changed to `audible`, the
+  prompt produced its audible cue.
+- The configured `bellSound` is `C:\Windows\Media\Windows Notify.wav`. It sounds
+  like two bells separated by roughly one to two seconds, but an isolated
+  `printf '\a'` reproduced the same pair from one BEL. This confirms AISH emits
+  one event, not two prompts or two BEL bytes.
+- The persistent bar/title signal remains the fallback when terminal bell sound
+  is disabled, remapped to a visual cue, or unavailable.
+
+### Completed C checkpoint
 
 - Added `SftpAxis` beside `ShellAxis`, carrying state, reason, realpath, path
   style, advertised extensions, attempts, and probe time. SFTP platform evidence
@@ -284,22 +324,19 @@ The `test` session connected passwordlessly over real ControlMaster paths to
 
 ### Exact next step
 
-Commit and push the completed `c-sftp-axis` checkpoint. Before beginning SFTP
-file routing, implement the separate prompt-attention UX checkpoint: ring the
-terminal bell when AISH presents a user prompt and keep an `INPUT REQUIRED`
-status/title signal active until the prompt is answered or times out. Then start
-the C path-contract/read-only routing steps below on a new branch.
+Commit, push, and merge `prompt-attention`. Then create the next C branch for the
+path-contract and retained-client API steps in `windows-targets-plan.md`; route
+read-only operations before attempting write semantics or availability merging.
 
 ### Blockers or uncertainties
 
-No implementation blocker. Restarting the AI client will refresh the proxy and
-tool schema from the installed checkpoint build.
+No implementation blocker.
 
 ---
 
 ## Next work: workstream C
 
-After checkpoint 1 is committed, follow the revised finish plan in
+After the prompt-attention checkpoint is merged, follow the revised finish plan in
 `windows-targets-plan.md`: define and test the Windows
 path contract, expose a narrow retained-client API, route read-only tools first,
 prove existing atomic-write/symlink/version guarantees over SFTP, then route
@@ -388,12 +425,9 @@ These were measured directly and corrected earlier assumptions.
    channel process start time.
 2. **PSK reconnect notices can spam the terminal.** `connauth.go` notifies on
    every recognized reconnect. Notify once per client key per session instead.
-3. **Console prompts need an attention signal.** Authorization prompts from the
-   one-shot debug clients repeatedly sat unnoticed during C live testing. Add a
-   terminal bell when any AISH console prompt appears and a modal
-   `INPUT REQUIRED` status/title state that persists until answer or timeout.
-   Keep prompt serialization, echo-off handling, and byte transparency intact;
-   test disabled status bars and alternate screens too.
+3. **Console prompt attention is complete on `prompt-attention`.** Authorization
+   prompts now emit one BEL and retain status/title state until resolution. The
+   terminal's own bell configuration determines whether BEL is audible.
 4. **README platform wording remains conservative.** Windows targets are
    detected and refused quickly for POSIX OOB operations, but are not useful for
    native file operations until workstream C lands.
