@@ -57,24 +57,26 @@ type pooledConn struct {
 const serverInstructions = "Aish gives you access to human-owned shared terminal sessions and to the current host " +
 	"inside each session, including a remote host reached by SSH. Your native shell and filesystem tools " +
 	"remain local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
-	"SSH'd into there, use aish tools instead. Start with list_sessions, select the session, then call " +
-	"session_status; recheck after SSH transitions. New SSH hosts have `unknown` OOB tools; call probe_host once, " +
+	"SSH'd into there, use aish tools instead. Start with list_sessions, select the session, then " +
+	"call session_status; recheck after SSH transitions. New SSH hosts have `unknown` OOB tools; call probe_host once, " +
 	"then always plan against oob_tools. `screen` remote_dialect_source is advisory, never implies POSIX, and " +
 	"never disables a tool. " +
 	"If probe evidence makes oob_tools " +
-	"unavailable, do not re-probe; drive the host with run_command instead. Deep identity probing is diagnostic, " +
-	"explicit, and may trigger MFA; never use it instead of oob_tools. Explicit SFTP may trigger MFA; a sticky shell " +
-	"failure permits merged SFTP-backed oob_tools states. Every " +
+	"unavailable, do not re-probe; use run_command instead. Deep identity probing is diagnostic, " +
+	"explicit, and may trigger MFA; never use instead of oob_tools. Explicit SFTP may trigger MFA; a sticky shell " +
+	"failure permits merged SFTP-backed oob_tools. Every " +
 	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +
 	"exec, file_*, and directory_list for native-like work on the session's current host when OOB is " +
-	"authorized. Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +
-	"when the human switches user in the shared terminal via su or sudo -i; before writing files whose ownership " +
-	"matters or running anything needing different privileges, check oob_user, and if the human's shell has " +
-	"switched users say so and prefer run_command (it runs in the shared shell's current user). Anything needing sudo, su or " +
-	"other privilege escalation must go through run_command, never exec: escalating out of band is refused, because a " +
-	"privileged command has to be one the human saw, and they type their own password. Never send passwords or other " +
+	"authorized. Out-of-band work is invisible; oob_log records it — read it when another client shares " +
+	"the session or the user asks what happened off-screen. " +
+	"Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +
+	"when the human switches user via su or sudo -i; check oob_user before ownership- or privilege-sensitive " +
+	"work, and if their shell switched users say so and prefer run_command (it runs as the shared shell's " +
+	"current user). sudo, su and other escalation must go through run_command, never exec: escalating out of " +
+	"band is refused, because a privileged command has to be one the human saw, and they type their own " +
+	"password. Never send passwords or other " +
 	"secrets; if echo_off is true, wait for the human. Name the target session and host in chat before the " +
-	"first substantial or destructive operation. The user approves each session on its own terminal."
+	"first substantial or destructive op. The user approves each session on its own terminal."
 
 // Serve runs the aggregating proxy over stdio until the client disconnects.
 // If psk is non-nil, the proxy derives a deterministic identity from it so

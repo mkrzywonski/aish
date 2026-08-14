@@ -308,12 +308,13 @@ func runMain(args []string) int {
 		if bar.Enabled() {
 			barState = "on"
 		}
-		accept := "robk"
+		accept := "robkl"
 		lines := []string{
 			"aish menu:",
 			"  [r] rename session",
 			fmt.Sprintf("  [o] out-of-band ops (currently %s)", oobState),
 			fmt.Sprintf("  [b] status bar (currently %s)", barState),
+			"  [l] recent out-of-band activity",
 			"  [k] revoke client access",
 		}
 		// Offer the aish prompt (badge + host tracking) only on a remote whose
@@ -360,6 +361,16 @@ func runMain(args []string) int {
 			} else {
 				sess.Notify("status bar DISABLED — the bottom row is returned to the shell")
 			}
+		case 'l':
+			// Rendered through the console, never the PTY: this is aish
+			// talking to the human, not something the shell said.
+			activity := core.RecentActivity(15)
+			if len(activity) == 0 {
+				sess.Notify("no out-of-band activity recorded in this session")
+				return
+			}
+			sess.Notify("recent out-of-band activity (oldest first):\r\n  %s",
+				strings.Join(activity, "\r\n  "))
 		case 'k':
 			n := core.Revoke()
 			sess.Notify("revoked client access — %d connection(s) dropped; all clients cleared and must be re-approved", n)

@@ -45,6 +45,9 @@ type authChallenge struct {
 func (c *Core) connState(ss *mcp.ServerSession) *connAuth {
 	c.authMu.Lock()
 	defer c.authMu.Unlock()
+	if c.conns == nil {
+		c.conns = map[*mcp.ServerSession]*connAuth{}
+	}
 	st := c.conns[ss]
 	if st == nil {
 		st = &connAuth{}

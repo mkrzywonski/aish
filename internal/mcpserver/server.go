@@ -51,6 +51,13 @@ type Core struct {
 	// this avoids a stat on the hot path once granted in-process.
 	oobAlways atomic.Bool
 
+	// Activity is the bounded, memory-only record of what MCP clients asked
+	// this session to do — the trail behind out-of-band work the human could
+	// not see happen. Written by oobLogMiddleware, read by the oob_log tool
+	// and the Ctrl-] menu. Deliberately NOT cleared by Revoke: withdrawing a
+	// client's access should not erase the record of what it already did.
+	Activity activityLog
+
 	// authMu guards conns: per-connection authorization state, so a new MCP
 	// client must obtain an interactive grant or prove possession of an
 	// already-approved client key before its tool calls are honored.
@@ -167,9 +174,14 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	registerTools(server, core)
 	registerRemoteTools(server, core)
 	registerSearchTools(server, core)
+	registerActivityTools(server, core)
 	// Outermost first: gate on connection authorization before anything
-	// else (including cross-session forwarding) runs.
-	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core))
+	// else (including cross-session forwarding) runs. The activity log is
+	// innermost — inside authorization so every entry has a resolved client
+	// identity, inside forwarding so a cross-session call is recorded once at
+	// the session that executes it, and last so it sees the final structured
+	// result the route's `via` is read from.
+	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core), oobLogMiddleware(core))
 
 	go func() {
 		<-ctx.Done()
