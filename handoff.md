@@ -49,9 +49,8 @@ The identity foundation landed in `9620df6`; passive screen identity landed in
 
 ## Active work
 
-Branch: `b-deep-live-validation` (documentation-only validation checkpoint)
-
-Implementation branch point: `5499871` (`main`)
+Branch: none; the latest PowerShell validation checkpoint is merged to `main`
+in `a7fdc53`.
 
 Completed objective: add an explicit, bounded, cached active identity probe
 behind `probe_host{deep:true}` without coupling identity to shell capability or
