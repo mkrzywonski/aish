@@ -1,25 +1,39 @@
-# Handoff — aish `linearize-ring`
+# Handoff - Windows target work after `linearize-ring`
 
-Context for picking this work up in a fresh session, particularly one running
-**natively in WSL** rather than on the Windows side.
-
-Companion document: `windows-targets-plan.md` holds the design for all four
-workstreams. This file holds *current state*, decisions already made, and the
-operational traps that cost real time to find.
+Current context for continuing the Windows-target work. The companion document
+`windows-targets-plan.md` contains the original design for workstreams A-D; this
+file records what has shipped, what remains, and the implementation constraints
+established by live testing and the review of B phases 2-3.
 
 ---
 
-## Where the work stands
+## Current state
 
-Branch `linearize-ring`, **10 commits ahead of `main`**, unpushed. Tag `v0.4.0`
-sits 4 commits behind the tip.
+The completed `linearize-ring` work is merged into `main`. The repository is now
+used natively from WSL at `/home/mike/aish`, rather than through DrvFs.
 
-```
-69ed543  build: install to /usr/local/bin only
-e8b570a  exec: refuse privilege escalation on invisible routes
+At the merge boundary:
+
+- the worktree and pushed `linearize-ring` branch were clean
+- `main` was a direct ancestor, so the merge was fast-forward only
+- `go test ./...` and `go vet ./...` passed
+- the release source reports `0.4.0`, but no `v0.4.0` Git tag exists in this
+  clone; `make version` therefore derives from `v0.2.2`
+
+| Workstream | State |
+|---|---|
+| **A - linearize the ring** | done; live-validated on Linux and a ConPTY host |
+| **B phase 1 - durable host facts and stderr classification** | done; live-validated on Windows cmd.exe and a Duo RHEL host |
+| **B phase 2 - passive screen fingerprinting** | not started; design reviewed |
+| **B phase 3 - explicit active identity probe** | not started; design reviewed |
+| **C - SFTP as probe and transport** | not started; premise empirically confirmed |
+| **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
+
+The linearization and phase-1 fact model landed in these commits:
+
+```text
 4bdd338  sshmux: re-probe a live channel whose facts were reset
 b4b82c5  term: measure the linearization blast radius against real captures
-44e6b89  build: stamp dev builds from git describe
 06875b5  docs: record the durable-facts model and the linearization invariant
 157323e  mcpserver: report what a host is instead of inviting a re-probe
 c4656ff  sshmux: record durable host facts and identify non-POSIX shells
@@ -27,170 +41,147 @@ a81c19c  framing, read_output: consume the linearizer; bump to 0.4.0
 08ea05a  term: linearize absolute cursor movement into line breaks
 ```
 
-| Workstream | State |
-|---|---|
-| **A** — linearize the ring | done, live-validated on Linux and on a ConPTY host |
-| **B phase 1** — durable host facts + dialect detection | done, live-validated on Windows cmd.exe and a Duo RHEL host |
-| **B phases 2–3** | not started (passive screen fingerprint; active polyglot) |
-| **C** — SFTP as probe and transport | not started; premise empirically confirmed |
-| **D** — out-of-band activity log | not started; designed in the plan |
+---
 
-Untracked and deliberately so: `windows-targets-plan.md`, `handoff.md`. Committing
-or gitignoring them is an open decision.
+## Next work: finish B
+
+Start the next implementation branch from the updated `main`. A suitable name
+is `windows-target-identity`.
+
+The critical design correction is to separate **target identity** from
+**transport capability** before adding either detector:
+
+- `ShellAxis` answers whether the persistent `sh -s` transport works.
+- Authoritative identity facts answer dialect and platform, with their source.
+- A deep probe may identify cmd.exe or PowerShell but must not mark `ShellAxis`
+  up or down.
+- Screen evidence is recomputed from the current snapshot, never persisted in
+  `Mux`, and never changes `oob_tools`, host tracking, or retry policy.
+- Model-facing status must distinguish advisory `screen` evidence from
+  authoritative `shell_probe` or `deep_probe` evidence.
+
+Recommended order:
+
+1. Add characterization tests around the completed phase-1 fact behavior.
+2. Move dialect/platform identity out of `ShellAxis` into independent facts.
+3. Add the pure passive-screen classifier and status-only integration.
+4. Add a bounded, nonce-framed active identity probe behind
+   `probe_host{deep:true}`.
+5. Cache and single-flight deep probes per ControlMaster socket so concurrent
+   clients cannot produce duplicate MFA pushes.
+6. Define scoped reset semantics: `force` for the ordinary shell probe and
+   `deep+force` for the deep-probe cache.
+7. Update proxy instructions and docs so models plan against `oob_tools`; a
+   screen-derived dialect is only a hint.
+8. Unit-test evidence precedence and live-validate POSIX, cmd.exe, Windows
+   PowerShell, PowerShell 7, and one Duo-protected host.
+
+The full critical review and implementation plan should be folded into
+`windows-targets-plan.md` as B is implemented; its original phase-2/3 outline is
+not detailed enough about source precedence, deep/force behavior, or MFA cost.
 
 ---
 
-## Switching this session to WSL
-
-### 1. Re-register the MCP server
-
-The current registration lives in the **Windows** `C:\Users\mk31\.claude.json`
-and crosses the boundary:
-
-```
-command: wsl.exe
-args   : -d Ubuntu -- aish mcp-proxy
-env    : AISH_PSK, WSLENV
-```
-
-Running Claude Code *inside* WSL removes the boundary, so it becomes:
-
-```sh
-claude mcp add aish --scope user --env AISH_PSK=<hex> -- aish mcp-proxy
-```
-
-Two notes:
-
-- **`WSLENV` is no longer needed.** It existed only to carry `AISH_PSK` across
-  the Windows→WSL boundary. Inside WSL the env var is passed directly.
-- **Reuse the same PSK** if you want existing session grants to keep working —
-  grants are keyed by the PSK-derived public key. It is in the Windows
-  `.claude.json` under `mcpServers.aish.env.AISH_PSK`. A fresh
-  `aish generate-psk` also works; the only cost is one approval prompt per
-  session, once.
-
-### 2. Decide where the repo lives
-
-It is currently at `/mnt/c/Users/mk31/mcp/aish` (DrvFs). That works, and the Go
-toolchain builds fine there, but **DrvFs caused three separate stale-read
-incidents** in one afternoon — see the traps below.
-
-Moving it into the Linux filesystem (`~/src/aish`) would make Go builds
-substantially faster and eliminate that entire class of confusion, since git and
-go would then be reading and writing the same filesystem. It is a judgement call;
-nothing in the code depends on the location.
-
-### 3. What gets better automatically
-
-Much of the friction in the prior session was the Windows→WSL boundary rather
-than the work itself:
-
-- PowerShell repeatedly mangled `$VAR` and quoting inside `bash -c '...'`,
-  silently passing empty strings. The workaround was writing shell scripts to
-  files and executing those. In WSL, just write bash.
-- `git describe` reading stale refs after a Windows-side `git tag` / `git commit`.
-- Two `aish` binaries drifting apart on different PATH precedences.
-
----
-
-## Decisions already made (do not re-litigate)
+## Decisions already made
 
 | Decision | Outcome |
 |---|---|
-| Order of work | A first (silent corruption outranks everything), then B; C depends on B's fact model; D is independent |
+| Order of work | A first, then B; C depends on B's fact model; D is independent |
 | Linearize globally or per call site | **Global**, bounded by property tests rather than a flag |
-| May the passive screen hint suppress availability? | **No** — probe evidence only; advisory sources annotate, never change state |
-| SFTP | **Adopted** as workstream C; open order is a policy switch pending a Duo test |
-| Install location | **`/usr/local/bin` only.** Two copies on different PATH precedences let a session and its proxy silently run different builds |
-| Version stamping | `git describe` for dev builds; the `var version` constant is bumped per *release*, not per build |
+| May a passive screen hint suppress availability? | **No.** Advisory evidence annotates status only |
+| May deep identity imply shell capability? | **No.** Identity and `sh -s` capability are independent facts |
+| SFTP | **Adopted** as workstream C; open order remains a policy switch pending a Duo test |
+| Install location | **`/usr/local/bin` only.** Multiple installed copies caused version drift |
+| Version stamping | `git describe` for development builds; the source constant changes per release |
 
 ---
 
-## Findings that were expensive to establish
+## Findings that constrain the design
 
-Preserved because each one corrected a confident wrong assumption.
+These were measured directly and corrected earlier assumptions.
 
 - **ConPTY ends lines with absolute cursor moves, not newlines.** Deleting those
-  sequences fused unrelated lines *and* made the prompt-trim heuristic eat real
-  output. The failure was silent truncation, not visible garbling.
-- **Exit status is useless for identifying a Windows shell.** Measured over the
-  wire: cmd.exe returns **1**, not the widely repeated 9009. A POSIX host missing
-  `/bin/sh` returns 127 with "not found", which *is* a usable positive signal.
-- **All the dialect evidence is on stderr; stdout comes back empty.** The channel
-  was routing stderr to the null device, destroying 100% of it.
-- **The SSH server banner is unavailable** on the ControlMaster slave path — a
-  mux slave never exchanges protocol versions. Do not plan around it.
-- **A polyglot probe cannot run on the channel's stdin**: cmd.exe fails at the
-  *exec* of `sh` and exits before reading a byte.
-- **SFTP works over the existing master with no new auth**, and `realpath(".")`
-  returns `/C:/Users/...` on Windows OpenSSH — an unambiguous platform signature.
-  This is workstream C's foundation and it is measured, not assumed.
-- **On a per-session-MFA (Duo) host, every channel open is exactly one push.**
-  Confirmed by process census: one login push, one channel push, then unlimited
-  operations for free. `session_status` is deliberately channel-free and safe.
+  sequences fused unrelated lines and made prompt trimming eat real output. The
+  linearizer now reconstructs that line structure.
+- **Exit status does not identify a Windows shell.** cmd.exe returned `1`, not
+  the commonly cited `9009`. A POSIX host missing `/bin/sh` returned `127` with
+  `not found`, which is a usable positive POSIX signal.
+- **The useful evidence from a failed `sh -s` invocation is on stderr.** stdout
+  was empty in the observed cmd.exe and PowerShell cases.
+- **The SSH server banner is unavailable on the ControlMaster slave path.** A
+  mux slave does not exchange protocol versions.
+- **An active identity probe cannot run on the persistent channel's stdin.**
+  cmd.exe fails while attempting to execute `sh -s` and exits before reading
+  stdin. A deep probe requires a separate remote command and may cost an MFA
+  push.
+- **The proposed literal polyglot needs a real output protocol.** Windows
+  PowerShell 5.1 emits `echo AISHDIALECT %OS% %COMSPEC% $SHELL` as multiple
+  lines and supplies no explicit PowerShell marker. Use a random marker and
+  labeled expansion fields, then classify expansion behavior from bounded
+  stdout/stderr.
+- **SFTP works over the existing master without new authentication.** On
+  Windows OpenSSH, `realpath(".")` returned `/C:/Users/...`, an unambiguous
+  platform signature for workstream C.
+- **On the tested per-session-MFA Duo host, every channel open is one push.**
+  One persistent channel then supports unlimited foreground operations until it
+  is dropped. `session_status` remains channel-free.
 
 ---
 
 ## Operational traps
 
-- **`git log` pages on a PTY.** Capturing terminal output under `script(1)`
-  hangs forever because `less` waits for input. Export `GIT_PAGER=cat` and wrap
-  every capture in `timeout`.
-- **`pkill -f <pattern>` matches its own wrapper command line** and kills the
-  shell running it. CLAUDE.md warns about this; it still happened. Use exact
-  pids.
-- **DrvFs stale reads.** A file written from the Windows side is not always
-  immediately visible to WSL. It produced a wrong version stamp twice and a stale
-  `git describe` once. Verify versions in a command *separate* from the build.
-- **Duo push accounting.** `session_status` and `version_info` never open a
-  channel. `probe_host` opens one on first use (one push) and is free thereafter.
-  Background `exec` takes a **dedicated** channel — one push each, by design.
+- **`git log` pages on a PTY.** Set `GIT_PAGER=cat` and wrap captures in
+  `timeout`; otherwise `less` can wait indefinitely.
+- **`pkill -f <pattern>` can match its own wrapper command line.** Use exact
+  process IDs.
+- **DrvFs produced stale reads.** The active repository is now on the Linux
+  filesystem, but keep this in mind when building from any `/mnt/c` checkout.
+- **PowerShell mangles nested Bash quoting easily.** Run build and Git commands
+  directly in WSL.
+- **Duo push accounting matters.** `session_status` and `version_info` do not
+  open a channel. The first ordinary probe can open one. Background `exec` uses
+  a dedicated channel by design. A future deep probe also opens a separate
+  session and must never be implicit.
 
 ---
 
 ## Open threads
 
-1. **Unexplained repeated Duo pushes** on the RHEL host, seen while working with
-   Amazon Quick. Two pushes (login + channel) are explained and expected;
-   *repeated* pushes are not. Leading hypothesis: an operation that outruns its
-   `timeout_ms` causes `ch.run` to `kill()` and drop the channel, so the next
-   operation reopens and costs another push. **Untested.** The test is `exec`
-   with `sleep 8` under `timeout_ms: 2000`, then a trivial `file_stat`.
-   Diagnostic without spending pushes: compare the channel process start time
-   (`ps -eo pid,lstart`) against the last census — if it moved, that timestamp
-   *is* the push.
-2. **PSK reconnect notice spams the terminal.** `connauth.go:156` calls
-   `Sess.Notify` on every PSK-recognized reconnect. A host that restarts the
-   proxy per tool call (Amazon Quick appears to) gets a line in the shared
-   terminal on every call, defeating the point of a silent persisted grant.
-   Notify once per client key per session instead.
-3. **`--oob` suppresses the only MFA warning.** Without it, `route()` prompts
-   before the first invisible operation — a natural place to warn that a push may
-   follow. With `--oob` the push arrives unannounced. A `Notify` on first channel
-   open per host would fix it.
-4. **Tag placement.** `v0.4.0` points at a commit only reachable from this
-   branch. A squash or rebase merge would orphan it; a fast-forward or merge
-   commit keeps it. Consider re-tagging after merging.
-5. **README platform table** still says Windows targets are "not supported
-   (refused fast)". Understated now, and C would change the story again.
+1. **Unexplained repeated Duo pushes.** Two pushes, login plus the persistent
+   channel, are understood. The leading untested hypothesis for later pushes is
+   that an operation exceeding `timeout_ms` kills and drops the channel, so the
+   next operation opens a replacement. Test with `sleep 8` under
+   `timeout_ms: 2000`, followed by a trivial `file_stat`, while comparing the
+   channel process start time.
+2. **PSK reconnect notices can spam the terminal.** `connauth.go` notifies on
+   every recognized reconnect. Notify once per client key per session instead.
+3. **`--oob` suppresses the natural MFA warning point.** Without it, `route()`
+   prompts before the first invisible operation. With it, an MFA push can arrive
+   unannounced. Consider one notification before the first channel open per
+   host.
+4. **The `v0.4.0` release tag is absent.** The source and package files report
+   `0.4.0`, but `make version` currently reports a development version based on
+   `v0.2.2`. Decide whether to tag the merged `main` before the next release.
+5. **README platform wording remains conservative.** Windows targets are
+   detected and refused quickly for POSIX OOB operations, but are not useful for
+   native file operations until workstream C lands.
 
 ---
 
-## Verifying the environment
+## Verification and deployment
 
 ```sh
-cd /mnt/c/Users/mk31/mcp/aish     # or wherever the repo ends up
-make check                        # go vet + full suite
-make version                      # what a build would stamp
-make build && sudo make install   # deploy to /usr/local/bin
+cd /home/mike/aish
+make check
+make version
+make build && sudo make install
 
-aish sessions                     # live sessions
-aish version                      # must match what the proxy reports
+aish sessions
+aish version
 ```
 
-`version_info` through MCP shows proxy and session versions together — if they
-disagree, one of them is a stale binary and that has caused confusion before.
+`version_info` through MCP reports proxy and session versions together. If they
+disagree, stale installed binaries are the likely cause.
 
-A live aish session from the prior work may still exist (`alloy-server`, an ssh
-into a Duo-protected RHEL host). It may have been closed; `aish sessions` is
+Do not assume any previous live session still exists. `aish sessions` is
 authoritative.
