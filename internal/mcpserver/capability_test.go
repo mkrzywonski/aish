@@ -128,10 +128,9 @@ func TestOobAvailabilityUnknownUntilProbed(t *testing.T) {
 	}
 }
 
-// TestOobAvailabilityNonPosixHost: once a probe has conclusively identified a
-// non-POSIX login shell, every tool reads "unavailable" — and crucially the
-// detail must STOP inviting probe_host, which is what made models re-probe a
-// host that can never succeed.
+// TestOobAvailabilityNonPosixHost: a conclusive shell failure leaves only the
+// implemented SFTP file fallbacks unknown. Shell-only tools are unavailable,
+// and no state invites the old shell re-probe loop.
 func TestOobAvailabilityNonPosixHost(t *testing.T) {
 	c := localOOBCore(t)
 	ci := &sshmux.ConnInfo{Host: "winbox", User: "mk31", Port: "22", Sock: "/run/aish/cm-win"}
@@ -140,7 +139,16 @@ func TestOobAvailabilityNonPosixHost(t *testing.T) {
 		"'sh' is not recognized as an internal or external command,", true)
 
 	av := c.oobToolAvailability(route{via: "controlmaster", ci: ci, host: "winbox"})
-	for _, tool := range oobToolNames {
+	for _, tool := range append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...) {
+		a := av[tool]
+		if a.State != toolUnknown {
+			t.Errorf("%s state = %q, want unknown before SFTP opens", tool, a.State)
+		}
+		if !strings.Contains(a.Detail, "SFTP") || !strings.Contains(a.Detail, "MFA") {
+			t.Errorf("%s should explain the lazy SFTP cost, got %q", tool, a.Detail)
+		}
+	}
+	for _, tool := range []string{"exec", "file_grep", "file_search"} {
 		a := av[tool]
 		if a.State != toolUnavailable {
 			t.Errorf("%s state = %q, want unavailable", tool, a.State)
@@ -148,16 +156,54 @@ func TestOobAvailabilityNonPosixHost(t *testing.T) {
 		if !strings.Contains(a.Missing, "cmd.exe") {
 			t.Errorf("%s should name the dialect, got Missing=%q", tool, a.Missing)
 		}
-		if a.Install != "" {
-			t.Errorf("%s should carry no install hint — no package fixes a login shell", tool)
-		}
-		if strings.Contains(a.Detail, "probe_host to initialize") {
-			t.Errorf("%s still invites the re-probe loop: %q", tool, a.Detail)
-		}
 		if !strings.Contains(a.Detail, "run_command") {
 			t.Errorf("%s should point at run_command, got %q", tool, a.Detail)
 		}
 	}
+}
+
+func TestSFTPAvailabilityMerge(t *testing.T) {
+	base := sshmux.HostFacts{Shell: sshmux.ShellAxis{State: sshmux.AxisDown, Sticky: true}}
+	t.Run("up with atomic rename", func(t *testing.T) {
+		facts := base
+		facts.SFTP = sshmux.SftpAxis{State: sshmux.AxisUp, Extensions: []string{"posix-rename@openssh.com"}}
+		av := availability(facts)
+		for _, tool := range append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...) {
+			if !av[tool].Available() {
+				t.Errorf("%s = %+v, want available", tool, av[tool])
+			}
+		}
+		for _, tool := range []string{"exec", "file_grep", "file_search"} {
+			if av[tool].State != toolUnavailable {
+				t.Errorf("%s = %+v, want unavailable", tool, av[tool])
+			}
+		}
+	})
+	t.Run("up without atomic rename", func(t *testing.T) {
+		facts := base
+		facts.SFTP = sshmux.SftpAxis{State: sshmux.AxisUp}
+		av := availability(facts)
+		for _, tool := range sftpReadToolNames {
+			if !av[tool].Available() {
+				t.Errorf("%s = %+v, want available", tool, av[tool])
+			}
+		}
+		for _, tool := range sftpWriteToolNames {
+			if av[tool].State != toolUnavailable || !strings.Contains(av[tool].Missing, "posix-rename") {
+				t.Errorf("%s = %+v, want atomic-rename unavailable", tool, av[tool])
+			}
+		}
+	})
+	t.Run("cached down", func(t *testing.T) {
+		facts := base
+		facts.SFTP = sshmux.SftpAxis{State: sshmux.AxisDown, Reason: "subsystem disabled"}
+		av := availability(facts)
+		for _, tool := range append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...) {
+			if av[tool].State != toolUnavailable || !strings.Contains(av[tool].Detail, "force=true") {
+				t.Errorf("%s = %+v, want cached-down guidance", tool, av[tool])
+			}
+		}
+	})
 }
 
 func TestBlockedProbeResultReportsIdentitySources(t *testing.T) {

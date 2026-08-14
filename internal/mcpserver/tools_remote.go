@@ -43,8 +43,10 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Name:        "file_write",
 		Annotations: mutatingTool("Write file on session host", true, false),
 		Description: "Write (or append to) a file on the host the shared session is currently on. " +
-			"Content is UTF-8, or base64 with encoding=base64. Out-of-band (invisible) when authorized; " +
-			"otherwise the write types base64 through the shared terminal (visible to the user) " +
+			"Content is UTF-8, or base64 with encoding=base64. Out-of-band (invisible) when authorized; remote writes " +
+			"prefer the persistent shell and may use retained SFTP after a conclusive shell failure. Atomic SFTP " +
+			"replacement requires posix-rename support, and a requested mode fails if the server ignores it. " +
+			"Otherwise the write types base64 through the shared terminal (visible to the user) " +
 			"and is limited to 48KB. The file is owned by session_status.oob_user (the SSH login user), not " +
 			"whatever user the human's shell is currently on — relevant after su/sudo -i.",
 	}, c.fileWrite)
@@ -54,7 +56,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Annotations: mutatingTool("Edit file on session host", true, false),
 		Description: "Edit a UTF-8 text file on the session's current host by replacing exact text. Fails when old_text " +
 			"is absent or occurs more than once unless replace_all=true. Requires an authorized local or remote OOB route " +
-			"and never types an editing wrapper into the shared terminal.",
+			"and never types an editing wrapper into the shared terminal. Remote edits may use retained SFTP after a " +
+			"conclusive shell failure when atomic replacement is supported.",
 	}, c.fileEdit)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -64,7 +67,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"applied inside aish (no remote patch tool needed) and written back atomically. Use file_edit for a single " +
 			"exact-text replacement; use file_patch for multi-hunk changes. Optionally pass if_match (a version from " +
 			"file_read/file_stat) to apply only if the file is unchanged; otherwise staleness is checked automatically when " +
-			"the host has a sha256 tool. Requires an authorized local or remote OOB route.",
+			"the route can verify SHA-256. Requires an authorized local or remote OOB route; remote patches may use retained " +
+			"SFTP after a conclusive shell failure when atomic replacement is supported.",
 	}, c.filePatch)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -86,8 +90,9 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_upload",
 		Annotations: mutatingTool("Upload file to session host", true, false),
-		Description: "Copy a local file to the remote host of the current SSH session over its authorized OOB channel. " +
-			"The persistent channel may require approval when first opened on MFA-protected hosts. Errors when the session " +
+		Description: "Copy a local file to the remote host of the current SSH session over its authorized OOB route. " +
+			"It prefers the persistent shell and may use retained SFTP after a conclusive shell failure when atomic " +
+			"replacement is supported. Opening either route may require approval on MFA-protected hosts. Errors when the session " +
 			"is local or no multiplexed channel is available — " +
 			"use file_write then.",
 	}, c.fileUpload)
@@ -140,7 +145,7 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"identified, unknown, and failed outcomes. Repeat deep calls read cache; combine deep=true with force=true only " +
 			"to explicitly pay for another active attempt. Pass sftp=true only to explicitly open and diagnose the SFTP " +
 			"subsystem; it may trigger MFA, caches success and failure, records path/platform evidence, and retains a " +
-			"successful client for read-only fallback when the shell axis is conclusively down. Combine sftp=true with " +
+			"successful client for file fallback when the shell axis is conclusively down. Combine sftp=true with " +
 			"force=true only to pay for another subsystem attempt.",
 	}, c.probeHost)
 }
@@ -399,7 +404,7 @@ type probeHostArgs struct {
 	SessionArg
 	Force bool `json:"force,omitempty" jsonschema:"discard and rerun the selected probe: persistent shell normally, active identity with deep=true, or SFTP with sftp=true"`
 	Deep  bool `json:"deep,omitempty" jsonschema:"run the separate active login-shell identity command; may open one additional SSH session and trigger MFA, never changes shell capability or oob_tools, and is cached until deep+force"`
-	SFTP  bool `json:"sftp,omitempty" jsonschema:"explicitly open and diagnose the SFTP subsystem; may trigger MFA, retains a successful client for read-only fallback, and is cached until sftp+force"`
+	SFTP  bool `json:"sftp,omitempty" jsonschema:"explicitly open and diagnose the SFTP subsystem; may trigger MFA, retains a successful client for file fallback after conclusive shell failure, and is cached until sftp+force"`
 }
 
 type probeHostResult struct {
@@ -512,9 +517,8 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 }
 
 // probeHostSFTP proves and caches subsystem startup plus structural path
-// identity. A successful client can serve read-only fallback, but SFTP remains
-// deliberately absent from reported availability until the transport contract
-// is complete for every advertised primitive.
+// identity. A successful client can serve implemented file fallbacks, while
+// command-backed tools remain unavailable when the shell axis is down.
 func (c *Core) probeHostSFTP(ctx context.Context, cap route, force bool) (*mcp.CallToolResult, probeHostResult, error) {
 	if cap.via != "controlmaster" {
 		res := probeHostResult{Via: cap.via, Host: cap.host}
@@ -568,7 +572,7 @@ func (c *Core) sftpProbeResult(rt route, result sshmux.SFTPProbeResult) probeHos
 		OobTools:       c.oobToolAvailability(rt),
 	}
 	if axis.State == sshmux.AxisUp {
-		res.SFTPNote = "SFTP subsystem startup and realpath(.) succeeded. The retained client can serve read-only file fallback after a conclusive shell-axis failure; SFTP is not merged into oob_tools availability yet."
+		res.SFTPNote = "SFTP subsystem startup and realpath(.) succeeded. After a conclusive shell-axis failure, oob_tools merges the retained client's file capabilities; atomic writes require posix-rename@openssh.com."
 	} else {
 		reason := axis.Reason
 		if reason == "" {

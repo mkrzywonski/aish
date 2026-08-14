@@ -38,6 +38,9 @@ var oobToolNames = []string{
 	"file_upload", "file_download", "exec",
 }
 
+var sftpReadToolNames = []string{"file_read", "file_stat", "directory_list", "file_download"}
+var sftpWriteToolNames = []string{"file_write", "file_edit", "file_patch", "file_upload"}
+
 // oobToolAvailability reports per-tool availability for a route.
 func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 	switch rt.via {
@@ -61,10 +64,10 @@ func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 	return availability(f)
 }
 
-// availability derives per-tool state from the set of capability axes recorded
-// for a host. Shell remains the only advertised axis until every SFTP-backed
-// primitive preserves its existing contract; read-only routing is staged first
-// and deliberately bypasses this merge point only inside its handlers.
+// availability derives per-tool state from the independent shell and SFTP
+// axes. Shell-up hosts keep the default shell-first toolset. After a conclusive
+// shell failure, only implemented SFTP file primitives can become available;
+// command-backed exec/search tools remain unavailable.
 func availability(f sshmux.HostFacts) map[string]toolAvail {
 	switch f.Shell.State {
 	case sshmux.AxisUp:
@@ -108,7 +111,7 @@ func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
 	if detail != "" {
 		detail += ". "
 	}
-	detail += "Out-of-band tools cannot run here — use run_command to drive this host visibly. " +
+	detail += "Shell-backed out-of-band tools cannot run here — use run_command for visible command work. " +
 		"If the remote shell has since changed, call probe_host with force=true to re-check."
 
 	m := map[string]toolAvail{}
@@ -117,7 +120,54 @@ func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
 		// and the visible in-band fallback is POSIX too (see inBandAvailability).
 		m[n] = toolAvail{State: toolUnavailable, Missing: missing, Detail: detail}
 	}
+	mergeSFTPAvailability(m, f.SFTP)
 	return m
+}
+
+func mergeSFTPAvailability(m map[string]toolAvail, axis sshmux.SftpAxis) {
+	allFileTools := append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...)
+	switch axis.State {
+	case sshmux.AxisUnknown:
+		detail := "the POSIX shell route is conclusively unavailable; the first eligible file operation may open the SFTP subsystem, which can require approval or MFA, and the result will be cached"
+		for _, name := range allFileTools {
+			m[name] = toolAvail{State: toolUnknown, Detail: detail}
+		}
+	case sshmux.AxisDown:
+		detail := "the cached SFTP fallback is unavailable"
+		if axis.Reason != "" {
+			detail += " (" + axis.Reason + ")"
+		}
+		detail += "; it will not retry automatically. Use probe_host with sftp=true and force=true only when an explicit retry is warranted; opening a subsystem may trigger MFA"
+		for _, name := range allFileTools {
+			m[name] = toolAvail{State: toolUnavailable, Missing: "a working SFTP subsystem", Detail: detail}
+		}
+	case sshmux.AxisUp:
+		for _, name := range sftpReadToolNames {
+			m[name] = toolAvail{State: toolAvailable, Detail: "served by the retained SFTP client because the POSIX shell route is unavailable"}
+		}
+		if sftpAxisHasExtension(axis, "posix-rename@openssh.com") {
+			for _, name := range sftpWriteToolNames {
+				m[name] = toolAvail{State: toolAvailable, Detail: "served atomically by the retained SFTP client because the POSIX shell route is unavailable"}
+			}
+			return
+		}
+		for _, name := range sftpWriteToolNames {
+			m[name] = toolAvail{
+				State:   toolUnavailable,
+				Missing: "the posix-rename@openssh.com SFTP extension required for atomic replacement",
+				Detail:  "AISH refuses remove-and-rename because it would expose a missing-file window and weaken file_write, file_upload, file_edit, and file_patch guarantees",
+			}
+		}
+	}
+}
+
+func sftpAxisHasExtension(axis sshmux.SftpAxis, want string) bool {
+	for _, extension := range axis.Extensions {
+		if extension == want {
+			return true
+		}
+	}
+	return false
 }
 
 // inBandAvailability reports what the VISIBLE fallbacks can do. They are not
