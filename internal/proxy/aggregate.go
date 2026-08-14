@@ -59,9 +59,9 @@ const serverInstructions = "Aish gives you access to human-owned shared terminal
 	"remain local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
 	"SSH'd into there, use aish tools instead. Start with list_sessions, choose the intended session, then " +
 	"call session_status; recheck status after SSH transitions. On a newly-SSH'd host the OOB file/search " +
-	"tools start `unknown`; call probe_host once to initialize them, then plan against oob_tools. If a host " +
-	"reports remote_dialect other than `posix` (a Windows or network-device shell), its out-of-band tools are " +
-	"unavailable there permanently — do not re-probe it, and drive it with run_command instead. Every " +
+	"tools start `unknown`; call probe_host once to initialize them, then always plan against oob_tools. A " +
+	"remote_dialect_source of `screen` is advisory and never disables a tool. If probe evidence makes oob_tools " +
+	"unavailable, do not re-probe; drive the host with run_command instead. Every " +
 	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +
 	"exec, file_*, and directory_list for native-like work on the session's current host when OOB is " +
 	"authorized. Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +

@@ -3,11 +3,12 @@
 Implementation plan for two defects found by driving a real cmd.exe session over
 ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 
-- **Repo**: aish, branch `linearize-ring`
+- **Repo**: aish; see `handoff.md` for the active branch
 - **Verified on**: WSL → Windows OpenSSH 10.0p2 (cmd.exe), and a Duo-protected
   RHEL 9.8 host
-- **Status**: A **done**, B phase 1 **done**, both live-validated. C and D not
-  started. See `handoff.md` for current state.
+- **Status**: A **done**; B phases 1-2 **done** (phase 1 live-validated, phase 2
+  pure/status-only and unit-validated). B phase 3, C, and D not started. See
+  `handoff.md` for current state.
 
 ---
 
@@ -227,6 +228,25 @@ failed probe *is* the probe.
 cmd.exe, must contain `run_command`, must mention `force`, and must **not**
 contain "call probe_host to initialize". Stating explicitly that aish is not
 retrying, and why, is what actually stops a model looping.
+
+### Phase 2 implementation
+
+Passive classification is deliberately narrower than the original sketch:
+
+- A PowerShell prompt on the cursor row (`PS C:\...>` or the UNC provider form)
+  identifies PowerShell and Windows.
+- A drive-path prompt on the cursor row plus a visible Windows version banner
+  identifies cmd.exe and Windows.
+- A drive-path prompt without the banner identifies only the Windows platform;
+  the dialect remains unknown.
+- Banner-only, non-current prompt text, stale banners followed by a POSIX prompt,
+  invalid cursor positions, and alternate-screen content produce no dialect.
+
+The result is computed from each `term.Snapshot`, never stored in `HostFacts`,
+and fills only status identity fields left unknown by authoritative evidence.
+`remote_identity_note` states that the result is advisory. Tests assert that
+screen hints cannot change durable facts, authoritative `remoteDialect`, or any
+`oob_tools` state.
 
 ### Sequence
 

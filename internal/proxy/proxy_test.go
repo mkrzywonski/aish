@@ -26,6 +26,14 @@ func TestServerInstructionsLeadWithRoutingModel(t *testing.T) {
 	}
 }
 
+func TestServerInstructionsDistinguishScreenHintsFromCapability(t *testing.T) {
+	for _, phrase := range []string{"plan against oob_tools", "remote_dialect_source", "screen", "advisory", "never disables", "do not re-probe"} {
+		if !strings.Contains(serverInstructions, phrase) {
+			t.Errorf("server instructions are missing passive-identity policy %q", phrase)
+		}
+	}
+}
+
 func TestListDoesNotRemoveUnreachableSocket(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	id := "unreachable"

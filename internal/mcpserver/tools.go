@@ -315,6 +315,7 @@ type sessionStatusResult struct {
 	RemotePlatform       string            `json:"remote_platform,omitempty"`
 	RemoteDialectSource  string            `json:"remote_dialect_source,omitempty"`
 	RemotePlatformSource string            `json:"remote_platform_source,omitempty"`
+	RemoteIdentityNote   string            `json:"remote_identity_note,omitempty"`
 	ProbeAttempts        int               `json:"probe_attempts,omitempty"`
 	OobNote              string            `json:"oob_note,omitempty"`
 	Cwd                  string            `json:"cwd,omitempty"`
@@ -378,6 +379,9 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		}
 		res.ProbeAttempts = f.Shell.Attempts
 		res.OobNote = f.Note()
+	}
+	if rt.via != "local" {
+		applyScreenIdentityHint(&res, fingerprintScreenIdentity(snap))
 	}
 	if res.OOBUser == "" {
 		res.OOBUser = sshUser // ssh login user, before the host is probed

@@ -24,7 +24,8 @@ At the merge boundary:
 |---|---|
 | **A - linearize the ring** | done; live-validated on Linux and a ConPTY host |
 | **B phase 1 - durable host facts and stderr classification** | done; live-validated on Windows cmd.exe and a Duo RHEL host |
-| **B phase 2 - passive screen fingerprinting** | not started; design reviewed |
+| **B identity foundation** | done; identity separated from shell capability in `9620df6` |
+| **B phase 2 - passive screen fingerprinting** | done; pure/status-only and unit-validated |
 | **B phase 3 - explicit active identity probe** | not started; design reviewed |
 | **C - SFTP as probe and transport** | not started; premise empirically confirmed |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
@@ -41,62 +42,65 @@ a81c19c  framing, read_output: consume the linearizer; bump to 0.4.0
 08ea05a  term: linearize absolute cursor movement into line breaks
 ```
 
+The identity foundation landed in `9620df6` and is merged to `main`.
+
 ---
 
 ## Active work
 
-Branch: `b-identity-facts`
+Branch: `b-screen-hints`
 
-Branch point: `af3a40f` (`main`)
+Branch point: `9620df6` (`main`)
 
-Objective: separate authoritative target identity from persistent-shell
-capability without changing phase-1 probe, availability, or retry behavior.
+Objective: add passive Windows screen fingerprinting as advisory status evidence
+without changing durable facts, transport availability, host tracking, or retry
+behavior.
 
 ### Status
 
-Checkpoint complete and ready for review/merge.
+Checkpoint complete and ready for merge.
 
 ### Completed
 
-- Removed dialect identity from `ShellAxis`; shell state now contains only
-  persistent-channel capability, failure details, attempts, caps, and probe time.
-- Added source-specific authoritative identity records for `shell_probe`,
-  `deep_probe`, and future `sftp` evidence.
-- Added deterministic independent selection: deep evidence wins for dialect;
-  SFTP wins for platform; lower-priority observations remain available.
-- Added `NoteIdentity`, which cannot mutate shell capability.
-- Changed `probe_host{force:true}` to reset shell facts and shell-derived
-  identity only.
-- Migrated status, availability, host tracking, and probe responses to the new
-  identity model.
-- Added `remote_platform_source`; authoritative phase-1 status now reports
-  `shell_probe` rather than generic `probe`.
+- Added a pure cursor-row classifier for PowerShell and cmd.exe, with a
+  platform-only result for an uncorroborated drive prompt.
+- Added fixtures for the captured cmd screen, PowerShell drive and UNC prompts,
+  banner-only output, stale banners, copied prompts, alternate-screen content,
+  invalid cursor positions, and a real terminal-emulator snapshot.
+- Added status-only `screen` sources plus `remote_identity_note`.
+- Preserved authoritative dialect and platform independently; screen fills only
+  unknown axes.
+- Proved screen hints cannot create durable facts, change authoritative
+  `remoteDialect`, or alter any `oob_tools` state.
+- Updated proxy instructions to make `oob_tools` the capability decision surface
+  and prevent models treating a screen hint as a refusal.
 
 ### Changed files
 
-`internal/sshmux/facts.go`, `internal/sshmux/facts_test.go`,
-`internal/mcpserver/capability.go`, `internal/mcpserver/capability_test.go`,
-`internal/mcpserver/tools.go`, `internal/mcpserver/tools_remote.go`, `CLAUDE.md`,
-and `windows-targets-plan.md`.
+`internal/mcpserver/screen_identity.go`,
+`internal/mcpserver/screen_identity_test.go`, `internal/mcpserver/tools.go`,
+`internal/proxy/aggregate.go`, `internal/proxy/proxy_test.go`, `CLAUDE.md`, and
+`windows-targets-plan.md`.
 
 ### Verification
 
 ```text
 go test ./...                                      PASS
 go vet ./...                                       PASS
-go test -race ./internal/sshmux ./internal/mcpserver  PASS
+go test -race ./internal/mcpserver ./internal/proxy  PASS
 git diff --check                                   PASS
 ```
 
 ### Remaining
 
-No live-host validation is required for this behavior-preserving data-model
-checkpoint. Passive screen detection remains unimplemented.
+No live-host validation is required for this passive, status-only checkpoint.
+B phase 3, the explicit active identity probe, remains unimplemented.
 
 ### Exact next step
 
-Review and merge `b-identity-facts`, then branch `b-screen-hints` from updated
-`main` and implement the pure advisory screen classifier.
+Merge `b-screen-hints`, then branch `b-deep-probe` from updated `main`. Implement
+the bounded nonce-framed classifier and deep-probe cache before wiring the
+`probe_host{deep:true}` handler.
 
 ### Blockers or uncertainties
 
