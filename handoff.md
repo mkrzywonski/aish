@@ -54,9 +54,8 @@ the shell-first C policy landed in `a36c139`, SFTP checkpoint 1 landed in
 
 ## Active work
 
-Branch: `main`, through `eaa49fd` (`session: make console prompts hard to miss`).
-The worktree is clean after both checkpoint branches were fast-forwarded and
-pushed.
+Branch: `main`, through `87e3a0c` (`docs: hand off completed SFTP and prompt checkpoints`).
+Both checkpoint branches were fast-forwarded and pushed.
 
 Completed objective: make every AISH console prompt difficult to miss without
 weakening prompt capture, timeout, or terminal byte-transparency guarantees.
@@ -97,10 +96,13 @@ Installed/session build: `v0.2.2-27-g4d72bc5-dirty`, final tested SHA-256
 - The first run was silent because the active Windows Terminal Ubuntu profile
   inherited `bellStyle:none`. After the profile was changed to `audible`, the
   prompt produced its audible cue.
-- The configured `bellSound` is `C:\Windows\Media\Windows Notify.wav`. It sounds
-  like two bells separated by roughly one to two seconds, but an isolated
-  `printf '\a'` reproduced the same pair from one BEL. This confirms AISH emits
-  one event, not two prompts or two BEL bytes.
+- The configured `bellSound` is `C:\Windows\Media\Windows Notify.wav`.
+- An apparent second bell was traced to the separate terminal running Codex: it
+  coincided with the assistant response appearing, not with AISH prompt output.
+  Controlled tests produced one bell from raw `send_input`, one from framed
+  `run_command`, and exactly one standalone BEL write for an authorization
+  prompt under `strace`. AISH emits one event; the delayed sound is the Codex
+  terminal's response notification.
 - The persistent bar/title signal remains the fallback when terminal bell sound
   is disabled, remapped to a visual cue, or unavailable.
 

@@ -8,7 +8,8 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
   RHEL 9.8 host
 - **Status**: A and B **done**. B is live-validated on POSIX, cmd.exe, Windows
   PowerShell 5.1, PowerShell 7, Duo-protected RHEL, and unknown/POSIX/cmd.exe
-  in-band routes. C and D not started. See `handoff.md` for current state.
+  in-band routes. C checkpoint 1 is complete and live-validated; C routing and
+  D remain. See `handoff.md` for current state.
 
 ---
 
