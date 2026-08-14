@@ -174,6 +174,53 @@ func TestBlockedProbeResultReportsIdentitySources(t *testing.T) {
 	}
 }
 
+func TestDeepProbeResultReportsIdentityWithoutChangingAvailability(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "winbox", User: "mk31", Port: "22", Sock: "/run/aish/cm-deep"}
+	c.Mux.NoteIdentity(ci, sshmux.DialectCmd, "windows", sshmux.IdentitySourceDeepProbe,
+		"percent variables expanded while PowerShell and POSIX variables remained literal")
+	rt := route{via: "controlmaster", ci: ci, host: "winbox"}
+	before := c.oobToolAvailability(rt)
+
+	exit := 0
+	res := c.deepProbeResult(rt, sshmux.DeepProbeResult{
+		Status: sshmux.DeepProbeIdentified, Dialect: sshmux.DialectCmd, Platform: "windows",
+		Evidence: "percent variables expanded", Exit: exit, Attempts: 1, Cached: true,
+	})
+
+	if res.RemoteDialect != string(sshmux.DialectCmd) || res.RemotePlatform != "windows" {
+		t.Errorf("identity = %q/%q, want cmd/windows", res.RemoteDialect, res.RemotePlatform)
+	}
+	if res.RemoteDialectSource != string(sshmux.IdentitySourceDeepProbe) || res.RemotePlatformSource != string(sshmux.IdentitySourceDeepProbe) {
+		t.Errorf("identity sources = %q/%q, want deep_probe", res.RemoteDialectSource, res.RemotePlatformSource)
+	}
+	if res.Probed || res.RemoteHost != nil {
+		t.Errorf("deep identity claimed shell capability: %+v", res)
+	}
+	if !res.DeepProbeCached || res.DeepProbeExit == nil || *res.DeepProbeExit != 0 {
+		t.Errorf("deep result metadata = %+v", res)
+	}
+	for tool, want := range before {
+		if got := res.OobTools[tool]; got != want {
+			t.Errorf("%s availability changed: got %+v, want %+v", tool, got, want)
+		}
+	}
+}
+
+func TestDeepProbeFailureNoteStopsImplicitRetries(t *testing.T) {
+	for _, status := range []sshmux.DeepProbeStatus{sshmux.DeepProbeUnknown, sshmux.DeepProbeFailed} {
+		note := deepProbeNote(sshmux.DeepProbeResult{Status: status, Reason: "probe did not identify the shell"})
+		for _, phrase := range []string{"cached", "MFA", "deep=true", "force=true"} {
+			if !strings.Contains(note, phrase) {
+				t.Errorf("%s note missing %q: %q", status, phrase, note)
+			}
+		}
+		if strings.Contains(note, "call probe_host to initialize") {
+			t.Errorf("%s note invites an implicit retry: %q", status, note)
+		}
+	}
+}
+
 // TestOobAvailabilityRetryableFailureStaysUnknown: an unclassified failure is a
 // transport fact, so the toolset stays "unknown" — but the detail has to say
 // what a retry costs rather than cheerfully suggesting one.

@@ -317,6 +317,9 @@ type sessionStatusResult struct {
 	RemotePlatformSource string            `json:"remote_platform_source,omitempty"`
 	RemoteIdentityNote   string            `json:"remote_identity_note,omitempty"`
 	ProbeAttempts        int               `json:"probe_attempts,omitempty"`
+	DeepProbeStatus      string            `json:"deep_probe_status,omitempty"`
+	DeepProbeAttempts    int               `json:"deep_probe_attempts,omitempty"`
+	DeepProbeNote        string            `json:"deep_probe_note,omitempty"`
 	OobNote              string            `json:"oob_note,omitempty"`
 	Cwd                  string            `json:"cwd,omitempty"`
 	PromptReady          bool              `json:"prompt_ready"`
@@ -378,6 +381,9 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 			res.RemotePlatformSource = string(identity.Source)
 		}
 		res.ProbeAttempts = f.Shell.Attempts
+		res.DeepProbeStatus = string(f.Deep.Status)
+		res.DeepProbeAttempts = f.Deep.Attempts
+		res.DeepProbeNote = f.Deep.Reason
 		res.OobNote = f.Note()
 	}
 	if rt.via != "local" {

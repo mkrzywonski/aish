@@ -6,9 +6,9 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 - **Repo**: aish; see `handoff.md` for the active branch
 - **Verified on**: WSL → Windows OpenSSH 10.0p2 (cmd.exe), and a Duo-protected
   RHEL 9.8 host
-- **Status**: A **done**; B phases 1-2 **done** (phase 1 live-validated, phase 2
-  pure/status-only and unit-validated). B phase 3, C, and D not started. See
-  `handoff.md` for current state.
+- **Status**: A **done**; B phases 1-3 **implemented** (phase 1 live-validated,
+  phases 2-3 unit-validated; phase 3 still needs the remote-shell validation
+  matrix). C and D not started. See `handoff.md` for current state.
 
 ---
 
@@ -208,7 +208,7 @@ two MFA pushes before requiring an explicit force.
 |---|---|---|---|
 | **0 — passive screen** | Free. No channel, no grant, no round trip. | Fingerprint the visible screen: `Microsoft Windows [Version`, `PS C:\…>`, `C:\…>`. One strong or two weak hits. **Advisory only** — annotates status and never changes availability. | 2 |
 | **A — stderr fingerprint** | Nothing beyond the channel open already paid for. | Pipe `cmd.Stderr` (currently wired to the null device), keep the `out` buffer on failure, classify against the exact strings above. **The workhorse** — fully covers the observed case. | 1 |
-| **B — active polyglot** | A second session on the master; may cost an MFA push. | `echo AISHDIALECT %OS% %COMSPEC% $SHELL` behind `probe_host{deep:true}`. Never implicit. | 3 |
+| **B — active expansion probe** | A second session on the master; may cost an MFA push. | A random nonce plus labeled cmd, PowerShell, and POSIX variable forms behind `probe_host{deep:true}`. Never implicit. | 3 |
 
 ### What the model sees afterwards
 
@@ -248,6 +248,60 @@ and fills only status identity fields left unknown by authoritative evidence.
 screen hints cannot change durable facts, authoritative `remoteDialect`, or any
 `oob_tools` state.
 
+### Phase 3 implementation
+
+The original literal polyglot was not discriminating enough. Windows PowerShell
+5.1 parses `echo` as `Write-Output` and emits the arguments on separate lines,
+and the proposed command had no PowerShell-specific field. The implemented
+command uses a random 64-bit hex nonce and labels every expansion form:
+
+```text
+echo AISH_DIALECT_<nonce> PCTOS=%OS% PCTCOMSPEC=%COMSPEC% PSOS=$env:OS PSCOMSPEC=$env:ComSpec SH=$SHELL
+```
+
+Classification starts only after the exact nonce and uses the first occurrence
+of each label, so banners before the response and profile noise after it cannot
+be mistaken for probe fields. It classifies expansion grammar rather than
+specific environment values:
+
+| Login command grammar | Observed expansion pattern |
+|---|---|
+| cmd.exe | `%OS%` and `%COMSPEC%` expand; PowerShell and POSIX forms remain literal |
+| PowerShell | percent forms remain literal; `$env:*` expands; `$SHELL` is consumed |
+| POSIX shell | percent forms remain literal; `$env:OS` becomes `:OS`; `$env:ComSpec` becomes `:ComSpec`; `$SHELL` expands or becomes empty |
+
+The command is an explicit diagnostic operation, not another capability axis:
+
+- `probe_host{deep:true}` may open one ControlMaster slave session and trigger
+  MFA. No automatic tool path runs it.
+- stdout and stderr are each capped at 8 KiB and the entire operation has a
+  60-second context deadline.
+- identified, unknown, timeout, and command-failure outcomes are all cached per
+  ControlMaster socket. Cache lookup happens before `route()`, so reading a
+  result cannot ask for authorization or open a session.
+- concurrent callers share one per-socket flight. A waiting caller may cancel
+  its wait without starting another command.
+- `deep:true, force:true` clears only the deep result and deep-derived identity.
+  Ordinary `force:true` still clears only the persistent-shell probe and its
+  identity. Neither reset crosses the other axis.
+- an identified result records authoritative `deep_probe` dialect/platform
+  facts but never changes `ShellAxis`, persistent channel state, host
+  confidence, or `oob_tools`.
+- failed and unknown results explicitly say they are cached and that only
+  `deep:true, force:true` pays for another attempt. This is the phase-3
+  anti-loop rule.
+
+`session_status` remains channel-free and reports only cached
+`deep_probe_status`, `deep_probe_attempts`, and failure/unknown note fields.
+`probe_host` additionally reports cache status, expansion evidence, and an exit
+status when one exists.
+
+The expansion behavior has been captured locally from cmd.exe, Windows
+PowerShell 5.1, and POSIX `sh`. Before calling phase 3 live-validated, run it over
+real ControlMaster paths against POSIX, cmd.exe, Windows PowerShell, PowerShell
+7, and the Duo-protected host; confirm one explicit call means at most one new
+MFA event and every repeat is a cache hit.
+
 ### Sequence
 
 1. Pipe stderr into a bounded buffer; store the exit code and a `reaped` channel
@@ -280,6 +334,12 @@ screen hints cannot change durable facts, authoritative `remoteDialect`, or any
    channel protocol assumes a POSIX shell", which gains "…and a host that fails
    that assumption is recorded as a durable fact, never re-probed silently".
    — `internal/proxy/aggregate.go`, `CLAUDE.md`
+10. Add the nonce-framed expansion classifier and bounded active command runner;
+    cache every outcome and single-flight by ControlMaster socket.
+    — `internal/sshmux/deep_probe.go`, `facts.go`, `mux.go`
+11. Add `probe_host{deep}` and scoped `deep+force`, return structured deep
+    metadata, and expose cached status without changing tool availability.
+    — `internal/mcpserver/tools_remote.go`, `tools.go`
 
 ---
 

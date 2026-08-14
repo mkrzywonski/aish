@@ -27,6 +27,10 @@ type Mux struct {
 	// them (see facts.go).
 	factsMu sync.RWMutex
 	facts   map[string]*HostFacts
+
+	deepMu      sync.Mutex
+	deepFlights map[string]*deepFlight
+	deepRun     deepCommandRunner
 }
 
 func New(sessionDir string) *Mux {
@@ -34,12 +38,15 @@ func New(sessionDir string) *Mux {
 	if err != nil {
 		realSSH = "ssh"
 	}
-	return &Mux{
-		dir:      sessionDir,
-		realSSH:  realSSH,
-		channels: map[string]*channel{},
-		facts:    map[string]*HostFacts{},
+	m := &Mux{
+		dir:         sessionDir,
+		realSSH:     realSSH,
+		channels:    map[string]*channel{},
+		facts:       map[string]*HostFacts{},
+		deepFlights: map[string]*deepFlight{},
 	}
+	m.deepRun = m.runDeepCommand
+	return m
 }
 
 // Current returns the most recently started still-live ssh connection, or

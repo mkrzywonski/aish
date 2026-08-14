@@ -120,6 +120,7 @@ type HostFacts struct {
 	Sock, Host, User, Port string
 	Shell                  ShellAxis
 	Identity               IdentityFacts
+	Deep                   DeepProbeResult
 }
 
 // maxSoftAttempts is how many times an UNCLASSIFIED failure is retried before
@@ -244,6 +245,35 @@ func (m *Mux) ForgetShellFacts(ci *ConnInfo) {
 	f.Identity.ShellProbe = IdentityFact{}
 }
 
+func (m *Mux) forgetDeepFacts(ci *ConnInfo) {
+	if ci == nil || ci.Sock == "" {
+		return
+	}
+	m.factsMu.Lock()
+	defer m.factsMu.Unlock()
+	f := m.facts[ci.Sock]
+	if f == nil {
+		return
+	}
+	f.Deep = DeepProbeResult{}
+	f.Identity.DeepProbe = IdentityFact{}
+}
+
+// CachedDeepProbe returns a prior explicit deep-probe outcome without opening
+// anything. Failed and unknown outcomes are cache hits too.
+func (m *Mux) CachedDeepProbe(ci *ConnInfo) (DeepProbeResult, bool) {
+	if ci == nil || ci.Sock == "" {
+		return DeepProbeResult{}, false
+	}
+	m.factsMu.RLock()
+	defer m.factsMu.RUnlock()
+	f := m.facts[ci.Sock]
+	if f == nil || !f.Deep.Attempted() {
+		return DeepProbeResult{}, false
+	}
+	return f.Deep, true
+}
+
 // factsFor returns the mutable record for ci, creating it on first use.
 // Callers hold factsMu.
 func (m *Mux) factsForLocked(ci *ConnInfo) *HostFacts {
@@ -316,6 +346,19 @@ func (m *Mux) NoteIdentity(ci *ConnInfo, d Dialect, platform string, source Iden
 	f := m.factsForLocked(ci)
 	f.noteIdentityLocked(d, platform, source, evidence, time.Now())
 	return *f
+}
+
+func (m *Mux) noteDeepProbe(ci *ConnInfo, result DeepProbeResult) DeepProbeResult {
+	m.factsMu.Lock()
+	defer m.factsMu.Unlock()
+	f := m.factsForLocked(ci)
+	result.Attempts = f.Deep.Attempts + 1
+	result.Cached = false
+	f.Deep = result
+	if result.Status == DeepProbeIdentified {
+		f.noteIdentityLocked(result.Dialect, result.Platform, IdentitySourceDeepProbe, result.Evidence, result.AttemptedAt)
+	}
+	return result
 }
 
 func (f *HostFacts) noteIdentityLocked(d Dialect, platform string, source IdentitySource, evidence string, observedAt time.Time) {

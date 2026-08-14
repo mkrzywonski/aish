@@ -131,7 +131,10 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"sessions. Tools also auto-probe on first use, so this is optional — it just moves the probe earlier for planning. " +
 			"A host that already failed conclusively (remote_dialect is a non-POSIX shell) is answered from cache without " +
 			"opening anything: do not call this repeatedly hoping for a different answer. Pass force=true only when the " +
-			"remote's login shell has actually changed.",
+			"remote's login shell has actually changed. Pass deep=true only to run the separate active identity probe: " +
+			"it does not initialize oob_tools, opens at most one additional SSH session (and may trigger MFA), and caches " +
+			"identified, unknown, and failed outcomes. Repeat deep calls read cache; combine deep=true with force=true only " +
+			"to explicitly pay for another active attempt.",
 	}, c.probeHost)
 }
 
@@ -385,7 +388,8 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 
 type probeHostArgs struct {
 	SessionArg
-	Force bool `json:"force,omitempty" jsonschema:"discard the cached persistent-shell probe and run it again; needed when the remote's login shell has changed, since a host that conclusively failed is otherwise never re-probed"`
+	Force bool `json:"force,omitempty" jsonschema:"discard and rerun the selected probe: the persistent-shell probe normally, or only the active identity cache when deep=true"`
+	Deep  bool `json:"deep,omitempty" jsonschema:"run the separate active login-shell identity command; may open one additional SSH session and trigger MFA, never changes shell capability or oob_tools, and is cached until deep+force"`
 }
 
 type probeHostResult struct {
@@ -398,6 +402,11 @@ type probeHostResult struct {
 	RemoteDialectSource  string               `json:"remote_dialect_source,omitempty"`
 	RemotePlatformSource string               `json:"remote_platform_source,omitempty"`
 	ProbeAttempts        int                  `json:"probe_attempts,omitempty"`
+	DeepProbeStatus      string               `json:"deep_probe_status,omitempty"`
+	DeepProbeAttempts    int                  `json:"deep_probe_attempts,omitempty"`
+	DeepProbeCached      bool                 `json:"deep_probe_cached,omitempty"`
+	DeepProbeEvidence    string               `json:"deep_probe_evidence,omitempty"`
+	DeepProbeExit        *int                 `json:"deep_probe_exit,omitempty"`
 	OobTools             map[string]toolAvail `json:"oob_tools"`
 	TargetConfidence     string               `json:"target_confidence"`
 	Note                 string               `json:"note,omitempty"`
@@ -424,7 +433,11 @@ type probeHostResult struct {
 //     cache, so it reset nothing.
 func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args probeHostArgs) (*mcp.CallToolResult, probeHostResult, error) {
 	// Non-prompting look first: capability() never asks the user for OOB consent.
-	if cap := c.capability(); cap.via == "controlmaster" {
+	cap := c.capability()
+	if args.Deep {
+		return c.probeHostDeep(ctx, cap, args.Force)
+	}
+	if cap.via == "controlmaster" {
 		if args.Force {
 			c.Mux.ForgetShellFacts(cap.ci)
 		} else if f, ok := c.Mux.Facts(cap.ci); ok && f.ShellBlocked() {
@@ -470,6 +483,102 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
 	res.OobTools = c.oobToolAvailability(rt)
 	return nil, res, nil
+}
+
+// probeHostDeep is intentionally independent from the ordinary shell probe.
+// It identifies the login command grammar, but neither proves nor disproves
+// that persistent `sh -s` works. A cached result is returned before route() so
+// reading it never asks for OOB authorization or opens another SSH session.
+func (c *Core) probeHostDeep(ctx context.Context, cap route, force bool) (*mcp.CallToolResult, probeHostResult, error) {
+	if cap.via != "controlmaster" {
+		res := probeHostResult{Via: cap.via, Host: cap.host}
+		if cap.via == "local" {
+			res.Note = "local session: active remote identity probing does not apply."
+		} else {
+			res.Note = "active identity probing requires a live ControlMaster; it is never typed into the shared terminal."
+		}
+		_, _, res.TargetConfidence = c.hostConfidence(cap)
+		res.OobTools = c.oobToolAvailability(cap)
+		return nil, res, nil
+	}
+
+	if !force {
+		if deep, ok := c.Mux.CachedDeepProbe(cap.ci); ok {
+			deep.Cached = true
+			return nil, c.deepProbeResult(cap, deep), nil
+		}
+	}
+
+	rt := c.route()
+	if rt.via != "controlmaster" {
+		res := probeHostResult{
+			Via: rt.via, Host: rt.host,
+			Note: "active identity probe not run because out-of-band access was not authorized; nothing was typed into the shared terminal.",
+		}
+		_, _, res.TargetConfidence = c.hostConfidence(rt)
+		res.OobTools = c.oobToolAvailability(rt)
+		return nil, res, nil
+	}
+
+	deep, err := c.Mux.DeepProbe(ctx, rt.ci, force)
+	if err != nil {
+		return nil, probeHostResult{}, err
+	}
+	return nil, c.deepProbeResult(rt, deep), nil
+}
+
+func (c *Core) deepProbeResult(rt route, deep sshmux.DeepProbeResult) probeHostResult {
+	res := probeHostResult{
+		Via:               rt.via,
+		Host:              rt.host,
+		DeepProbeStatus:   string(deep.Status),
+		DeepProbeAttempts: deep.Attempts,
+		DeepProbeCached:   deep.Cached,
+		DeepProbeEvidence: deep.Evidence,
+	}
+	if deep.Exit >= 0 {
+		exit := deep.Exit
+		res.DeepProbeExit = &exit
+	}
+	if f, ok := c.Mux.Facts(rt.ci); ok {
+		dialect := f.Identity.DialectFact()
+		platform := f.Identity.PlatformFact()
+		res.RemoteDialect = string(dialect.Dialect)
+		res.RemotePlatform = platform.Platform
+		res.RemoteDialectSource = string(dialect.Source)
+		res.RemotePlatformSource = string(platform.Source)
+		res.ProbeAttempts = f.Shell.Attempts
+		res.Probed = f.Shell.State == sshmux.AxisUp
+		if f.Shell.State == sshmux.AxisUp {
+			caps := f.Shell.Caps
+			res.RemoteHost = &caps
+		}
+		res.Note = f.Note()
+	}
+	deepNote := deepProbeNote(deep)
+	if res.Note != "" && deepNote != "" {
+		res.Note += ". " + deepNote
+	} else if deepNote != "" {
+		res.Note = deepNote
+	}
+	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	res.OobTools = c.oobToolAvailability(rt)
+	return res
+}
+
+func deepProbeNote(deep sshmux.DeepProbeResult) string {
+	switch deep.Status {
+	case sshmux.DeepProbeIdentified:
+		return fmt.Sprintf("active identity probe identified %s; this identifies command grammar only and does not change shell capability or oob_tools", deep.Dialect.Human())
+	case sshmux.DeepProbeUnknown, sshmux.DeepProbeFailed:
+		note := deep.Reason
+		if note == "" {
+			note = "the active identity probe did not identify the login shell"
+		}
+		return note + "; this outcome is cached because another attempt opens an SSH session and may trigger MFA. Retry only with deep=true and force=true"
+	default:
+		return ""
+	}
 }
 
 // blockedProbeResult describes a host whose shell axis is known bad, without

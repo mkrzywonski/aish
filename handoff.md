@@ -26,7 +26,7 @@ At the merge boundary:
 | **B phase 1 - durable host facts and stderr classification** | done; live-validated on Windows cmd.exe and a Duo RHEL host |
 | **B identity foundation** | done; identity separated from shell capability in `9620df6` |
 | **B phase 2 - passive screen fingerprinting** | done; pure/status-only and unit-validated |
-| **B phase 3 - explicit active identity probe** | not started; design reviewed |
+| **B phase 3 - explicit active identity probe** | implemented and unit-validated; remote-shell matrix pending |
 | **C - SFTP as probe and transport** | not started; premise empirically confirmed |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
@@ -42,108 +42,110 @@ a81c19c  framing, read_output: consume the linearizer; bump to 0.4.0
 08ea05a  term: linearize absolute cursor movement into line breaks
 ```
 
-The identity foundation landed in `9620df6` and is merged to `main`.
+The identity foundation landed in `9620df6`; passive screen identity landed in
+`5499871`. Both are merged to `main`.
 
 ---
 
 ## Active work
 
-Branch: `b-screen-hints`
+Branch: none after the `b-deep-probe` checkpoint is merged
 
-Branch point: `9620df6` (`main`)
+Implementation branch point: `5499871` (`main`)
 
-Objective: add passive Windows screen fingerprinting as advisory status evidence
-without changing durable facts, transport availability, host tracking, or retry
-behavior.
+Completed objective: add an explicit, bounded, cached active identity probe
+behind `probe_host{deep:true}` without coupling identity to shell capability or
+opening more than one SSH session per explicit attempt.
 
 ### Status
 
-Checkpoint complete and ready for merge.
+Checkpoint complete. B is code-complete; phase 3 still needs live validation on
+the target matrix below before it should be called fully live-validated.
 
 ### Completed
 
-- Added a pure cursor-row classifier for PowerShell and cmd.exe, with a
-  platform-only result for an uncorroborated drive prompt.
-- Added fixtures for the captured cmd screen, PowerShell drive and UNC prompts,
-  banner-only output, stale banners, copied prompts, alternate-screen content,
-  invalid cursor positions, and a real terminal-emulator snapshot.
-- Added status-only `screen` sources plus `remote_identity_note`.
-- Preserved authoritative dialect and platform independently; screen fills only
-  unknown axes.
-- Proved screen hints cannot create durable facts, change authoritative
-  `remoteDialect`, or alter any `oob_tools` state.
-- Updated proxy instructions to make `oob_tools` the capability decision surface
-  and prevent models treating a screen hint as a refusal.
+- Added a random nonce-framed, labeled expansion grammar and pure
+  cmd/PowerShell/POSIX classifier. The parser starts at the exact nonce and
+  accepts only the first value for each label, bounding profile-noise effects.
+- Added an explicit remote-command runner with independent 8 KiB stdout/stderr
+  caps and a 60-second total deadline.
+- Cached identified, unknown, timeout, and command-failure outcomes per
+  ControlMaster socket. Cache reads happen before authorization/routing.
+- Added per-socket single-flight so concurrent explicit requests open at most
+  one SSH session. Waiting callers share the result.
+- Added `probe_host{deep:true}` and scoped `deep:true,force:true`. Deep force
+  clears only deep state; ordinary force clears only shell state.
+- Added structured deep status, attempts, cache, evidence, and exit metadata.
+  Identified results create authoritative `deep_probe` identity facts but never
+  alter `ShellAxis`, persistent channels, host confidence, or `oob_tools`.
+- Added anti-loop guidance: unknown/failed outcomes state that they are cached,
+  explain the MFA cost, and require both `deep=true` and `force=true` to retry.
+- Updated the server instructions and repository design guidance so models use
+  `oob_tools`, not deep identity, as the capability decision surface.
 
 ### Changed files
 
-`internal/mcpserver/screen_identity.go`,
-`internal/mcpserver/screen_identity_test.go`, `internal/mcpserver/tools.go`,
-`internal/proxy/aggregate.go`, `internal/proxy/proxy_test.go`, `CLAUDE.md`, and
-`windows-targets-plan.md`.
+`internal/sshmux/deep_probe.go`, `internal/sshmux/deep_probe_test.go`,
+`internal/sshmux/facts.go`, `internal/sshmux/mux.go`,
+`internal/mcpserver/tools.go`, `internal/mcpserver/tools_remote.go`,
+`internal/mcpserver/capability_test.go`, `internal/proxy/aggregate.go`,
+`internal/proxy/proxy_test.go`, `CLAUDE.md`, `windows-targets-plan.md`, and this
+handoff.
 
 ### Verification
 
 ```text
-go test ./...                                      PASS
-go vet ./...                                       PASS
-go test -race ./internal/mcpserver ./internal/proxy  PASS
-git diff --check                                   PASS
+make check                                                    PASS
+go test -race ./internal/sshmux ./internal/mcpserver ./internal/proxy  PASS
+git diff --check                                              PASS
 ```
 
-### Remaining
+The classifier fixtures include captured cmd.exe, Windows PowerShell 5.1, and
+POSIX expansion shapes plus missing/incomplete/mixed responses, unset variables,
+trailing profile noise, timeout, command failure, unknown-result caching,
+deep-only force, and concurrent single-flight.
 
-No live-host validation is required for this passive, status-only checkpoint.
-B phase 3, the explicit active identity probe, remains unimplemented.
+### Live validation still required
+
+Run `probe_host{deep:true}` over real ControlMaster paths against:
+
+1. a POSIX host
+2. Windows OpenSSH with cmd.exe
+3. Windows PowerShell 5.1
+4. PowerShell 7
+5. the Duo-protected RHEL host
+
+For each target, verify the first explicit call returns the correct dialect and
+source, a repeat is a cache hit with no new session/MFA event, and
+`deep:true,force:true` opens exactly one new attempt. Reconfirm that shell state
+and every `oob_tools` value are byte-for-byte unchanged by deep probing.
 
 ### Exact next step
 
-Merge `b-screen-hints`, then branch `b-deep-probe` from updated `main`. Implement
-the bounded nonce-framed classifier and deep-probe cache before wiring the
-`probe_host{deep:true}` handler.
+Create a fresh branch from updated `main` for workstream C. Before choosing its
+SFTP open order, run the Duo subsystem test described below; that result decides
+whether SFTP opens first or only after the shell axis is down.
 
 ### Blockers or uncertainties
 
-None.
+- Phase 3 has fixture coverage based on locally captured cmd.exe, Windows
+  PowerShell 5.1, and POSIX behavior, but no live remote matrix in this
+  checkpoint.
+- Workstream C's default SFTP open order still depends on whether a subsystem
+  request over the existing Duo-protected master causes another push.
 
 ---
 
-## Next work: finish B
+## Next work: workstream C
 
-Start the next implementation branch from the updated `main`. A suitable name
-is `windows-target-identity`.
+Start the next implementation branch from updated `main`; `c-sftp-axis` is a
+suitable name. `windows-targets-plan.md` contains the current C sequence.
 
-The critical design correction is to separate **target identity** from
-**transport capability** before adding either detector:
-
-- `ShellAxis` answers whether the persistent `sh -s` transport works.
-- Authoritative identity facts answer dialect and platform, with their source.
-- A deep probe may identify cmd.exe or PowerShell but must not mark `ShellAxis`
-  up or down.
-- Screen evidence is recomputed from the current snapshot, never persisted in
-  `Mux`, and never changes `oob_tools`, host tracking, or retry policy.
-- Model-facing status must distinguish advisory `screen` evidence from
-  authoritative `shell_probe` or `deep_probe` evidence.
-
-Recommended order:
-
-1. Add characterization tests around the completed phase-1 fact behavior.
-2. Move dialect/platform identity out of `ShellAxis` into independent facts.
-3. Add the pure passive-screen classifier and status-only integration.
-4. Add a bounded, nonce-framed active identity probe behind
-   `probe_host{deep:true}`.
-5. Cache and single-flight deep probes per ControlMaster socket so concurrent
-   clients cannot produce duplicate MFA pushes.
-6. Define scoped reset semantics: `force` for the ordinary shell probe and
-   `deep+force` for the deep-probe cache.
-7. Update proxy instructions and docs so models plan against `oob_tools`; a
-   screen-derived dialect is only a hint.
-8. Unit-test evidence precedence and live-validate POSIX, cmd.exe, Windows
-   PowerShell, PowerShell 7, and one Duo-protected host.
-
-The full critical review and implementation plan should be folded into
-`windows-targets-plan.md` as B is implemented; its original phase-2/3 outline is
-not detailed enough about source precedence, deep/force behavior, or MFA cost.
+Do not collapse SFTP into `ShellAxis`. Add `SftpAxis` beside it, publish SFTP
+platform evidence through `IdentitySourceSFTP`, and merge tool capability only
+in `mcpserver.availability`. The first narrow checkpoint should prove subsystem
+startup, bounded failure/cache behavior, `realpath(".")` platform
+classification, and the Duo open-cost policy before routing file operations.
 
 ---
 
