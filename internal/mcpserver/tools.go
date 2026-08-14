@@ -54,7 +54,9 @@ func registerTools(s *mcp.Server, c *Core) {
 		Name:        "read_output",
 		Annotations: readOnlyTool("Read terminal output"),
 		Description: "Read the raw session output stream (scrollback) incrementally. Pass the next_cursor from the previous " +
-			"call to get only new output; omit cursor to get the most recent output. Escape sequences are stripped unless raw. " +
+			"call to get only new output; omit cursor to get the most recent output. Escape sequences are stripped unless raw, " +
+			"and line breaks are reconstructed from cursor movement on hosts that position the cursor instead of emitting " +
+			"newlines (Windows shells over ssh), so data may contain newlines that are not literal bytes in the stream. " +
 			"dropped_bytes > 0 means the scrollback wrapped and that much output before the cursor is gone.",
 	}, c.readOutput)
 
@@ -214,7 +216,11 @@ func (c *Core) readOutput(ctx context.Context, req *mcp.CallToolRequest, args re
 	}
 	data, next, dropped := c.Term.Ring.ReadFrom(cursor, max)
 	if !args.Raw {
-		data = term.StripEscapes(data)
+		// Linearize rather than merely strip: a terminal that ends lines by
+		// repositioning the cursor (any ConPTY-hosted shell reached over ssh)
+		// would otherwise come back with unrelated lines fused together.
+		rows, _ := c.Term.Screen.Size()
+		data = term.Linearize(data, rows)
 	}
 	return nil, readOutputResult{Data: string(data), NextCursor: next, DroppedBytes: dropped}, nil
 }

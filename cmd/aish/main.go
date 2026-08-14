@@ -55,7 +55,7 @@ Usage:
   aish version
 `
 
-var version = "0.3.0"
+var version = "0.4.0"
 
 func main() {
 	// Busybox-style dispatch: when invoked through the PATH shim symlink

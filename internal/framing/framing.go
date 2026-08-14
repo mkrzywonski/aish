@@ -17,13 +17,13 @@
 package framing
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"ai-ssh/internal/session"
 	"ai-ssh/internal/state"
@@ -97,14 +97,29 @@ func (e *Engine) runIdle(command string, timeout time.Duration) (*Result, error)
 
 	res := e.window(afterEcho(e.Term, echoStart), e.Term.Ring.End(), "idle")
 	res.TimedOut = timedOut
-	// The remote prompt has usually been printed by the time we go idle; it
-	// is the unterminated last line, so drop it.
-	if i := strings.LastIndexByte(res.Output, '\n'); i >= 0 {
-		res.Output = res.Output[:i+1]
-	} else if !timedOut {
-		res.Output = ""
-	}
+	res.Output = dropTrailingPrompt(res.Output, timedOut)
 	return res, nil
+}
+
+// dropTrailingPrompt removes the shell prompt that has usually been reprinted
+// by the time output goes quiet: it is the unterminated final line, so
+// everything after the last newline goes. With no newline at all the whole
+// capture is prompt — unless we gave up early, where partial output beats
+// nothing.
+//
+// This is only sound because the window has been linearized first. On a
+// terminal that ends lines by moving the cursor rather than emitting LF (any
+// ConPTY-hosted shell reached over ssh), the real final output line and the
+// prompt were indistinguishable here, and this trim silently ate genuine
+// output along with the prompt.
+func dropTrailingPrompt(out string, timedOut bool) string {
+	if i := strings.LastIndexByte(out, '\n'); i >= 0 {
+		return out[:i+1]
+	}
+	if timedOut {
+		return out
+	}
+	return ""
 }
 
 func (e *Engine) runOSC133(command string, timeout time.Duration) (*Result, error) {
@@ -194,35 +209,87 @@ func (e *Engine) RunSentinel(command string, timeout time.Duration) (*Result, er
 }
 
 // afterEcho skips past the terminal's echo of the injected command line:
-// output proper begins after the first newline following the injection
-// point. If no newline arrived yet, the window is empty.
+// output proper begins after the first LINE BREAK following the injection
+// point. If none has arrived yet, the window is empty.
+//
+// The break is found with term.FirstBreak rather than a scan for '\n', because
+// a shell hosted in a ConPTY (any Windows shell reached over ssh) terminates
+// the echoed command line by repositioning the cursor instead of emitting a
+// newline. Scanning for '\n' there skipped forward to the first newline INSIDE
+// the command's output and silently discarded everything before it — the same
+// root cause as the fused-line defect, in a second place.
 func afterEcho(t *term.Terminal, injectedAt int64) int64 {
 	data, next, _ := t.Ring.ReadFrom(injectedAt, 1<<20)
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return injectedAt + int64(i) + 1
+	if i, ok := term.FirstBreak(data); ok {
+		return injectedAt + int64(i)
 	}
 	return next
 }
 
-// window slices [start, end) out of the ring, strips escapes, and truncates
-// oversized output keeping head and tail halves.
+// window slices [start, end) out of the ring, linearizes it, and truncates
+// oversized output keeping head and tail halves. The cursors always describe
+// the exact ring range regardless of how the text was transformed, so a caller
+// handed a truncated result can re-fetch the range with read_output.
 func (e *Engine) window(start, end int64, framing string) *Result {
 	res := &Result{Framing: framing, CursorStart: start, CursorEnd: end}
 	if end < start {
 		end = start
 	}
+	rows, _ := e.Term.Screen.Size()
 	size := end - start
 	if size <= maxReturn {
 		data, _, _ := e.Term.Ring.ReadFrom(start, int(size))
-		res.Output = string(term.StripEscapes(data))
+		res.Output, res.Truncated = clampOutput(string(term.Linearize(data, rows)))
 		return res
 	}
 	half := maxReturn / 2
 	head, _, _ := e.Term.Ring.ReadFrom(start, half)
 	tail, _, _ := e.Term.Ring.ReadFrom(end-int64(half), half)
-	res.Output = string(term.StripEscapes(head)) +
+	// Each half is linearized independently and re-bounded, since inserted
+	// newlines can push a half past its ring-byte budget.
+	res.Output = limitHead(string(term.Linearize(head, rows)), half) +
 		fmt.Sprintf("\n... [%d bytes truncated; use read_output with cursor to fetch] ...\n", size-int64(maxReturn)) +
-		string(term.StripEscapes(tail))
+		limitTail(string(term.Linearize(tail, rows)), half)
 	res.Truncated = true
 	return res
+}
+
+// clampOutput bounds an assembled window at maxReturn. Linearization INSERTS
+// newlines, so a ring range that fit under the cap can still render oversized —
+// stripping could only ever shrink it, which is why this guard is new.
+func clampOutput(s string) (string, bool) {
+	if len(s) <= maxReturn {
+		return s, false
+	}
+	half := maxReturn / 2
+	head, tail := limitHead(s, half), limitTail(s, half)
+	return head +
+		fmt.Sprintf("\n... [%d bytes truncated; use read_output with cursor to fetch] ...\n",
+			len(s)-len(head)-len(tail)) +
+		tail, true
+}
+
+// limitHead keeps at most n bytes from the start of s, backing off to a rune
+// boundary so the result is never invalid UTF-8.
+func limitHead(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// limitTail keeps at most n bytes from the end of s, advancing to a rune
+// boundary so the result is never invalid UTF-8.
+func limitTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	i := len(s) - n
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return s[i:]
 }
