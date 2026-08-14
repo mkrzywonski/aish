@@ -51,6 +51,15 @@ func (s *Screen) Resize(rows, cols int) {
 	}
 }
 
+// Size returns the screen's current dimensions. Snapshot renders the whole grid
+// into a string, so callers that only need the geometry (Linearize's newline
+// clamp) must not pay for that.
+func (s *Screen) Size() (rows, cols int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vt.Height, s.vt.Width
+}
+
 // Snapshot returns an atomic rendering of the current screen as plain text,
 // with trailing blank space trimmed.
 func (s *Screen) Snapshot() Snapshot {
