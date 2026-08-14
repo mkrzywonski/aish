@@ -9,9 +9,9 @@ verified behavior, constraints, and exact next work.
 
 ## Current state
 
-Workstreams A, B, and C are complete. The intended handoff boundary is `main`
-after fast-forwarding `c-sftp-writes`; the next feature branch should be cut
-from that clean, pushed main.
+Workstreams A, B, and C are complete. `c-sftp-writes` was fast-forwarded into
+`main`; both refs are pushed through the C closeout boundary. The next feature
+branch should be cut from clean, pushed main.
 
 | Workstream | State |
 |---|---|
@@ -37,17 +37,18 @@ The earlier C checkpoints are merged on main through:
 e755008  handoff for the write checkpoint
 ```
 
-The latest installed/live-tested checkpoint before the append verification
-follow-up was `v0.2.2-37-g0f7b958`. Its build artifact and
+The complete C code/documentation boundary `c4f1bcb` was built and installed
+as `v0.2.2-39-gc4f1bcb`. Its build artifact and
 `/usr/local/bin/aish` had identical SHA-256:
 
 ```text
-1d3e01625b3cd49f3d983a499c7c071f98a4536a5219126620bb4410ecdf0be6
+34de802a56e0094ed3dfdaf1643e4efe399458e6d1a71eba87b1af0f0eba3044
 ```
 
 The append mode verification in `5537411` was found during final review and is
-covered automatically. Rebuild/install after the final documentation merge so
-the deployed version has a unique `git describe` identity.
+included in that installed binary. A deployment-note-only commit after
+`c4f1bcb` does not change runtime source; rebuild only when subsequent code
+changes land.
 
 ---
 
