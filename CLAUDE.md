@@ -8,13 +8,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & run
 
-Go is NOT on PATH on this machine (NixOS) — wrap all go commands in nix-shell:
+Go is NOT on PATH on this machine (NixOS) — wrap all go commands in nix-shell.
+`shell.nix` provides the toolchain, so the Makefile is the shortest path:
 
 ```sh
-nix-shell -p go --run "go build -o aish ./cmd/aish"
-nix-shell -p go --run "go vet ./..."
-nix-shell -p go --run "go test ./internal/term/"   # single package (no tests exist yet)
+nix-shell --run "make"            # build ./aish, version stamped from git
+nix-shell --run "make check"      # go vet + full test suite (run before committing)
+nix-shell --run "make version"    # what this build would stamp, without building
+nix-shell -p go --run "go test ./internal/term/"   # a single package
 ```
+
+Dev builds stamp `main.version` from `git describe --tags --always --dirty`, so a
+binary built from a modified tree reports e.g. `v0.4.0-3-gabc1234-dirty` and can
+never be confused with a clean build of the same commit. The `var version`
+constant in `cmd/aish/main.go` is ONLY the fallback for builds that inject
+nothing — notably `go install ./cmd/aish`, which is what the README tells users
+to run — so bump it per RELEASE, not per build. Release artifacts take their
+version from the git tag (`.goreleaser.yaml`) and nix builds from `package.nix`;
+keep those two and the constant in step when cutting a release.
 
 ## Testing changes without a real terminal
 
