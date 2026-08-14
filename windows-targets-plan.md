@@ -309,8 +309,8 @@ ordinary channel open, one for the first explicit deep probe, and one for
 `deep:true,force:true`; ordinary and deep cache hits produced no push. Deep
 probing did not change shell state or `oob_tools`; a subsequent `file_stat`
 reused the original persistent channel in 45 ms without another push. This
-completes phase 3's live matrix. The separate workstream-C question of whether
-an SFTP subsystem open causes another Duo push remains untested.
+completes phase 3's live matrix. The later workstream-C subsystem test confirmed
+that one SFTP open on this host causes one additional Duo push.
 
 ### MFA provenance warning
 
@@ -475,21 +475,23 @@ in stock Windows OpenSSH (confirmed: `sftp-server.exe`, 10.0p2) and in every
 mainstream Linux distribution. Policy is *assume, attempt, cache the negative* —
 exactly B's sticky-fact machinery. Being wrong costs one channel open, once.
 
-### The open question, and why it isn't blocking
+### Duo result and open-order policy
 
-Whether opening the sftp subsystem costs an MFA push is environment-specific and
-untested. If the host runs `login_duo` as a `ForceCommand`, OpenSSH applies that
-to subsystem requests too, so sftp may be MFA'd *or* outright broken. If it's
-`pam_duo` at authentication time, it shouldn't fire at all on an
-already-authenticated master — the observed failure mode identifies which flavour
-is in play.
+The live test used the existing ControlMaster for
+`su-mk31@noauto2.tr.txstate.edu`, before any shell OOB channel had opened. A
+single bounded OpenSSH SFTP client requested the subsystem, issued `pwd`, and
+quit. It caused exactly one additional Duo push, succeeded after approval, and
+returned `/home/su-mk31`. `session_status` afterward still showed every shell
+tool unprobed, confirming that the test opened only SFTP.
 
-So the open order is built as a **single policy switch, not a structural
-assumption**. Test on a Duo host once it works, then flip.
+This is consistent with per-channel `login_duo`/ForceCommand behavior: master
+reuse avoids a new transport handshake but does not make a subsystem channel
+free. Other deployments may use authentication-time PAM and behave differently,
+so retain the policy switch, but the production default is now **shell-first**.
 
 | If SFTP is free | If SFTP costs a push |
 |---|---|
-| Open it **first**. More likely to succeed than `sh -s`, more informative when it does, and it performs the actual file work. Shell channel then opens lazily, only for `exec` / `grep` / `search`. | Shell channel stays primary; SFTP opens lazily only when the shell axis is down. POSIX hosts never pay for it; non-POSIX hosts pay one extra push and gain the entire file suite. |
+| Open it **first**. More likely to succeed than `sh -s`, more informative when it does, and it performs the actual file work. Shell channel then opens lazily, only for `exec` / `grep` / `search`. | **Selected default:** shell channel stays primary; SFTP opens lazily only when the shell axis is down. POSIX hosts never pay for it; non-POSIX hosts pay one extra push and gain the entire file suite. |
 
 ### Implementation
 
@@ -522,8 +524,8 @@ reuse preserved.
    `C:\Users\…` as the user writes it. Normalise at the boundary and state the
    convention in the tool descriptions.
    — `internal/mcpserver/tools_remote.go`
-7. The open-order policy switch, defaulting to shell-first until the Duo result
-   is known. — `internal/sshmux/facts.go`
+7. The open-order policy switch, defaulting to shell-first from the measured
+   one-push Duo subsystem result. — `internal/sshmux/facts.go`
 
 ### The larger prize (deliberately not in this pass)
 
@@ -661,7 +663,7 @@ Independently real; several shippable on their own.
 | Order of work | **A first.** Silent corruption outranks everything. A is independent; C depends on B. |
 | Linearize globally or per call site | **Global.** Divergence between `read_output` and `run_command` over the same range would be its own bug report. Bounded by property tests, not a flag. |
 | May the passive screen hint suppress availability? | **No** — suppress on probe evidence only; the screen hint drives the note. Advisory evidence doesn't change state. |
-| SFTP | **Adopted** as workstream C. Open order built as a policy switch, pending the Duo push test. |
+| SFTP | **Adopted** as workstream C. Keep the policy switch; default shell-first because the live subsystem test cost one Duo push. |
 
 ---
 

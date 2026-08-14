@@ -29,7 +29,7 @@ At the merge boundary:
 | **B phase 3 - explicit active identity probe** | done; live-validated on POSIX, cmd.exe, Windows PowerShell 5.1, PowerShell 7, and Duo RHEL |
 | **B MFA provenance warning** | done on `b-mfa-status`; unit/race-tested and live-validated on Duo and ordinary passwordless POSIX paths |
 | **B closeout - unknown-target safety** | done; unit/race-tested and live-validated on unknown, POSIX, and cmd.exe in-band routes |
-| **C - SFTP as probe and transport** | not started; premise empirically confirmed |
+| **C - SFTP as probe and transport** | not started; subsystem and Duo policy empirically confirmed, shell-first selected |
 | **D - out-of-band activity log** | not started; designed in `windows-targets-plan.md` |
 
 The linearization and phase-1 fact model landed in these commits:
@@ -208,15 +208,13 @@ The `test` session connected passwordlessly over real ControlMaster paths to
 
 ### Exact next step
 
-For workstream C, first run the separate SFTP subsystem test over the existing
-Duo-protected master; whether it causes another push determines the default
-SFTP open-order policy. Then create `c-sftp-axis` from updated `main` and
-implement the narrow subsystem/fact-axis checkpoint described below.
+Create `c-sftp-axis` from updated `main` and implement the narrow
+subsystem/fact-axis checkpoint described below. Default to shell-first with lazy
+SFTP fallback because the live Duo subsystem test cost one push per SFTP open.
 
 ### Blockers or uncertainties
 
-- Workstream C's default SFTP open order still depends on whether a subsystem
-  request over the existing Duo-protected master causes another push.
+No known blocker for C's first subsystem/fact-axis checkpoint.
 
 ---
 
@@ -241,7 +239,7 @@ classification, and the Duo open-cost policy before routing file operations.
 | Linearize globally or per call site | **Global**, bounded by property tests rather than a flag |
 | May a passive screen hint suppress availability? | **No.** Advisory evidence annotates status only |
 | May deep identity imply shell capability? | **No.** Identity and `sh -s` capability are independent facts |
-| SFTP | **Adopted** as workstream C; open order remains a policy switch pending a Duo test |
+| SFTP | **Adopted** as workstream C; shell-first, with SFTP opened lazily only when the shell axis is down, because the Duo subsystem test cost one push |
 | Install location | **`/usr/local/bin` only.** Multiple installed copies caused version drift |
 | Version stamping | `git describe` for Make builds; unstamped builds use embedded VCS revision/dirty metadata |
 
@@ -270,9 +268,12 @@ These were measured directly and corrected earlier assumptions.
   lines and supplies no explicit PowerShell marker. Use a random marker and
   labeled expansion fields, then classify expansion behavior from bounded
   stdout/stderr.
-- **SFTP works over the existing master without new authentication.** On
+- **SFTP works over the existing master, but channel policy still applies.** On
   Windows OpenSSH, `realpath(".")` returned `/C:/Users/...`, an unambiguous
-  platform signature for workstream C.
+  platform signature for workstream C. On the tested Duo RHEL host, one bounded
+  SFTP open over the live master caused exactly one additional push, succeeded,
+  and returned `/home/su-mk31`; no shell probe ran. Therefore SFTP is shell-first
+  fallback, not an eager probe.
 - **On the tested per-session-MFA Duo host, every channel open is one push.**
   One persistent channel then supports unlimited foreground operations until it
   is dropped. `session_status` remains channel-free.
