@@ -6,11 +6,12 @@ ssh, plus the transport that makes non-POSIX hosts genuinely useful.
 - **Repo**: aish; see `handoff.md` for the active branch
 - **Verified on**: WSL → Windows OpenSSH 10.0p2 (cmd.exe), and a Duo-protected
   RHEL 9.8 host
-- **Status**: A and B **done**. B is live-validated on POSIX, cmd.exe, Windows
-  PowerShell 5.1, PowerShell 7, Duo-protected RHEL, and unknown/POSIX/cmd.exe
-  in-band routes. C checkpoint 1 is complete and live-validated; checkpoint 2
-  read-only routing is implemented and live-validated. C writes,
-  availability merging, and D remain. See `handoff.md` for current state.
+- **Status**: A, B, and C **done**. B is live-validated on POSIX, cmd.exe,
+  Windows PowerShell 5.1, PowerShell 7, Duo-protected RHEL, and
+  unknown/POSIX/cmd.exe in-band routes. C's shell-first SFTP file fallback,
+  atomic writes, and merged availability are implemented, automated-tested,
+  and live-accepted on POSIX and Windows OpenSSH. D remains. See `handoff.md`
+  for current state.
 
 ---
 
@@ -433,12 +434,13 @@ cmd.exe-specific guidance and left the Windows screen unchanged. This closes B.
 
 *The capability win. Depends on B's fact model.*
 
-**Status 2026-08-14:** checkpoint 1 is merged to `main` in `4d72bc5` and
-live-accepted. It adds the independent durable axis, an explicit bounded/cached
-`probe_host{sftp:true}` path over the existing ControlMaster, structural
-platform evidence, retained successful clients, and the debounced MFA
-provenance warning. No file operation or `oob_tools` availability is routed
-through SFTP in this checkpoint.
+**Status 2026-08-14:** complete. Checkpoint 1 added the independent durable
+axis, bounded/cached probing, structural platform evidence, retained clients,
+and the debounced MFA warning. Checkpoint 2 added the path contract and
+read-only routing. Checkpoint 3 preserves the existing write contracts over
+SFTP and merges file-tool availability after a conclusive shell failure.
+The result is live-accepted on passwordless POSIX and Windows OpenSSH, with the
+Duo-sensitive subsystem-open behavior accepted separately in checkpoint 1.
 
 SFTP is an ssh *subsystem*: no shell needed, runs over the existing
 ControlMaster, returns typed attributes rather than parsed command output. On a
@@ -539,18 +541,18 @@ reuse preserved.
 2. **Live-accept checkpoint 1 — complete.** Duo forced-open warning/push/cache,
    passwordless POSIX realpath, Windows structural identity and extensions, and
    unchanged shell availability were observed on the installed build.
-3. **Define the path contract before file handlers — implemented on checkpoint 2 branch.** Keep tool-facing paths in
+3. **Define the path contract before file handlers — complete.** Keep tool-facing paths in
    the target's native form, normalize Windows drive/backslash input to the
    server's observed slash-drive form at one boundary, and return unambiguous
    target-native paths. Test drive roots, spaces, Unicode, dot segments, UNC
    input, and rejection of relative or cross-style ambiguity. Do not infer
    command syntax from path style. — new focused SFTP path module
-4. **Expose a narrow retained-client API with explicit death semantics — read-only half implemented.** MCP
+4. **Expose a narrow retained-client API with explicit death semantics — complete.** MCP
    code should not reach into `pkg/sftp.Client`. Add typed read/stat/list/write/
    rename methods on the mux-side axis, serialize or safely share requests, and
    mark a dead client unusable without reopening it. Every returned error must
    say that a retry requires an explicit operation and may trigger MFA.
-5. **Land read-only routing first — implemented and live-accepted.** Route `file_read`, `file_stat`,
+5. **Land read-only routing first — complete and live-accepted.** Route `file_read`, `file_stat`,
    `directory_list`, and `file_download` through SFTP only when `ShellAxis` is
    conclusively down and SFTP is up. If SFTP is unknown, the first selected file
    operation may perform the one lazy open with the same MFA warning; if it is
@@ -566,34 +568,59 @@ reuse preserved.
    download, bounded binary reads, concurrent calls, retained-client reuse,
    sticky failure after a deliberately killed client, and explicit
    `sftp+force` recovery all behaved as designed.
-6. **Preserve write guarantees before enabling writes.** Implement temp-in-
+6. **Preserve write guarantees before enabling writes — complete.** Implement temp-in-
    destination-directory replacement, symlink refusal, mode preservation where
    the protocol/server supports it, and `if_match` compare-and-swap behavior.
    Verify `posix-rename@openssh.com` and ordinary rename semantics separately on
    Linux and Windows. If atomic replacement cannot be proven for a server, do
    not silently weaken `file_write`; report that capability unavailable.
-7. **Route write/composed tools.** Once step 6 is proven, enable `file_write`,
+
+   The implementation requires `posix-rename@openssh.com`, creates an
+   exclusive random temporary file in the destination directory, refuses
+   symlinks both before staging and immediately before replacement, preserves
+   existing modes, verifies explicit/preserved modes before rename, checks
+   SHA-256 or mtime-size versions immediately before replacement, cleans
+   temporary files on refusal, and retires a dead retained client. Live Linux
+   protocol testing proved that ordinary SFTP rename refuses overwrite while
+   POSIX rename replaces atomically. Windows replacement succeeded through the
+   extension. Windows OpenSSH reports success while ignoring requested POSIX
+   modes; AISH now detects that and fails closed without replacing the
+   destination.
+7. **Route write/composed tools — complete.** Once step 6 is proven, enable `file_write`,
    `file_upload`, and the existing read-modify-write `file_edit`/`file_patch`
    composition over SFTP. Keep privilege-escalation and wrong-host policy
    unchanged. Do not claim `file_grep` or `file_search`: SFTP supplies file I/O,
    not remote computation, and client-side recursive substitutes need a separate
    bounded design.
-8. **Merge availability last.** Extend `availability(facts)` only after each
+8. **Merge availability last — complete.** Extend `availability(facts)` only after each
    primitive preserves its current contract. With shell down/SFTP up, report the
    implemented file tools available while `exec`, grep, and search remain
    unavailable. With SFTP unknown, report only eligible fallback tools unknown;
    with cached SFTP down, report them unavailable. Shell-up hosts continue using
    the shell channel and never pay for automatic SFTP under the default policy.
-9. **Add the open-order policy switch only with a real consumer.** Default to
+9. **Add the open-order policy switch only with a real consumer — intentionally deferred.** Default to
    shell-first. Keep an internal/configurable policy seam for deployments where
    SFTP is known to be authentication-free, but do not add eager behavior until
    it has a measured test environment and routing uses it.
-10. **Acceptance and closeout.** Cover POSIX, Windows cmd.exe, Windows
+10. **Acceptance and closeout — complete.** Cover POSIX, Windows cmd.exe, Windows
     PowerShell, passwordless, Duo-per-channel, subsystem-disabled, dropped-client,
     concurrent-call, large-file, atomic-write, symlink, stale-version, and path
     translation cases. Re-run B's unknown-target matrix to prove SFTP platform
     identity never enables POSIX framing. Update README, CLAUDE, and this handoff
     only after the live matrix confirms actual behavior.
+
+    Automated coverage includes subsystem-disabled/cached-down state,
+    no-`posix-rename` refusal before I/O, dropped-client retirement,
+    serialization/concurrency, bounded large reads, path translation, symlink
+    rechecks, stale and missing versions, ignored modes, cleanup, and the full
+    availability merge matrix. Live checkpoint coverage includes shell-first
+    POSIX behavior with zero SFTP attempts; Windows cmd.exe read/write/upload/
+    append/edit/patch over one retained SFTP client; stale replay refusal;
+    symlink refusal; native and slash-drive paths; Windows mode rejection
+    without destination replacement; and merged status exposing eight file
+    tools while keeping exec/grep/search unavailable. PowerShell variants use
+    the same SFTP path after their already-live-validated conclusive shell
+    classification; no shell-specific write behavior is inferred from SFTP.
 
 ### The larger prize (deliberately not in this pass)
 

@@ -169,7 +169,7 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), interactive/OOB host, target confidence, cached SFTP status, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
-| `probe_host` | Initialize the OOB shell toolset, or explicitly diagnose identity (`deep=true`) or SFTP (`sftp=true`). Each fresh probe may prompt for OOB consent/MFA and caches its outcome; selectors are independent and `force=true` retries only the selected axis. A retained SFTP client can serve read-only fallback after a conclusive shell failure; SFTP availability is not advertised until the full file contract lands |
+| `probe_host` | Initialize the OOB shell toolset, or explicitly diagnose identity (`deep=true`) or SFTP (`sftp=true`). Each fresh probe may prompt for OOB consent/MFA and caches its outcome; selectors are independent and `force=true` retries only the selected axis. After a conclusive shell failure, a retained SFTP client can serve file reads and atomic writes |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
 | `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only. Atomic, with automatic staleness protection |
@@ -199,14 +199,17 @@ connections. See
 
 ### Remote prerequisites
 
-The OOB file/exec tools run **stock commands on the target over one persistent
-`/bin/sh`** — nothing is installed or deployed. When the channel opens, AISH
-probes the host and reports per-tool availability in `session_status`
+On POSIX targets the OOB file/exec tools run **stock commands over one
+persistent `/bin/sh`** — nothing is installed or deployed. When that channel
+cannot run because the login shell is non-POSIX, eligible file tools can use a
+retained SFTP subsystem instead. AISH reports per-tool availability in
+`session_status`
 (`oob_tools`); a tool whose prerequisite is missing is disabled and returns a
 clear error (with an install suggestion) instead of failing silently. A target
-that isn't a POSIX shell at all (Windows, a network device, a restricted shell)
-is detected in seconds and the tools refuse with guidance — use `run_command`
-to drive it visibly instead.
+that isn't a POSIX shell is detected in seconds: Windows OpenSSH can expose the
+file suite through SFTP, while command tools and targets without working SFTP
+refuse with guidance. Use `run_command` to drive unsupported command work
+visibly.
 
 On a host it hasn't probed yet, `oob_tools` reads `unknown` for each tool —
 `session_status` never opens a channel (so a status check can't trigger an MFA
@@ -221,12 +224,14 @@ implicitly. `deep=true` identifies login-shell grammar. `sftp=true` opens one
 bounded SFTP subsystem, runs `realpath(".")`, records its path style and server
 extensions, and retains a successful client. Success and failure are cached
 because either outcome may cost an MFA prompt; retry with both `sftp=true` and
-`force=true`. Read-only operations (`file_read`, `file_stat`,
-`directory_list`, and `file_download`) may use that client after the shell axis
-fails conclusively. During this staged checkpoint, `oob_tools` still reflects
-only shell capability and can therefore report those four tools unavailable on
-a non-POSIX host even while their SFTP fallback works; availability merging is
-deferred until the complete file contract lands.
+`force=true`. After the shell axis fails conclusively, the retained client may
+serve reads, downloads, uploads, writes, edits, and patches. Replacement
+requires the server's `posix-rename@openssh.com` extension; AISH refuses a
+remove-and-rename fallback because it would weaken atomicity. Explicit or
+preserved modes are verified, so a server that accepts `chmod` but ignores the
+requested mode returns an error rather than false success. `oob_tools` merges
+the two axes: file tools report SFTP availability while `exec`, `file_grep`,
+and `file_search` remain shell-only.
 
 Commands used (POSIX/coreutils):
 
@@ -239,13 +244,16 @@ Commands used (POSIX/coreutils):
 AISH adapts to the flavor it finds (GNU vs BusyBox vs BSD `stat`/`find`/`grep`,
 `base64 -d` vs `-D`, `ripgrep` vs `grep`), so Debian/RHEL/Arch/Raspberry Pi OS
 work fully; Alpine/BusyBox, BSD, and macOS work with best-effort fallbacks;
-Windows and network devices are cleanly refused.
+Windows OpenSSH can provide the file suite through SFTP after its non-POSIX
+shell is identified. Network devices without a compatible shell or SFTP
+subsystem are cleanly refused.
 
 | Platform | OOB file/exec tools |
 |---|---|
 | Debian/Ubuntu, RHEL family, Arch, Raspberry Pi OS | full |
 | Alpine/BusyBox, FreeBSD/OpenBSD, macOS | best-effort (some tools may need a package) |
-| Windows, Cisco IOS / network devices | not supported (refused fast); use `run_command` |
+| Windows OpenSSH | file read/write/stat/list/upload/download/edit/patch through SFTP; command/search tools refused |
+| Cisco IOS / network devices | not supported (refused fast); use `run_command` |
 
 ## Security
 
