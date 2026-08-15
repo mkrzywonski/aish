@@ -230,7 +230,7 @@ func runSFTPOperation[T any](ctx context.Context, session *sftpSession, host str
 
 	select {
 	case result := <-done:
-		if sftpTransportError(result.err) {
+		if session.transportLost(result.err) {
 			session.dead = true
 			session.shutdownLocked()
 			return zero, sftpDeadError(host, result.err)
@@ -243,7 +243,25 @@ func runSFTPOperation[T any](ctx context.Context, session *sftpSession, host str
 	}
 }
 
-func sftpTransportError(err error) bool {
+// eofExitGrace bounds how long an ambiguous io.EOF waits for the slave to be
+// reaped before it is read as ordinary end-of-data. Only a genuine death has to
+// win this race, and the pipe's EOF and the process's exit are microseconds
+// apart.
+const eofExitGrace = 250 * time.Millisecond
+
+// transportLost reports whether err means the subsystem is gone rather than
+// that an operation failed.
+//
+// io.EOF is the ambiguous case and must not be assumed either way. pkg/sftp's
+// normaliseError turns a server's SSH_FX_EOF *status* into exactly io.EOF, and
+// a dead ssh slave also surfaces as io.EOF once the receive loop hits the
+// closed pipe — the same sentinel value, from opposite causes. Reading a benign
+// end-of-data as death would retire a healthy client and strand the SFTP axis
+// until an explicit force (and another MFA prompt); reading a death as benign
+// would leave callers retrying a corpse.
+//
+// The slave process is the discriminator, so ask it rather than guess.
+func (s *sftpSession) transportLost(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -251,8 +269,11 @@ func sftpTransportError(err error) bool {
 	if errors.As(err, &status) {
 		return status.FxCode() == sftp.ErrSshFxNoConnection || status.FxCode() == sftp.ErrSshFxConnectionLost
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrClosed) {
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrClosed) {
 		return true
+	}
+	if errors.Is(err, io.EOF) {
+		return s.slaveExited(eofExitGrace)
 	}
 	text := strings.ToLower(err.Error())
 	for _, phrase := range []string{"connection lost", "connection reset", "broken pipe", "unexpectedly closed", "use of closed network connection"} {
@@ -261,6 +282,30 @@ func sftpTransportError(err error) bool {
 		}
 	}
 	return false
+}
+
+// slaveExited reports whether the ssh slave has exited, waiting up to grace for
+// it. The wait exists because exit is observed by a separate Wait goroutine and
+// can lag the EOF that a dying process produces; without it a real death would
+// intermittently read as healthy. A session with no tracked process cannot be
+// interrogated, so it keeps the conservative answer.
+func (s *sftpSession) slaveExited(grace time.Duration) bool {
+	if s.processDone == nil {
+		return true
+	}
+	select {
+	case <-s.processDone:
+		return true
+	default:
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-s.processDone:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func sftpDeadError(host string, cause error) error {

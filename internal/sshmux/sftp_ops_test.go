@@ -575,3 +575,67 @@ func TestSFTPAppendRefusesIgnoredMode(t *testing.T) {
 		t.Fatalf("append did not preserve its non-atomic contract: %q", got)
 	}
 }
+
+// TestTransportLostClassifiesAmbiguousEOF pins the discrimination that keeps a
+// server's SSH_FX_EOF status from being mistaken for a dead subsystem. Both
+// arrive as exactly io.EOF, so only the slave's state separates them.
+func TestTransportLostClassifiesAmbiguousEOF(t *testing.T) {
+	exited := make(chan struct{})
+	close(exited)
+	alive := make(chan struct{})
+	defer close(alive)
+
+	cases := []struct {
+		name    string
+		session *sftpSession
+		err     error
+		want    bool
+	}{
+		{"no error", &sftpSession{processDone: alive}, nil, false},
+		{"status EOF while the slave runs", &sftpSession{processDone: alive}, io.EOF, false},
+		{"EOF after the slave exited", &sftpSession{processDone: exited}, io.EOF, true},
+		{"EOF with no tracked slave", &sftpSession{}, io.EOF, true},
+		{"unexpected EOF is always loss", &sftpSession{processDone: alive}, io.ErrUnexpectedEOF, true},
+		{"closed pipe is always loss", &sftpSession{processDone: alive}, os.ErrClosed, true},
+		{"broken pipe text", &sftpSession{processDone: alive}, errors.New("write |1: broken pipe"), true},
+		{"missing file is not loss", &sftpSession{processDone: alive}, os.ErrNotExist, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.session.transportLost(tc.err); got != tc.want {
+				t.Errorf("transportLost(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSFTPStatusEOFWithLiveSlaveKeepsClient is the regression guard: an
+// end-of-data EOF must not retire a healthy retained client, because recovering
+// from that costs an explicit force and possibly another MFA prompt.
+func TestSFTPStatusEOFWithLiveSlaveKeepsClient(t *testing.T) {
+	ops := &fakeSFTPOperations{readErr: io.EOF, closed: make(chan struct{})}
+	m := New(t.TempDir())
+	ci := testConn()
+	alive := make(chan struct{})
+	defer close(alive)
+	m.sftpRun = func(context.Context, *ConnInfo) (*sftpSession, SftpAxis) {
+		return &sftpSession{ops: ops, processDone: alive}, SftpAxis{
+			State: AxisUp, RealPath: "/home/mike", PathStyle: "posix", ProbedAt: time.Now(),
+		}
+	}
+	if _, err := m.ProbeSFTP(context.Background(), ci, false); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.SFTPRead(context.Background(), ci, "/tmp/file", 0, 10)
+	if errors.Is(err, ErrSFTPClientDead) {
+		t.Fatalf("a status EOF from a live slave retired the client: %v", err)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("read error = %v, want the underlying io.EOF", err)
+	}
+	facts, _ := m.Facts(ci)
+	if facts.SFTP.State != AxisUp || ops.closeCount.Load() != 0 {
+		t.Errorf("client retired: facts=%+v closes=%d", facts.SFTP, ops.closeCount.Load())
+	}
+}
