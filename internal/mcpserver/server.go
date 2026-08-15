@@ -149,6 +149,14 @@ func (c *Core) SetOOB(on bool) {
 	_ = paths.RevokeOOB(c.Sess.ID)
 }
 
+// BlockNewSessions reports whether the user has stopped aish opening further
+// SSH sessions. Exported for the Ctrl-] menu (cmd/aish).
+func (c *Core) BlockNewSessions() bool { return c.Mux.NewSessionsBlocked() }
+
+// SetBlockNewSessions turns that block on or off. Operations riding an
+// already-open channel are unaffected; only new sessions are refused.
+func (c *Core) SetBlockNewSessions(on bool) { c.Mux.SetBlockNewSessions(on) }
+
 // Serve listens on socketPath until ctx is canceled. It removes any stale
 // socket first; callers own directory creation and cleanup.
 func Serve(ctx context.Context, core *Core, socketPath string) error {

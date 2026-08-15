@@ -53,28 +53,55 @@ func (c *Core) oobToolAvailability(rt route) map[string]toolAvail {
 	case "in_band":
 		return inBandAvailability(c.remoteDialect(rt))
 	}
+	blocked := c.Mux.NewSessionsBlocked()
 	f, ok := c.Mux.Facts(rt.ci)
 	if !ok {
+		if blocked {
+			return blockedAvailability()
+		}
 		// Not probed yet: report unknown rather than guess. This is honest, not
 		// a tollgate — the first real op still auto-probes (requireTool →
 		// EnsureProbed) and gates correctly. The AI can call probe_host to
 		// resolve these deliberately before planning a workflow.
 		return unknownAvailability("host not probed yet; call probe_host to initialize the out-of-band toolset")
 	}
-	return availability(f)
+	return availability(f, blocked)
+}
+
+// blockedAvailability reports a host aish cannot reach because the user stopped
+// it opening SSH sessions. Reporting "unknown; call probe_host" here would be
+// actively harmful: probing is precisely the blocked operation, so the AI would
+// be invited into the refusal it was meant to avoid.
+func blockedAvailability() map[string]toolAvail {
+	m := map[string]toolAvail{}
+	for _, n := range oobToolNames {
+		m[n] = toolAvail{
+			State:   toolUnavailable,
+			Missing: "an SSH session to this host, which the user has blocked",
+			Detail: "the user turned on the Ctrl-] block on new SSH sessions, so aish will not open a channel here. " +
+				"Do not call probe_host — it is blocked too. Use run_command for visible work in the shared terminal, " +
+				"or ask the user to lift the block",
+		}
+	}
+	return m
 }
 
 // availability derives per-tool state from the independent shell and SFTP
 // axes. Shell-up hosts keep the default shell-first toolset. After a conclusive
 // shell failure, only implemented SFTP file primitives can become available;
 // command-backed exec/search tools remain unavailable.
-func availability(f sshmux.HostFacts) map[string]toolAvail {
+// A live channel is unaffected by the block — it is already open, and the tools
+// riding it cost nothing more. Only states that would need a NEW session change.
+func availability(f sshmux.HostFacts, blocked bool) map[string]toolAvail {
 	switch f.Shell.State {
 	case sshmux.AxisUp:
 		return capabilityAvailability(f.Shell.Caps)
 	case sshmux.AxisDown:
-		return dialectUnavailability(f)
+		return dialectUnavailability(f, blocked)
 	default:
+		if blocked {
+			return blockedAvailability()
+		}
 		return unknownAvailability("host not probed yet; call probe_host to initialize the out-of-band toolset")
 	}
 }
@@ -93,7 +120,7 @@ func unknownAvailability(detail string) map[string]toolAvail {
 // "unavailable" and must never repeat the "call probe_host to initialize"
 // invitation — that phrasing is what made models re-probe a host forever. A
 // still-retryable failure stays "unknown", but says plainly what a retry costs.
-func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
+func dialectUnavailability(f sshmux.HostFacts, blocked bool) map[string]toolAvail {
 	if !f.Shell.Sticky {
 		detail := "a probe of this host already failed"
 		if f.Shell.Reason != "" {
@@ -120,14 +147,26 @@ func dialectUnavailability(f sshmux.HostFacts) map[string]toolAvail {
 		// and the visible in-band fallback is POSIX too (see inBandAvailability).
 		m[n] = toolAvail{State: toolUnavailable, Missing: missing, Detail: detail}
 	}
-	mergeSFTPAvailability(m, f.SFTP)
+	mergeSFTPAvailability(m, f.SFTP, blocked)
 	return m
 }
 
-func mergeSFTPAvailability(m map[string]toolAvail, axis sshmux.SftpAxis) {
+func mergeSFTPAvailability(m map[string]toolAvail, axis sshmux.SftpAxis, blocked bool) {
 	allFileTools := append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...)
 	switch axis.State {
 	case sshmux.AxisUnknown:
+		// A retained client would still serve these, but there isn't one yet and
+		// opening the subsystem is a new session — exactly what is blocked.
+		if blocked {
+			for _, name := range allFileTools {
+				m[name] = toolAvail{
+					State:   toolUnavailable,
+					Missing: "an SFTP subsystem, which would need a new SSH session the user has blocked",
+					Detail:  "the shell route is conclusively unavailable and the Ctrl-] block prevents opening SFTP. Use run_command, or ask the user to lift the block",
+				}
+			}
+			return
+		}
 		detail := "the POSIX shell route is conclusively unavailable; the first eligible file operation may open the SFTP subsystem, which can require approval or MFA, and the result will be cached"
 		for _, name := range allFileTools {
 			m[name] = toolAvail{State: toolUnknown, Detail: detail}

@@ -358,13 +358,17 @@ func (m *Mux) ChannelRun(ci *ConnInfo, script string, timeout time.Duration) (*C
 	opened := false
 	var finishAttempt func()
 	if ch == nil {
-		finishAttempt = m.BeginSessionAttempt(ci, SessionAttemptShell)
+		var err error
+		finishAttempt, err = m.BeginSessionAttempt(ci, SessionAttemptShell)
+		if err != nil {
+			m.chMu.Unlock()
+			return nil, err
+		}
 		defer func() {
 			if finishAttempt != nil {
 				finishAttempt()
 			}
 		}()
-		var err error
 		ch, err = m.openChannel(ci)
 		if err != nil {
 			m.chMu.Unlock()

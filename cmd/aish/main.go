@@ -308,14 +308,19 @@ func runMain(args []string) int {
 		if bar.Enabled() {
 			barState = "on"
 		}
+		blockState := "off"
+		if core.BlockNewSessions() {
+			blockState = "ON — no new SSH sessions"
+		}
 		// Keep this in the order the entries are listed: it is rendered
 		// verbatim as the [r/o/b/…] hint under the menu.
-		accept := "robcvlk"
+		accept := "robmcvlk"
 		lines := []string{
 			"aish menu:",
 			"  [r] rename session",
 			fmt.Sprintf("  [o] out-of-band ops (currently %s)", oobState),
 			fmt.Sprintf("  [b] status bar (currently %s)", barState),
+			fmt.Sprintf("  [m] block new SSH sessions / 2FA prompts (currently %s)", blockState),
 			fmt.Sprintf("  [c] connected AI clients (%d)", core.ClientCount()),
 			"  [v] version info",
 			"  [l] recent out-of-band activity",
@@ -364,6 +369,16 @@ func runMain(args []string) int {
 				sess.Notify("status bar ENABLED")
 			} else {
 				sess.Notify("status bar DISABLED — the bottom row is returned to the shell")
+			}
+		case 'm':
+			on := !core.BlockNewSessions()
+			core.SetBlockNewSessions(on)
+			if on {
+				sess.Notify("blocking new SSH sessions — no more 2FA prompts from aish. " +
+					"The AI keeps using any channel already open; probes, background commands " +
+					"and channel reopens are refused until you turn this off")
+			} else {
+				sess.Notify("new SSH sessions allowed again — opening one may prompt for 2FA")
 			}
 		case 'c':
 			clients := core.ClientLines()

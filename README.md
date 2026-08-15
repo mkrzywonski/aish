@@ -475,6 +475,23 @@ by pressing it twice.
 - **`o` — toggle out-of-band ops.** Flips invisible operation on/off for the
   running session. Turning it on is the same grant as `--oob` or answering
   `a` to an out-of-band prompt.
+- **`m` — block new SSH sessions.** A stop button for MFA prompts. AISH opens
+  one shared channel per host, so a protected host normally costs a single
+  push — but a confused AI can keep paying it: a forced re-probe on a host with
+  no channel, a deep or SFTP probe, a background command, or reopening a channel
+  that timed out each start a new SSH session. Turn this on and AISH opens no
+  more of them.
+
+  Everything riding a channel that is *already* open keeps working — file reads
+  and writes, grep, search, stat, directory listings and foreground `exec` — so
+  you keep the out-of-band tooling you already paid for. Only the operations
+  that would need a new session are refused, with an error that tells the AI
+  retrying will not help. `run_command` is unaffected. Session-scoped, off by
+  default, and nothing is written to disk.
+
+  Like the `sudo` refusal this is a guardrail, not a boundary: it stops AISH
+  from opening sessions, not you, and an AI that types `ssh` through
+  `run_command` still reaches the host — visibly, in the shared terminal.
 - **`c` — connected AI clients.** Lists every live MCP connection: the client
   name and version it reports, the identity it declared when it asked for
   access, the process the kernel verified on the other end of the socket, and

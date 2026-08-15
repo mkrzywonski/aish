@@ -46,6 +46,10 @@ type Mux struct {
 	attemptDebounce time.Duration
 	attemptTimer    *time.Timer
 	attemptChanged  func()
+	// blockNew stops aish opening further slave sessions (see
+	// ErrNewSessionsBlocked). It lives beside the attempt bookkeeping because
+	// it gates the same choke point that feeds the 2FA status warning.
+	blockNew bool
 }
 
 func New(sessionDir string) *Mux {

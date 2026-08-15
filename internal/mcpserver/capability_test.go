@@ -167,7 +167,7 @@ func TestSFTPAvailabilityMerge(t *testing.T) {
 	t.Run("up with atomic rename", func(t *testing.T) {
 		facts := base
 		facts.SFTP = sshmux.SftpAxis{State: sshmux.AxisUp, Extensions: []string{"posix-rename@openssh.com"}}
-		av := availability(facts)
+		av := availability(facts, false)
 		for _, tool := range append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...) {
 			if !av[tool].Available() {
 				t.Errorf("%s = %+v, want available", tool, av[tool])
@@ -182,7 +182,7 @@ func TestSFTPAvailabilityMerge(t *testing.T) {
 	t.Run("up without atomic rename", func(t *testing.T) {
 		facts := base
 		facts.SFTP = sshmux.SftpAxis{State: sshmux.AxisUp}
-		av := availability(facts)
+		av := availability(facts, false)
 		for _, tool := range sftpReadToolNames {
 			if !av[tool].Available() {
 				t.Errorf("%s = %+v, want available", tool, av[tool])
@@ -197,7 +197,7 @@ func TestSFTPAvailabilityMerge(t *testing.T) {
 	t.Run("cached down", func(t *testing.T) {
 		facts := base
 		facts.SFTP = sshmux.SftpAxis{State: sshmux.AxisDown, Reason: "subsystem disabled"}
-		av := availability(facts)
+		av := availability(facts, false)
 		for _, tool := range append(append([]string(nil), sftpReadToolNames...), sftpWriteToolNames...) {
 			if av[tool].State != toolUnavailable || !strings.Contains(av[tool].Detail, "force=true") {
 				t.Errorf("%s = %+v, want cached-down guidance", tool, av[tool])
@@ -470,6 +470,47 @@ func TestValidateAbsolutePathShapeRecognizesBothTargetStyles(t *testing.T) {
 	for _, path := range []string{"", "relative/file", `C:file`, `\\server\share\file`} {
 		if err := validateAbsolutePathShape(path); err == nil {
 			t.Errorf("validateAbsolutePathShape(%q) succeeded", path)
+		}
+	}
+}
+
+// With the block on, an unprobed host must not be reported as "unknown; call
+// probe_host" — probing is the blocked operation, so that advice would send the
+// AI straight into the refusal.
+func TestBlockedHostReportsUnavailableNotUnknown(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "duo.example", User: "mk31", Port: "22", Sock: "/run/aish/cm-duo"}
+	c.Mux.SetBlockNewSessions(true)
+
+	av := c.oobToolAvailability(route{via: "controlmaster", ci: ci, host: "duo.example"})
+	for _, tool := range []string{"file_read", "exec", "file_write"} {
+		if av[tool].State != toolUnavailable {
+			t.Errorf("%s state = %q, want %q", tool, av[tool].State, toolUnavailable)
+		}
+		if strings.Contains(av[tool].Detail, "call probe_host to initialize") {
+			t.Errorf("%s still invites the blocked probe: %q", tool, av[tool].Detail)
+		}
+		if !strings.Contains(av[tool].Detail, "Ctrl-]") {
+			t.Errorf("%s does not name the block: %q", tool, av[tool].Detail)
+		}
+	}
+}
+
+// A channel that is already open costs nothing more, so the block must leave
+// its tools alone — that is the entire point of gating new sessions only.
+func TestBlockLeavesAnOpenChannelsToolsAvailable(t *testing.T) {
+	c := localOOBCore(t)
+	ci := &sshmux.ConnInfo{Host: "duo.example", User: "mk31", Port: "22", Sock: "/run/aish/cm-duo2"}
+	c.Mux.NoteShellUsable(ci, sshmux.Capabilities{
+		Hostname: "duo.example", HasBase64: true, Base64D: true,
+		StatC: true, HasFind: true, HasGrep: true,
+	})
+	c.Mux.SetBlockNewSessions(true)
+
+	av := c.oobToolAvailability(route{via: "controlmaster", ci: ci, host: "duo.example"})
+	for _, tool := range []string{"file_read", "file_write", "exec", "file_grep"} {
+		if av[tool].State != toolAvailable {
+			t.Errorf("%s on a live channel = %q, want available (%s)", tool, av[tool].State, av[tool].Detail)
 		}
 	}
 }

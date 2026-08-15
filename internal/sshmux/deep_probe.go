@@ -191,6 +191,12 @@ func (m *Mux) DeepProbe(ctx context.Context, ci *ConnInfo, force bool) (DeepProb
 			return DeepProbeResult{}, ctx.Err()
 		}
 	}
+	// Check the block before the force branch below: a refused probe must not
+	// discard cached identity on its way to failing.
+	if m.NewSessionsBlocked() {
+		m.deepMu.Unlock()
+		return DeepProbeResult{}, blockedSessionError(ci, SessionAttemptDeep)
+	}
 	if force {
 		m.forgetDeepFacts(ci)
 	} else if result, ok := m.CachedDeepProbe(ci); ok {
@@ -202,7 +208,15 @@ func (m *Mux) DeepProbe(ctx context.Context, ci *ConnInfo, force bool) (DeepProb
 	m.deepFlights[ci.Sock] = flight
 	m.deepMu.Unlock()
 
-	finishAttempt := m.BeginSessionAttempt(ci, SessionAttemptDeep)
+	finishAttempt, attemptErr := m.BeginSessionAttempt(ci, SessionAttemptDeep)
+	if attemptErr != nil {
+		// Blocked between the check above and here; release any waiters.
+		m.deepMu.Lock()
+		delete(m.deepFlights, ci.Sock)
+		close(flight.done)
+		m.deepMu.Unlock()
+		return DeepProbeResult{}, attemptErr
+	}
 	result := executeDeepProbe(ctx, ci, m.deepRun)
 	finishAttempt()
 	result = m.noteDeepProbe(ci, result)

@@ -230,6 +230,14 @@ func (m *Mux) ProbeSFTP(ctx context.Context, ci *ConnInfo, force bool) (SFTPProb
 			return SFTPProbeResult{Axis: axis, Cached: true}, nil
 		}
 	}
+	// Check the block BEFORE registering a flight or tearing anything down: a
+	// refused probe must not close a healthy retained client or discard cached
+	// facts on its way to failing. BeginSessionAttempt refuses again below and
+	// remains the authority; this is only about not damaging state first.
+	if m.NewSessionsBlocked() {
+		m.sftpMu.Unlock()
+		return SFTPProbeResult{}, blockedSessionError(ci, SessionAttemptSFTP)
+	}
 	flight := &sftpFlight{done: make(chan struct{})}
 	m.sftpFlights[ci.Sock] = flight
 	oldSession := m.sftpSessions[ci.Sock]
@@ -243,7 +251,16 @@ func (m *Mux) ProbeSFTP(ctx context.Context, ci *ConnInfo, force bool) (SFTPProb
 		m.forgetSftpFacts(ci)
 	}
 
-	finishAttempt := m.BeginSessionAttempt(ci, SessionAttemptSFTP)
+	finishAttempt, attemptErr := m.BeginSessionAttempt(ci, SessionAttemptSFTP)
+	if attemptErr != nil {
+		// Blocked between the check above and here. Retire the flight so
+		// concurrent waiters are released rather than left hanging on it.
+		m.sftpMu.Lock()
+		delete(m.sftpFlights, ci.Sock)
+		close(flight.done)
+		m.sftpMu.Unlock()
+		return SFTPProbeResult{}, attemptErr
+	}
 	var session *sftpSession
 	var axis SftpAxis
 	func() {

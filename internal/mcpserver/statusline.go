@@ -32,7 +32,10 @@ func (c *Core) StatusLine() string {
 		name = c.Sess.ID
 	}
 	if attempt, ok := c.Mux.VisibleSessionAttempt(); ok {
-		return sessionAttemptStatus(attempt)
+		// The moment the warning appears is the moment the stop button is
+		// wanted, so advertise it here rather than only in the menu — but only
+		// when it fits, because nothing in this line is worth truncating for it.
+		return sessionAttemptStatus(attempt, c.Term.Screen.Snapshot().Cols)
 	}
 	if c.Sess.PromptActive() {
 		return inputRequiredStatus()
@@ -60,7 +63,7 @@ func inputRequiredStatus() string {
 	return "AISH INPUT REQUIRED | answer the prompt above | ESC CANCELS"
 }
 
-func sessionAttemptStatus(attempt sshmux.SessionAttempt) string {
+func sessionAttemptStatus(attempt sshmux.SessionAttempt, cols int) string {
 	target := attempt.Host
 	if attempt.User != "" {
 		target = attempt.User + "@" + target
@@ -69,6 +72,12 @@ func sessionAttemptStatus(attempt sshmux.SessionAttempt) string {
 	if attempt.Count > 1 {
 		count = fmt.Sprintf(" (%d sessions)", attempt.Count)
 	}
-	return "AISH OPENING SSH: 2FA MAY BE REQUESTED" + count + " | " +
+	line := "AISH OPENING SSH: 2FA MAY BE REQUESTED" + count + " | " +
 		string(attempt.Kind) + " -> " + target + " | VERIFY BEFORE APPROVING"
+	// Purely additive: the warning and its target must never lose characters to
+	// make room for a hint about a menu that is always reachable anyway.
+	if hint := " | Ctrl-] m STOPS"; cols > 0 && len(line)+len(hint) <= cols {
+		line += hint
+	}
+	return line
 }

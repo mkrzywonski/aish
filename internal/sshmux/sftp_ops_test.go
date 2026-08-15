@@ -639,3 +639,36 @@ func TestSFTPStatusEOFWithLiveSlaveKeepsClient(t *testing.T) {
 		t.Errorf("client retired: facts=%+v closes=%d", facts.SFTP, ops.closeCount.Load())
 	}
 }
+
+// A blocked SFTP probe must fail without collateral damage. Forcing tears down
+// the retained client and forgets the axis before reopening, so a refusal that
+// arrived too late would destroy a working client it was never allowed to
+// replace — turning a protective block into an outage.
+func TestBlockedSFTPProbeLeavesRetainedClientIntact(t *testing.T) {
+	ops := &fakeSFTPOperations{readData: []byte("still here")}
+	m, ci := installFakeSFTPWithExtensions(t, "posix", []string{"posix-rename@openssh.com"}, ops)
+
+	m.SetBlockNewSessions(true)
+	// A cache read opens nothing, so the block must not touch it.
+	cached, err := m.ProbeSFTP(context.Background(), ci, false)
+	if err != nil || !cached.Cached || cached.Axis.State != AxisUp {
+		t.Fatalf("blocked a probe that only read cache: %+v err=%v", cached, err)
+	}
+	// Forcing would close the client and reopen the subsystem, so it is refused.
+	if _, err := m.ProbeSFTP(context.Background(), ci, true); !errors.Is(err, ErrNewSessionsBlocked) {
+		t.Fatalf("ProbeSFTP(force=true) = %v, want ErrNewSessionsBlocked", err)
+	}
+	if ops.closeCount.Load() != 0 {
+		t.Errorf("the retained client was closed by a refused probe (%d closes)", ops.closeCount.Load())
+	}
+	facts, ok := m.Facts(ci)
+	if !ok || facts.SFTP.State != AxisUp {
+		t.Fatalf("a refused probe damaged the cached axis: %+v", facts.SFTP)
+	}
+
+	// The whole point: file operations keep working over the client we kept.
+	read, err := m.SFTPRead(context.Background(), ci, "/tmp/file", 0, 32)
+	if err != nil || string(read.Data) != "still here" {
+		t.Fatalf("retained client stopped serving while blocked: %+v err=%v", read, err)
+	}
+}

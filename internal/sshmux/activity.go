@@ -1,11 +1,28 @@
 package sshmux
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
 
 const sessionAttemptDebounce = 500 * time.Millisecond
+
+// ErrNewSessionsBlocked reports that the user has stopped aish from opening
+// further SSH sessions for this aish session.
+//
+// The motivating case is a host with per-session MFA. One shared channel means
+// one push per host, which is a fine price — but a confused AI can keep paying
+// it: a forced re-probe, a deep or SFTP probe, a background command, or a
+// channel that timed out and gets reopened all start a new slave session. Each
+// one rings the user's phone. This is the stop button for that.
+//
+// It is a guardrail, not a boundary, and holds exactly the same status as the
+// privilege-escalation refusal: it stops AISH from opening sessions. It cannot
+// stop the human's own shell, and an AI that types `ssh` through run_command
+// still reaches the host — visibly, in the shared terminal, which is the point.
+var ErrNewSessionsBlocked = errors.New("new SSH sessions are blocked for this aish session")
 
 // SessionAttemptKind describes why aish is opening a new SSH slave session.
 // The value is user-facing in the status bar.
@@ -42,15 +59,54 @@ func (m *Mux) SetSessionAttemptChanged(fn func()) {
 	m.attemptMu.Unlock()
 }
 
-// BeginSessionAttempt records a new ControlMaster slave session. The returned
-// function is idempotent and must be called when session startup has succeeded,
-// failed, or timed out.
-func (m *Mux) BeginSessionAttempt(ci *ConnInfo, kind SessionAttemptKind) func() {
+// SetBlockNewSessions turns the stop button on or off for this aish session.
+// Memory-only and session-scoped by design: it is an in-the-moment reaction to
+// a misbehaving client, not a policy worth persisting or scoping per host.
+func (m *Mux) SetBlockNewSessions(on bool) {
+	m.attemptMu.Lock()
+	m.blockNew = on
+	m.attemptMu.Unlock()
+}
+
+// NewSessionsBlocked reports whether the stop button is on.
+func (m *Mux) NewSessionsBlocked() bool {
+	m.attemptMu.Lock()
+	defer m.attemptMu.Unlock()
+	return m.blockNew
+}
+
+// blockedSessionError explains the refusal to whoever reads it. It names the
+// operation and target, states plainly that retrying will not help, and points
+// at the human — a model that treats this as a transient failure would spin.
+func blockedSessionError(ci *ConnInfo, kind SessionAttemptKind) error {
+	target := ci.Host
+	if ci.User != "" {
+		target = ci.User + "@" + target
+	}
+	return fmt.Errorf("%w: opening one for %s -> %s is refused because the user turned on the "+
+		"Ctrl-] block after AISH opened too many sessions. Tools that use an already-open channel "+
+		"still work. Retrying will not help and re-probing will not clear it; ask the user to lift "+
+		"the block if this operation is genuinely necessary", ErrNewSessionsBlocked, string(kind), target)
+}
+
+// BeginSessionAttempt records a new ControlMaster slave session, or refuses it
+// when the user has blocked new sessions. The returned function is idempotent
+// and must be called when session startup has succeeded, failed, or timed out.
+//
+// Refusing HERE, rather than at each caller, is deliberate: every path that
+// opens a slave session must register the attempt to appear in the status bar,
+// so a path that skips this gate is already a bug that shows up as a missing
+// 2FA warning. One choke point cannot be forgotten by a later caller.
+func (m *Mux) BeginSessionAttempt(ci *ConnInfo, kind SessionAttemptKind) (func(), error) {
 	if ci == nil {
-		return func() {}
+		return func() {}, nil
 	}
 
 	m.attemptMu.Lock()
+	if m.blockNew {
+		m.attemptMu.Unlock()
+		return nil, blockedSessionError(ci, kind)
+	}
 	m.attemptNext++
 	id := m.attemptNext
 	entry := sessionAttemptEntry{
@@ -74,7 +130,7 @@ func (m *Mux) BeginSessionAttempt(ci *ConnInfo, kind SessionAttemptKind) func() 
 	var once sync.Once
 	return func() {
 		once.Do(func() { m.endSessionAttempt(id) })
-	}
+	}, nil
 }
 
 func (m *Mux) showSessionAttempts() {

@@ -707,7 +707,7 @@ func (c *Core) blockedProbeResult(rt route, f sshmux.HostFacts) probeHostResult 
 		RemotePlatformSource: string(platform.Source),
 		ProbeAttempts:        f.Shell.Attempts,
 		Note:                 f.Note(),
-		OobTools:             availability(f),
+		OobTools:             availability(f, c.Mux.NewSessionsBlocked()),
 	}
 	_, _, res.TargetConfidence = c.hostConfidence(rt)
 	c.setProbeIdentityStatus(&res, rt)
@@ -1538,7 +1538,10 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 			if err != nil {
 				return nil, execResult{}, fmt.Errorf("creating background startup marker: %w", err)
 			}
-			finishAttempt := c.Mux.BeginSessionAttempt(rt.ci, sshmux.SessionAttemptBackground)
+			finishAttempt, err := c.Mux.BeginSessionAttempt(rt.ci, sshmux.SessionAttemptBackground)
+			if err != nil {
+				return nil, execResult{}, err
+			}
 			cmd := c.Mux.Command(context.Background(), rt.ci, command)
 			task, err := c.Tasks.StartAfterMarker(cmd, marker, finishAttempt)
 			if err != nil {

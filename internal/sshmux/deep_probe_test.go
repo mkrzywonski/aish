@@ -314,3 +314,32 @@ func TestDeepProbeTracksOneDebouncedSessionAttempt(t *testing.T) {
 		t.Fatal("deep attempt remained visible after completion")
 	}
 }
+
+// Same contract for the deep probe: a refusal must not discard cached identity
+// on its way out, since force forgets it before reopening.
+func TestBlockedDeepProbeKeepsCachedIdentity(t *testing.T) {
+	m := New(t.TempDir())
+	ci := testConn()
+	var calls atomic.Int32
+	m.deepRun = func(_ context.Context, _ *ConnInfo, command string) deepCommandResult {
+		calls.Add(1)
+		marker := strings.Fields(command)[1]
+		return deepCommandResult{Stdout: []byte(marker + " PCTOS=%OS% PCTCOMSPEC=%COMSPEC% PSOS=:OS PSCOMSPEC=:ComSpec SH=/bin/sh\n"), Exit: 0}
+	}
+	seed, err := m.DeepProbe(context.Background(), ci, false)
+	if err != nil || seed.Dialect != DialectPosix {
+		t.Fatalf("seed probe = %+v err=%v", seed, err)
+	}
+
+	m.SetBlockNewSessions(true)
+	if _, err := m.DeepProbe(context.Background(), ci, true); !errors.Is(err, ErrNewSessionsBlocked) {
+		t.Fatalf("forced deep probe while blocked = %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("a blocked probe still ran the remote command (%d calls)", calls.Load())
+	}
+	cached, ok := m.CachedDeepProbe(ci)
+	if !ok || cached.Dialect != DialectPosix {
+		t.Fatalf("a refused forced probe discarded cached identity: %+v ok=%v", cached, ok)
+	}
+}
