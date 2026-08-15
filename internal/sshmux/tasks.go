@@ -44,10 +44,13 @@ func (tb *Table) Start(cmd *exec.Cmd) (*Task, error) {
 	return tb.start(cmd, nil, nil)
 }
 
-// StartAfterMarker launches cmd and calls ready once marker has appeared on
-// stdout, proving the remote shell started after any SSH authentication. The
+// StartAfterMarker launches cmd and calls ready once marker has appeared in its
+// output, proving the remote shell started after any SSH authentication. The
 // marker is removed from captured task output. If startup fails before the
 // marker, ready is still called when the process exits.
+//
+// The marker is written by a printf small enough to reach the pipe in one
+// write, so it arrives contiguous even though stderr shares the stream.
 func (tb *Table) StartAfterMarker(cmd *exec.Cmd, marker []byte, ready func()) (*Task, error) {
 	return tb.start(cmd, marker, ready)
 }
@@ -59,14 +62,19 @@ func (tb *Table) start(cmd *exec.Cmd, marker []byte, ready func()) (*Task, error
 	tb.m[t.ID] = t
 	tb.mu.Unlock()
 
+	// Stdout and Stderr must be the SAME writer value. os/exec reuses one pipe
+	// and one copying goroutine when they compare equal, and opens two of each
+	// when they don't — so handing stderr a different writer would merge the two
+	// streams at chunk boundaries in whatever order the goroutines happened to
+	// run, instead of in the order the remote actually wrote them.
 	var marked *markerWriter
+	out := io.Writer(t.Out)
 	if len(marker) > 0 {
 		marked = &markerWriter{dst: t.Out, marker: append([]byte(nil), marker...), ready: ready}
-		cmd.Stdout = marked
-	} else {
-		cmd.Stdout = t.Out
+		out = marked
 	}
-	cmd.Stderr = t.Out
+	cmd.Stdout = out
+	cmd.Stderr = out
 	if err := cmd.Start(); err != nil {
 		if ready != nil {
 			ready()

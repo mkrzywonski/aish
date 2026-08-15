@@ -81,3 +81,35 @@ func TestTaskWithoutMarkerStillClearsReadiness(t *testing.T) {
 		t.Fatal("process exit did not clear readiness")
 	}
 }
+
+// TestTaskCapturesASingleStream guards the merge. os/exec reuses one pipe and
+// one copying goroutine only while Stdout and Stderr compare equal; give them
+// separate writers and the two streams are spliced together in whatever order
+// the copying goroutines happen to run, not the order the remote wrote them.
+func TestTaskCapturesASingleStream(t *testing.T) {
+	cases := []struct {
+		name   string
+		marker []byte
+	}{
+		{"plain", nil},
+		{"with startup marker", []byte("@READY@\n")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			table := NewTable()
+			cmd := exec.Command("sh", "-c", "true")
+			var err error
+			if tc.marker == nil {
+				_, err = table.Start(cmd)
+			} else {
+				_, err = table.StartAfterMarker(cmd, tc.marker, func() {})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.Stdout != cmd.Stderr {
+				t.Errorf("Stdout (%T) and Stderr (%T) differ; os/exec will open two pipes and reorder the merged output", cmd.Stdout, cmd.Stderr)
+			}
+		})
+	}
+}
