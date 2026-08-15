@@ -475,6 +475,17 @@ by pressing it twice.
 - **`o` — toggle out-of-band ops.** Flips invisible operation on/off for the
   running session. Turning it on is the same grant as `--oob` or answering
   `a` to an out-of-band prompt.
+- **`c` — connected AI clients.** Lists every live MCP connection: the client
+  name and version it reports, the identity it declared when it asked for
+  access, the process the kernel verified on the other end of the socket, and
+  how long it has been connected. Declared and verified are shown separately
+  on purpose — the first is a claim, the second is not.
+- **`v` — version info.** This session's AISH build and the binary it is
+  running from, plus the version every connected client reports. When a client
+  is verifiably an AISH process and its version differs from the session's, the
+  view says so: that is the shape of the stale-proxy problem, where a long-lived
+  AI client still serves the tool list it loaded before you installed a new
+  build. Restarting the AI client clears it.
 - **`l` — recent out-of-band activity.** Prints the last invisible operations:
   time, client, tool, route, host, the path or command, and how it ended.
   Everything else in the session you already watched happen; this is the part

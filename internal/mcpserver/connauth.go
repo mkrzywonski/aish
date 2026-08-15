@@ -29,6 +29,11 @@ type connAuth struct {
 	denied  bool
 	grantID string   // non-empty once the connection is authorized
 	peer    peerInfo // kernel-verified peer creds of this connection
+	// declared is the client's self-reported identity from request_access,
+	// retained so the Ctrl-] client list can show the same pairing the approval
+	// prompt did: what the client claims, beside what the kernel verified.
+	declared string
+	since    time.Time // accepted at
 }
 
 type clientGrant struct {
@@ -64,11 +69,13 @@ func (c *Core) forgetConn(ss *mcp.ServerSession) {
 
 // setPeer records the kernel-verified peer credentials for a connection,
 // captured at accept time and shown (alongside the client's self-declared
-// identity) in the approval prompt.
+// identity) in the approval prompt. It also stamps the connection time, which
+// is the only ordering the session has over its clients.
 func (c *Core) setPeer(ss *mcp.ServerSession, p peerInfo) {
 	st := c.connState(ss)
 	st.mu.Lock()
 	st.peer = p
+	st.since = time.Now()
 	st.mu.Unlock()
 }
 
@@ -141,6 +148,9 @@ func (c *Core) requestAccess(ctx context.Context, req *mcp.CallToolRequest, args
 	st := c.connState(req.Session)
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if args.ClientDescription != "" {
+		st.declared = args.ClientDescription
+	}
 	if st.denied {
 		return nil, authproto.RequestAccessResult{}, errors.New("the user denied this client access; reconnect to ask again")
 	}

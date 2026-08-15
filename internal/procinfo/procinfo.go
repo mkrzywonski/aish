@@ -31,6 +31,11 @@ func Name(pid int) string {
 	}
 }
 
+// Comm returns just the kernel's name for pid, with no argv[0] enrichment, so
+// callers can test what a process actually IS rather than render it. Returns ""
+// when pid can't be read.
+func Comm(pid int) string { return readComm(pid) }
+
 func readComm(pid int) string {
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
 	if err != nil {

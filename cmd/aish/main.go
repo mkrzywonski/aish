@@ -308,12 +308,16 @@ func runMain(args []string) int {
 		if bar.Enabled() {
 			barState = "on"
 		}
-		accept := "robkl"
+		// Keep this in the order the entries are listed: it is rendered
+		// verbatim as the [r/o/b/…] hint under the menu.
+		accept := "robcvlk"
 		lines := []string{
 			"aish menu:",
 			"  [r] rename session",
 			fmt.Sprintf("  [o] out-of-band ops (currently %s)", oobState),
 			fmt.Sprintf("  [b] status bar (currently %s)", barState),
+			fmt.Sprintf("  [c] connected AI clients (%d)", core.ClientCount()),
+			"  [v] version info",
 			"  [l] recent out-of-band activity",
 			"  [k] revoke client access",
 		}
@@ -361,6 +365,15 @@ func runMain(args []string) int {
 			} else {
 				sess.Notify("status bar DISABLED — the bottom row is returned to the shell")
 			}
+		case 'c':
+			clients := core.ClientLines()
+			if len(clients) == 0 {
+				sess.Notify("no MCP clients are connected to this session")
+				return
+			}
+			sess.Notify("connected AI clients:\r\n  %s", strings.Join(clients, "\r\n  "))
+		case 'v':
+			sess.Notify("versions:\r\n  %s", strings.Join(core.VersionLines(), "\r\n  "))
 		case 'l':
 			// Rendered through the console, never the PTY: this is aish
 			// talking to the human, not something the shell said.

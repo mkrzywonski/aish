@@ -158,6 +158,11 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 		return err
 	}
 
+	// Initialize under the locks that guard these maps. Serve runs on its own
+	// goroutine while the Ctrl-] menu can inspect the session at any moment,
+	// including during startup, so an unsynchronized lazy init here races every
+	// reader that correctly takes the mutex.
+	core.authMu.Lock()
 	if core.conns == nil {
 		core.conns = map[*mcp.ServerSession]*connAuth{}
 	}
@@ -167,9 +172,12 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	if core.challenges == nil {
 		core.challenges = map[string]authChallenge{}
 	}
+	core.authMu.Unlock()
+	core.confirmMu.Lock()
 	if core.confirmedTargets == nil {
 		core.confirmedTargets = map[string]bool{}
 	}
+	core.confirmMu.Unlock()
 	server := mcp.NewServer(&mcp.Implementation{Name: "aish", Version: core.Version}, nil)
 	registerTools(server, core)
 	registerRemoteTools(server, core)
