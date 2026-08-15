@@ -11,7 +11,7 @@ buildGoModule {
 
   # Changes only when go.mod dependencies change; nix prints the new value
   # on mismatch.
-  vendorHash = "sha256-2APx8BpXR2+PvXpyNDlfEVO1AwVrob6QmEaWV4cS4/Q=";
+  vendorHash = "sha256-bvPJsvMb2PCbruScI5QQ4YxV+4HZzx4+Qlr17YZgSjY=";
 
   subPackages = [ "cmd/aish" ];
 
