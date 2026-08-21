@@ -1,0 +1,154 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"ai-ssh/internal/aicmdwire"
+)
+
+const defaultExecTimeout = 30 * time.Second
+
+// execDispatcher wires incoming exec/exec_poll wire frames to the
+// persistent shell (foreground) or the background task table (background).
+type execDispatcher struct {
+	kind shellKind
+
+	mu    sync.Mutex // guards shell: swapped out for a fresh one after Run reports it dead
+	shell *shellSession
+
+	tasks *backgroundTasks
+}
+
+func newExecDispatcher(kind shellKind) *execDispatcher {
+	return &execDispatcher{kind: kind, tasks: newBackgroundTasks()}
+}
+
+// currentShell returns a live persistent shell, starting a fresh one if
+// there isn't one yet or the last one died (timed out or exited
+// unexpectedly). A fresh shell loses cwd/env state from the old one — the
+// same tradeoff internal/sshmux/channel.go accepts for a dead SSH channel.
+// Freshly-started shells inherit the console menu's current custom env vars
+// (access.environ) at spawn time.
+func (d *execDispatcher) currentShell() (*shellSession, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.shell == nil || d.shell.dead.Load() {
+		s, err := startShell(d.kind)
+		if err != nil {
+			return nil, err
+		}
+		d.shell = s
+	}
+	return d.shell, nil
+}
+
+// liveShell returns the current shell without starting one, or nil if none
+// is running (or the last one died) — used by the menu to push a var into
+// an already-running shell for immediate effect, where starting a fresh
+// shell just to set a var would be surprising.
+func (d *execDispatcher) liveShell() *shellSession {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.shell == nil || d.shell.dead.Load() {
+		return nil
+	}
+	return d.shell
+}
+
+func (d *execDispatcher) handle(wc *aicmdwire.Conn, f aicmdwire.Frame) {
+	switch f.Type {
+	case "exec":
+		d.handleExec(wc, f)
+	case "exec_poll":
+		d.handleExecPoll(wc, f)
+	}
+}
+
+func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
+	var req aicmdwire.ExecData
+	if err := json.Unmarshal(f.Data, &req); err != nil {
+		return
+	}
+
+	// exec_poll (checking on an already-started task) is exempt: only
+	// starting new work is gated, not observing what's already running.
+	if reason := access.checkExec(); reason != "" {
+		send(wc, "exec_result", f.ID, aicmdwire.ExecResultData{Error: reason})
+		return
+	}
+
+	command := req.Command
+	if req.Cwd != "" {
+		command = withCwd(d.kind, req.Cwd, command)
+	}
+
+	if req.Background {
+		id, err := d.tasks.Start(d.kind, command, "")
+		result := aicmdwire.ExecResultData{TaskID: id}
+		if err != nil {
+			result = aicmdwire.ExecResultData{Error: err.Error()}
+		}
+		send(wc, "exec_result", f.ID, result)
+		return
+	}
+
+	shell, err := d.currentShell()
+	if err != nil {
+		send(wc, "exec_result", f.ID, aicmdwire.ExecResultData{Error: err.Error()})
+		return
+	}
+
+	timeout := defaultExecTimeout
+	if req.TimeoutMs > 0 {
+		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
+	}
+
+	output, exitCode, timedOut, err := shell.Run(command, timeout)
+	result := aicmdwire.ExecResultData{Output: output, TimedOut: timedOut}
+	if err != nil {
+		result.Error = err.Error()
+	} else if !timedOut {
+		result.ExitCode = &exitCode
+	}
+	send(wc, "exec_result", f.ID, result)
+}
+
+func (d *execDispatcher) handleExecPoll(wc *aicmdwire.Conn, f aicmdwire.Frame) {
+	var req aicmdwire.ExecPollData
+	if err := json.Unmarshal(f.Data, &req); err != nil {
+		return
+	}
+	running, output, next, code, err := d.tasks.Poll(req.TaskID, req.Cursor)
+	result := aicmdwire.ExecPollResultData{Running: running, Output: output, NextCursor: next, ExitCode: code}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	send(wc, "exec_poll_result", f.ID, result)
+}
+
+// withCwd folds a one-time working-directory change into command as a
+// single line, so shellSession.Run's suffix-based echo detection (which
+// expects one logical command) still sees exactly what was typed. Applies
+// only to that one submission — the persistent shell's whole point is that
+// state, cwd included, carries between commands, so this isn't restored
+// afterward.
+func withCwd(kind shellKind, cwd, command string) string {
+	switch kind {
+	case shellPowerShell:
+		return fmt.Sprintf("Set-Location -LiteralPath '%s'; %s", strings.ReplaceAll(cwd, "'", "''"), command)
+	default:
+		return fmt.Sprintf(`cd /d "%s" && %s`, cwd, command)
+	}
+}
+
+func send(wc *aicmdwire.Conn, frameType, id string, data any) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	_ = wc.Send(aicmdwire.Frame{Type: frameType, ID: id, Data: b})
+}

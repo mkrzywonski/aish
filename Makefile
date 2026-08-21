@@ -33,10 +33,21 @@ LDFLAGS := -X main.version=$(VERSION)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-.PHONY: build install test vet check fmt version clean
+.PHONY: build install aicmd aicmdd install-aicmdd test vet check fmt version clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o aish ./cmd/aish
+
+# aicmdd is the Linux/WSL half of aicmd — installs alongside aish so
+# `wsl.exe -- aicmdd` (aicmd.exe's default launch path) finds it on PATH.
+aicmdd:
+	go build -ldflags "$(LDFLAGS)" -o aicmdd ./cmd/aicmdd
+
+# aicmd.exe is the Windows half — cross-compiled, copy it to the Windows
+# machine (there's no `make install` target for it; see README/plan doc for
+# the manual copy step).
+aicmd:
+	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o aicmd.exe ./cmd/aicmd
 
 # Usage:  make build && sudo make install
 #
@@ -48,6 +59,15 @@ install:
 	@test -f aish || { echo "no ./aish — run 'make build' as your own user first, so the version stamp is right"; exit 1; }
 	install -m 755 aish $(DESTDIR)$(BINDIR)/aish
 	@echo "installed $(DESTDIR)$(BINDIR)/aish -> $$($(DESTDIR)$(BINDIR)/aish version)"
+
+# Separate from install: aicmdd needs to land on PATH (same one-location
+# rule as aish, since `wsl.exe -- aicmdd`, aicmd.exe's default launch path,
+# resolves PATH the way a non-interactive WSL invocation does) but is kept
+# as its own step rather than folded into the primary aish install path.
+install-aicmdd:
+	@test -f aicmdd || { echo "no ./aicmdd — run 'make aicmdd' as your own user first, so the version stamp is right"; exit 1; }
+	install -m 755 aicmdd $(DESTDIR)$(BINDIR)/aicmdd
+	@echo "installed $(DESTDIR)$(BINDIR)/aicmdd -> $$($(DESTDIR)$(BINDIR)/aicmdd --version)"
 
 test:
 	go test ./...
@@ -67,4 +87,4 @@ version:
 	@echo $(VERSION)
 
 clean:
-	rm -f aish
+	rm -f aish aicmdd aicmd.exe
