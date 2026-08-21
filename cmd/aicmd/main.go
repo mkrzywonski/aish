@@ -20,11 +20,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/debug"
 )
 
 var version = "dev"
 
 func main() {
+	version = resolveVersion(version)
+
 	fs := flag.NewFlagSet("aicmd", flag.ExitOnError)
 	sshTarget := fs.String("ssh", "", "spawn the Linux half over ssh instead of wsl.exe, as [user@]hostname")
 	distro := fs.String("distro", "", "WSL distro to use with wsl.exe -d (default distro if empty)")
@@ -59,4 +62,46 @@ func main() {
 		fmt.Fprintln(stderr, "aicmd:", err)
 		os.Exit(1)
 	}
+}
+
+// resolveVersion mirrors cmd/aish/main.go's function of the same name (and
+// cmd/aicmdd/main.go's copy of it): a build without a linker-injected
+// version derives g<revision>[-dirty] from Go's embedded VCS metadata
+// instead of reporting a bare "dev" — the difference between, say, two
+// native `go build`s of different commits that would otherwise both just
+// say "aicmd dev". Duplicated rather than imported since it's unexported in
+// package main in each of those.
+func resolveVersion(stamped string) string {
+	if stamped != "" && stamped != "dev" {
+		return stamped
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	return versionFromSettings(info.Settings)
+}
+
+func versionFromSettings(settings []debug.BuildSetting) string {
+	revision := ""
+	dirty := false
+	for _, setting := range settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value == "true"
+		}
+	}
+	if revision == "" {
+		return "dev"
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	result := "g" + revision
+	if dirty {
+		result += "-dirty"
+	}
+	return result
 }

@@ -81,19 +81,27 @@ func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 		return
 	}
 
-	command := req.Command
-	if req.Cwd != "" {
-		command = withCwd(d.kind, req.Cwd, command)
-	}
-
 	if req.Background {
-		id, err := d.tasks.Start(d.kind, command, "")
+		// Each background command gets its own fresh process (background.go),
+		// which os/exec can point at a working directory natively via
+		// cmd.Dir -- unlike the foreground path below, there's no need (and
+		// real risk: embedding a quoted `cd /d "path" && ...` inside a
+		// string that cmd.exe /c *also* quotes was corrupting paths with
+		// spaces) to fold cwd into the command text here.
+		id, err := d.tasks.Start(d.kind, req.Command, req.Cwd)
 		result := aicmdwire.ExecResultData{TaskID: id}
 		if err != nil {
 			result = aicmdwire.ExecResultData{Error: err.Error()}
 		}
 		send(wc, "exec_result", f.ID, result)
 		return
+	}
+
+	command := req.Command
+	if req.Cwd != "" {
+		// The persistent shell has no equivalent of cmd.Dir to set after the
+		// fact, so this one-time cd has to be textual.
+		command = withCwd(d.kind, req.Cwd, command)
 	}
 
 	shell, err := d.currentShell()

@@ -85,17 +85,30 @@ func newShellSession(kind shellKind, cmd *exec.Cmd) (*shellSession, error) {
 	return s, nil
 }
 
-// mirror reads the shell's combined output, tees every byte straight to
-// this process's own stdout (byte-transparent — the human is watching this
-// console), and separately splits it into complete lines for Run to scan.
+// mirror reads the shell's combined output and splits it into complete
+// lines for Run to scan. It deliberately does not write anything to the
+// console itself — Run decides, per line, whether to mirror it (skipping
+// this session's own nonce-marker plumbing) once it knows the current
+// command's marker text, so mirroring has to happen there instead of here.
 func (s *shellSession) mirror(r io.Reader) {
-	tee := io.TeeReader(r, os.Stdout)
-	sc := bufio.NewScanner(tee)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		s.lines <- sc.Text() // bufio.ScanLines already strips a trailing \r\n
 	}
 	close(s.lines)
+}
+
+// mirrorLine writes one line to the human's console, through the
+// CRLF-normalizing writer (stdout, crlf.go) rather than os.Stdout directly.
+// Real cmd.exe/PowerShell prompt/echo text already arrives as \r\n and so is
+// unaffected by the normalization, but a child process piped through the
+// shell (go build's own "downloading" progress lines, observed live) can
+// emit bare \n, which — unlike text written straight to a real console —
+// does not get an implicit carriage return here, so it needs the same fix
+// as this package's own console output (see crlf.go's doc comment).
+func mirrorLine(line string) {
+	fmt.Fprintln(stdout, line)
 }
 
 // Run submits command to the persistent shell and blocks until its nonce
@@ -112,7 +125,7 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 	nonce := randHex(8)
 	marker := "AICMD@" + nonce + "@"
 
-	var script, markerCmd string
+	var script, markerCmd, resetCmd string
 	switch s.kind {
 	case shellPowerShell:
 		// $LASTEXITCODE only reflects the last NATIVE process's exit code and
@@ -120,8 +133,9 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 		// stale value from whatever native command last set it) — verified
 		// live. Reset it first, then prefer it when a native command actually
 		// set it, falling back to $? (cmdlet success/failure) otherwise.
+		resetCmd = "$global:LASTEXITCODE = $null"
 		markerCmd = fmt.Sprintf(`Write-Host "%s$(if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })@"`, marker)
-		script = "$global:LASTEXITCODE = $null\r\n" + command + "\r\n" + markerCmd + "\r\n"
+		script = resetCmd + "\r\n" + command + "\r\n" + markerCmd + "\r\n"
 	default:
 		markerCmd = "echo " + marker + "%errorlevel%@"
 		script = command + "\r\n" + markerCmd + "\r\n"
@@ -144,23 +158,31 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 				s.dead.Store(true)
 				return strings.Join(out, "\n"), 0, false, fmt.Errorf("shell exited unexpectedly")
 			}
+
+			// Hide this session's own internal plumbing from the visible
+			// mirror — the human never typed the reset line or the marker
+			// command, so seeing them (and their raw "AICMD@<hash>@0@"
+			// expansion) would be confusing noise unrelated to their actual
+			// command. Checked before mirroring anything else below.
+			if resetCmd != "" && strings.HasSuffix(line, resetCmd) {
+				continue // echo of the PowerShell $LASTEXITCODE reset line
+			}
+			if strings.HasSuffix(line, markerCmd) {
+				continue // echo of the marker command itself
+			}
+			if code, ok := parseMarker(line, nonce); ok {
+				return trimTrailingBlankLines(out), code, false, nil // the marker's own expansion — the completion signal, never shown or captured as output
+			}
+
+			mirrorLine(line)
 			if !started {
-				// Skip everything up to and including the echo of our own
-				// command — the shell's startup banner, prompt, and (for
-				// PowerShell) the $LASTEXITCODE reset line's echo all land
-				// here. Suffix match rather than exact match since the
-				// prompt text (unknown, and possibly customized) precedes
-				// the command on the same echoed line.
+				// Everything up to and including the echo of our own
+				// command (the shell's startup banner, prompt) is mirrored
+				// above but not captured as the command's result.
 				if strings.HasSuffix(line, command) {
 					started = true
 				}
 				continue
-			}
-			if code, ok := parseMarker(line, nonce); ok {
-				return trimTrailingBlankLines(out), code, false, nil
-			}
-			if strings.HasSuffix(line, markerCmd) {
-				continue // echo of our own marker command, not real output
 			}
 			out = append(out, line)
 		case <-deadline.C:
