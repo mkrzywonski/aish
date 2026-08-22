@@ -59,6 +59,23 @@ func (d *execDispatcher) liveShell() *shellSession {
 	return d.shell
 }
 
+// liveCWD returns the persistent foreground shell's last-known cwd, or ""
+// if there is no live shell yet. Used to default a background exec call's
+// cwd when the caller didn't specify one: background commands get their
+// own fresh process (background.go) with no persistent-shell state of
+// their own to fall back on otherwise, which previously meant an
+// unspecified cwd silently resolved to this process's own launch
+// directory instead of "wherever the AI thinks it's working" — a real,
+// confusing mismatch found live (a `go build` failed with a misleading
+// "not a module" error instead of an obvious cwd-mismatch signal).
+func (d *execDispatcher) liveCWD() string {
+	shell := d.liveShell()
+	if shell == nil {
+		return ""
+	}
+	return shell.CWD()
+}
+
 func (d *execDispatcher) handle(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	switch f.Type {
 	case "exec":
@@ -88,7 +105,17 @@ func (d *execDispatcher) handleExec(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		// real risk: embedding a quoted `cd /d "path" && ...` inside a
 		// string that cmd.exe /c *also* quotes was corrupting paths with
 		// spaces) to fold cwd into the command text here.
-		id, err := d.tasks.Start(d.kind, req.Command, req.Cwd)
+		//
+		// An unspecified cwd defaults to the persistent foreground shell's
+		// last-known cwd (liveCWD), not this process's own launch
+		// directory -- matching what the AI actually expects ("wherever
+		// the shared shell currently is") instead of silently resolving
+		// somewhere unrelated.
+		cwd := req.Cwd
+		if cwd == "" {
+			cwd = d.liveCWD()
+		}
+		id, err := d.tasks.Start(d.kind, req.Command, cwd)
 		result := aishwinwire.ExecResultData{TaskID: id}
 		if err != nil {
 			result = aishwinwire.ExecResultData{Error: err.Error()}

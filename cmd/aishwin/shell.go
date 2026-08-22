@@ -39,6 +39,9 @@ type shellSession struct {
 	mu    sync.Mutex  // serializes foreground Run calls: one persistent shell, one command at a time
 	lines chan string // complete, \r\n-stripped lines from the reader goroutine
 	dead  atomic.Bool // set on timeout or unexpected exit; Run never reuses a dead shell (mirrors internal/sshmux/channel.go's "dead channels are dropped, never silently reopened" — a timed-out command's late output would otherwise corrupt the next command's capture)
+
+	cwdMu   sync.Mutex // guards lastCwd, read from a different goroutine than Run() writes it from
+	lastCwd string     // the shell's cwd as of its last completed command; see CWD()
 }
 
 // startShell launches the persistent shell and its output-mirroring reader
@@ -81,8 +84,22 @@ func newShellSession(kind shellKind, cmd *exec.Cmd) (*shellSession, error) {
 	}
 
 	s := &shellSession{kind: kind, cmd: cmd, stdin: stdin, lines: make(chan string, 256)}
+	// Best-effort starting value so even the very first background exec
+	// (before any foreground command has run to refresh it) gets a real
+	// cwd instead of falling back to the process's own launch directory.
+	s.lastCwd, _ = os.Getwd()
 	go s.mirror(stdout)
 	return s, nil
+}
+
+// CWD returns the shell's cwd as of its last completed command -- the best
+// available signal for a background exec call that didn't specify its own
+// cwd (background commands get their own fresh process via cmd.Dir, with
+// no persistent-shell state of their own to inherit from otherwise).
+func (s *shellSession) CWD() string {
+	s.cwdMu.Lock()
+	defer s.cwdMu.Unlock()
+	return s.lastCwd
 }
 
 // mirror reads the shell's combined output and splits it into complete
@@ -118,6 +135,10 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 	nonce := randHex(8)
 	marker := "aishwin@" + nonce + "@"
 
+	// The marker line also carries the shell's cwd after the exit code
+	// (aishwin@<nonce>@<exitcode>@<cwd>@) so CWD() has a real answer for
+	// background exec calls that don't specify their own -- Windows paths
+	// don't contain '@', so parseMarker's split is unambiguous.
 	var script, markerCmd, resetCmd string
 	switch s.kind {
 	case shellPowerShell:
@@ -127,10 +148,10 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 		// live. Reset it first, then prefer it when a native command actually
 		// set it, falling back to $? (cmdlet success/failure) otherwise.
 		resetCmd = "$global:LASTEXITCODE = $null"
-		markerCmd = fmt.Sprintf(`Write-Host "%s$(if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })@"`, marker)
+		markerCmd = fmt.Sprintf(`Write-Host "%s$(if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })@$($pwd.Path)@"`, marker)
 		script = resetCmd + "\r\n" + command + "\r\n" + markerCmd + "\r\n"
 	default:
-		markerCmd = "echo " + marker + "%errorlevel%@"
+		markerCmd = "echo " + marker + "%errorlevel%@%cd%@"
 		script = command + "\r\n" + markerCmd + "\r\n"
 	}
 
@@ -163,7 +184,12 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 			if strings.HasSuffix(line, markerCmd) {
 				continue // echo of the marker command itself
 			}
-			if code, ok := parseMarker(line, nonce); ok {
+			if code, cwd, ok := parseMarker(line, nonce); ok {
+				if cwd != "" {
+					s.cwdMu.Lock()
+					s.lastCwd = cwd
+					s.cwdMu.Unlock()
+				}
 				return trimTrailingBlankLines(out), code, false, nil // the marker's own expansion — the completion signal, never shown or captured as output
 			}
 
@@ -186,21 +212,29 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 	}
 }
 
-// parseMarker reports the exit code if line is exactly the expansion of the
-// marker for nonce (e.g. "aishwin@<nonce>@0@") — never the echo of the marker
-// command itself, which contains the unexpanded %errorlevel%/$(...) text and
-// so never matches this exact-prefix check.
-func parseMarker(line, nonce string) (int, bool) {
+// parseMarker reports the exit code and cwd if line is exactly the
+// expansion of the marker for nonce (e.g. "aishwin@<nonce>@0@C:\foo@") —
+// never the echo of the marker command itself, which contains the
+// unexpanded %errorlevel%/$(...) text and so never matches this
+// exact-prefix check.
+func parseMarker(line, nonce string) (code int, cwd string, ok bool) {
 	prefix := "aishwin@" + nonce + "@"
 	if !strings.HasPrefix(line, prefix) {
-		return 0, false
+		return 0, "", false
 	}
 	rest := strings.TrimSuffix(strings.TrimPrefix(line, prefix), "@")
-	code, err := strconv.Atoi(rest)
-	if err != nil {
-		return 0, false
+	codeStr, cwd, found := strings.Cut(rest, "@")
+	if !found {
+		// Older/unexpected form without a cwd segment: still accept the
+		// exit code alone rather than failing the whole marker match.
+		codeStr = rest
+		cwd = ""
 	}
-	return code, true
+	n, err := strconv.Atoi(codeStr)
+	if err != nil {
+		return 0, "", false
+	}
+	return n, cwd, true
 }
 
 // trimTrailingBlankLines drops wholly-blank trailing lines (cmd.exe emits

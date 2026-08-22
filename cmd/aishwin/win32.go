@@ -19,6 +19,7 @@ package main
 
 import (
 	"syscall"
+	"unsafe"
 )
 
 var (
@@ -60,7 +61,10 @@ var (
 	procIsDialogMessageW  = user32.NewProc("IsDialogMessageW")
 	procGetDlgItem        = user32.NewProc("GetDlgItem")
 
-	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
+	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
+	procOpenProcess         = kernel32.NewProc("OpenProcess")
+	procGetExitCodeProcess  = kernel32.NewProc("GetExitCodeProcess")
+	procCloseHandle         = kernel32.NewProc("CloseHandle")
 
 	procGetStockObject = gdi32.NewProc("GetStockObject")
 )
@@ -158,6 +162,9 @@ const (
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+
+	processQueryLimitedInformation = 0x1000
+	stillActive                   = 259
 )
 
 // cwUseDefault is CW_USEDEFAULT (0x80000000 as a 32-bit signed int, i.e.
@@ -190,5 +197,35 @@ func loadCursorArrow() syscall.Handle {
 func getModuleHandle() syscall.Handle {
 	h, _, _ := procGetModuleHandleW.Call(0)
 	return syscall.Handle(h)
+}
+
+// processExited independently checks, via OpenProcess+GetExitCodeProcess,
+// whether pid has actually exited -- a second opinion that doesn't depend
+// on cmd.Wait()'s own bookkeeping. Go's Cmd.Wait() blocks not just on the
+// process exiting but also on its stdout/stderr pipe-copying goroutines
+// seeing EOF, which requires EVERY process holding the pipe's write-end
+// handle to close it; a grandchild spawned by the shell (a compiler's own
+// worker processes, say) that inherits the handle and outlives its parent
+// can leave Wait() blocked indefinitely even though the command a caller
+// actually cares about is long gone (background.go's Poll uses this as a
+// fallback so exec_status doesn't report running:true forever in that
+// case). ok is false if the process handle couldn't be opened at all
+// (already exited and cleaned up, or never existed).
+func processExited(pid int) (exited bool, code int) {
+	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
+	if h == 0 {
+		return true, -1 // no such process -- treat as exited
+	}
+	defer procCloseHandle.Call(h)
+
+	var status uint32
+	r, _, _ := procGetExitCodeProcess.Call(h, uintptr(unsafe.Pointer(&status)))
+	if r == 0 {
+		return false, 0 // couldn't query; don't claim it exited
+	}
+	if status == stillActive {
+		return false, 0
+	}
+	return true, int(status)
 }
 

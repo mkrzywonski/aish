@@ -2,12 +2,21 @@
 
 // screenshot.go: lets the AI see the actual GUI window without asking the
 // human to take a screenshot. A background goroutine polls for a trigger
-// file at a fixed, cross-account-readable path (C:\Users\Public -- the
-// same fix used earlier in this project for the mike/mk31 WSL-visibility
-// split) and, when it appears, captures hwndMain to a PNG at a second fixed
-// path and deletes the trigger. This needs zero changes to aicmdd/the wire
+// file at a cross-account-readable path (C:\Users\Public -- the same fix
+// used earlier in this project for the mike/mk31 WSL-visibility split)
+// and, when it appears, captures hwndMain to a PNG at a second path and
+// deletes the trigger. This needs zero changes to aicmdd/the wire
 // protocol: the AI creates the trigger and downloads the PNG using the
 // already-working exec/file_download tools.
+//
+// The trigger/output paths are scoped by this process's own PID rather
+// than fixed: with a single shared path, every running aishwin.exe watches
+// the same file, so whichever instance's watcher goroutine happens to
+// notice it first "wins" -- observed live, capturing the wrong window
+// entirely when a test instance ran alongside the production one. The
+// AI already has to resolve a target instance's PID to safely address it
+// for anything else (cleanup, task #22's status-bar PID), so requiring
+// the same PID here removes the race instead of just narrowing it.
 
 import (
 	"errors"
@@ -21,10 +30,12 @@ import (
 
 var errNoWindow = errors.New("aishwin: no window to capture (hwndMain is zero-sized or unset)")
 
-const (
-	screenshotTriggerPath = `C:\Users\Public\aishwin-screenshot-request`
-	screenshotOutputPath  = `C:\Users\Public\aishwin-screenshot.png`
+var (
+	screenshotTriggerPath = fmt.Sprintf(`C:\Users\Public\aishwin-screenshot-request-%d`, os.Getpid())
+	screenshotOutputPath  = fmt.Sprintf(`C:\Users\Public\aishwin-screenshot-%d.png`, os.Getpid())
+)
 
+const (
 	pwRenderFullContent = 0x00000002
 	biRGB               = 0
 	dibRGBColors        = 0

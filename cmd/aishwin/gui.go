@@ -41,6 +41,11 @@ var (
 	uiFuncQueue []func()
 
 	onClose func() // set by main; called once when the window is closing
+
+	// onMenuItemAdded is a hook devctl.go (aishwindev build tag only)
+	// replaces to build a label->id registry for unattended AI-driven
+	// testing; a no-op in an ordinary build.
+	onMenuItemAdded = func(label string, id uint16) {}
 )
 
 // NewMenuBar creates an empty top-level menu bar.
@@ -62,6 +67,7 @@ func NewSubmenu(parent syscall.Handle, label string) syscall.Handle {
 func AddMenuItem(menu syscall.Handle, label string, fn func()) {
 	id := AddMenuAction(fn)
 	procAppendMenuW.Call(uintptr(menu), mfString, uintptr(id), uintptr(unsafe.Pointer(utf16ptr(label))))
+	onMenuItemAdded(label, id)
 }
 
 func AddMenuSeparator(menu syscall.Handle) {
@@ -78,6 +84,7 @@ func AddCheckableMenuItem(menu syscall.Handle, label string, initial bool, fn fu
 		flags |= mfChecked
 	}
 	procAppendMenuW.Call(uintptr(menu), flags, uintptr(id), uintptr(unsafe.Pointer(utf16ptr(label))))
+	onMenuItemAdded(label, id)
 	return id
 }
 
@@ -327,6 +334,23 @@ func AddMenuAction(fn func()) uint16 {
 	nextMenuID++
 	menuActions[id] = fn
 	return id
+}
+
+// TriggerMenuAction invokes the action registered under id, as if its menu
+// item had been clicked, returning false if id is unknown. Exists for
+// devctl.go (aishwindev build tag) to drive menu items by label without a
+// real click; harmless in an ordinary build since nothing outside a dev
+// build ever calls it (there is no way to obtain an id without the
+// onMenuItemAdded registry, which stays a no-op there).
+func TriggerMenuAction(id uint16) bool {
+	menuActionsMu.Lock()
+	fn := menuActions[id]
+	menuActionsMu.Unlock()
+	if fn == nil {
+		return false
+	}
+	RunOnUIThread(fn)
+	return true
 }
 
 // Quit closes the main window, ending the message loop.

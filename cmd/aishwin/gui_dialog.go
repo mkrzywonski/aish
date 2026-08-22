@@ -10,6 +10,7 @@
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -50,6 +51,15 @@ var dialogTimeoutMs uint32
 // timeoutSeconds elapses, in which case it returns false (deny), matching
 // the wire protocol's fail-closed contract for an unanswered prompt.
 func AskYesNo(question string, timeoutSeconds int) bool {
+	// devBuild is a compile-time fact (aishwindev build tag), never a
+	// runtime flag: an ordinary aishwin.exe can never accidentally skip
+	// this gate. Auto-approval is still logged loudly to the visible log
+	// view so a human watching a dev build always knows it happened.
+	if devBuild {
+		AppendLog(fmt.Sprintf("aishwin [dev build]: auto-approved prompt: %s", question))
+		return true
+	}
+
 	dialogMu.Lock()
 	defer dialogMu.Unlock()
 

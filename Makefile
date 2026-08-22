@@ -33,7 +33,7 @@ LDFLAGS := -X main.version=$(VERSION)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-.PHONY: build install aishwin aicmdd install-aicmdd test vet check fmt version clean
+.PHONY: build install aishwin aishwin-dev aicmdd install-aicmdd test vet check fmt version clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o aish ./cmd/aish
@@ -49,6 +49,17 @@ aicmdd:
 # the manual copy step).
 aishwin:
 	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o aishwin.exe ./cmd/aishwin
+
+# aishwin-dev is a DISTINCT build variant carrying the aishwindev tag: it
+# auto-approves the human approval dialog and activates a file-triggered
+# remote-control channel (devctl.go) so the AI can drive menu items and
+# dialogs unattended while iterating on the GUI itself. devBuild is a
+# compile-time fact (see cmd/aishwin/devmode.go) baked into this binary --
+# an ordinary `make aishwin` build never carries the tag and can never
+# accidentally skip approval. Never install this as the real session's
+# aishwin.exe; its window title says "[DEV]" for exactly this reason.
+aishwin-dev:
+	GOOS=windows GOARCH=amd64 go build -tags aishwindev -ldflags "$(LDFLAGS)" -o aishwin-dev.exe ./cmd/aishwin
 
 # Usage:  make build && sudo make install
 #

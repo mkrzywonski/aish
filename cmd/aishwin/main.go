@@ -45,6 +45,7 @@ func main() {
 	}
 
 	startScreenshotWatcher()
+	startDevControlWatcher()
 
 	if *guiSmokeTest {
 		runGUISmokeTest()
@@ -76,7 +77,11 @@ func main() {
 
 	refreshStatus()
 
-	if err := StartGUI("aishwin", buildRealMenu, stop); err != nil {
+	title := "aishwin"
+	if devBuild {
+		title = "aishwin [DEV -- auto-approves, unattended-test channel active]"
+	}
+	if err := StartGUI(title, buildRealMenu, stop); err != nil {
 		fmt.Fprintln(stderr, "aishwin:", err)
 		os.Exit(1)
 	}

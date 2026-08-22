@@ -30,6 +30,13 @@ var textDialogProcPtr = syscall.NewCallback(textDialogProc)
 var textDialogDefault string
 var textDialogResult string
 
+// onTextDialogOpen/onTextDialogClose are hooks devctl.go (aishwindev build
+// tag only) replaces to track the currently-open text dialog's HWND, so a
+// dev command can set its text and click OK/Cancel programmatically; a
+// no-op in an ordinary build.
+var onTextDialogOpen = func(hwnd syscall.Handle) {}
+var onTextDialogClose = func() {}
+
 // AskText shows a modal text-input dialog and returns the entered text and
 // true, or ("", false) if the user cancels.
 func AskText(title, prompt, defaultValue string) (string, bool) {
@@ -58,6 +65,7 @@ func textDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam uintp
 		procSetWindowTextW.Call(editHwnd, uintptr(unsafe.Pointer(utf16ptr(textDialogDefault))))
 		procSetForegroundWin.Call(uintptr(hwndDlg))
 		procSetFocus.Call(editHwnd)
+		onTextDialogOpen(hwndDlg)
 		return 0 // we set focus ourselves; returning nonzero would override it
 	case wmCommand:
 		id := uint16(wParam & 0xFFFF)
@@ -68,13 +76,16 @@ func textDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam uintp
 			n, _, _ := procSendMessageW.Call(editHwnd, wmGetText, uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
 			textDialogResult = syscall.UTF16ToString(buf[:n])
 			procEndDialog.Call(uintptr(hwndDlg), 1)
+			onTextDialogClose()
 			return 1
 		case idCancelBtn:
 			procEndDialog.Call(uintptr(hwndDlg), 0)
+			onTextDialogClose()
 			return 1
 		}
 	case wmClose:
 		procEndDialog.Call(uintptr(hwndDlg), 0)
+		onTextDialogClose()
 		return 1
 	}
 	return 0

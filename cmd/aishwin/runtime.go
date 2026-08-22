@@ -2,6 +2,7 @@
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	"ai-ssh/internal/aishwinwire"
@@ -61,7 +62,12 @@ func refreshStatus() {
 			label = fmt.Sprintf("%s (%s)", snap.sessionID, snap.name)
 		}
 	}
-	text := fmt.Sprintf("%s  |  session: %s  |  aishwin %s", state, label, version)
+	// pid is shown so a screenshot alone identifies which running
+	// aishwin.exe instance it is -- otherwise indistinguishable when
+	// several are running at once (e.g. a production session alongside a
+	// throwaway test instance) other than by cross-referencing
+	// Get-CimInstance/tasklist by hand.
+	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  aishwin %s", state, os.Getpid(), label, version)
 	if snap.connected && snap.aicmddVersion != "" {
 		text += fmt.Sprintf("  |  aicmdd %s", snap.aicmddVersion)
 	}

@@ -22,6 +22,7 @@ type backgroundTask struct {
 	buf      bytes.Buffer
 	running  bool
 	exitCode *int
+	pid      int // set once, before running is ever read; safe to read from Poll without the lock
 }
 
 type backgroundTasks struct {
@@ -59,6 +60,7 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
+	task.pid = cmd.Process.Pid // set once, before task is published below
 
 	id := randHex(8)
 	b.mu.Lock()
@@ -99,6 +101,29 @@ func (b *backgroundTasks) Poll(id string, cursor int64) (running bool, output st
 	if task == nil {
 		return false, "", cursor, nil, fmt.Errorf("no such task %q", id)
 	}
+
+	task.mu.Lock()
+	stillMarkedRunning := task.running
+	task.mu.Unlock()
+
+	// Cross-check against the OS directly: cmd.Wait() (in Start's
+	// goroutine) can stay blocked well after the process a caller cares
+	// about has exited, if a grandchild inherited the output pipe's
+	// write-end handle and outlives it (observed live during `go build`
+	// background runs -- go.exe's own compile/link workers are exactly
+	// this shape of process tree). Trust the OS's answer over a stuck
+	// internal accounting rather than reporting running:true forever.
+	if stillMarkedRunning {
+		if exited, code := processExited(task.pid); exited {
+			task.mu.Lock()
+			if task.running { // avoid clobbering a real exit code that landed between the checks above and here
+				task.running = false
+				task.exitCode = &code
+			}
+			task.mu.Unlock()
+		}
+	}
+
 	task.mu.Lock()
 	defer task.mu.Unlock()
 	data := task.buf.Bytes()
