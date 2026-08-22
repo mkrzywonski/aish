@@ -170,6 +170,7 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 		case line, ok := <-s.lines:
 			if !ok {
 				s.dead.Store(true)
+				mirrorLine("(shell exited unexpectedly)")
 				return strings.Join(out, "\n"), 0, false, fmt.Errorf("shell exited unexpectedly")
 			}
 
@@ -190,6 +191,12 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 					s.lastCwd = cwd
 					s.cwdMu.Unlock()
 				}
+				// A command that produces no output at all (a clean `go
+				// build`, say) would otherwise leave nothing visible
+				// after its own echoed command line -- indistinguishable
+				// at a glance from "still running" or "output isn't
+				// showing up". Always show the exit code explicitly.
+				mirrorLine(fmt.Sprintf("(exit %d)", code))
 				return trimTrailingBlankLines(out), code, false, nil // the marker's own expansion — the completion signal, never shown or captured as output
 			}
 
@@ -207,6 +214,7 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 		case <-deadline.C:
 			s.dead.Store(true)
 			_ = s.cmd.Process.Kill()
+			mirrorLine("(timed out)")
 			return trimTrailingBlankLines(out), 0, true, nil
 		}
 	}

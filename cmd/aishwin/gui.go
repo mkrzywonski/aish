@@ -323,6 +323,7 @@ func drainLogQueue() {
 		setCaretTextColor(hwndEdit, !e.useColor, e.color)
 		appendEditText(e.text + "\r\n")
 	}
+	trimScrollback()
 }
 
 func appendEditText(text string) {

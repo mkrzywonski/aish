@@ -91,10 +91,18 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 		output := task.buf.String()
 		task.mu.Unlock()
 
+		// Always end with an explicit exit-code line: a command that
+		// succeeds silently (a clean `go build`, say) would otherwise
+		// render as just the command text with nothing after it,
+		// indistinguishable at a glance from "still running" or "its
+		// output isn't showing up" (found live -- a run of several
+		// quiet go build/vet/test calls looked incomplete/broken even
+		// though every one had actually finished).
 		block := command
 		if trimmed := strings.TrimRight(output, "\r\n"); trimmed != "" {
 			block += "\r\n" + trimmed
 		}
+		block += fmt.Sprintf("\r\n(exit %d)", code)
 		AppendLog(block)
 	}()
 

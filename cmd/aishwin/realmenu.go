@@ -78,6 +78,9 @@ func buildRealMenu() syscall.Handle {
 		}
 	})
 
+	settingsMenu := NewSubmenu(bar, "Settings")
+	AddMenuItem(settingsMenu, "Preferences...", func() { ShowSettingsDialog() })
+
 	helpMenu := NewSubmenu(bar, "Help")
 	AddMenuItem(helpMenu, "Status", func() {
 		snap := rt.snapshot()

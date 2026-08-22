@@ -20,6 +20,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,9 +28,15 @@ import (
 	"unsafe"
 )
 
-const (
-	devctlTriggerPath = `C:\Users\Public\aishwin-devctl-request`
-	devctlResultPath  = `C:\Users\Public\aishwin-devctl-result`
+// Scoped by this process's own PID, not a fixed shared path: with more
+// than one dev instance running, a shared path means whichever instance's
+// watcher goroutine notices the trigger first "wins" -- the same race
+// screenshot.go had (see its own doc comment) and fixed the same way,
+// found here live when an older-build "master" instance kept intercepting
+// commands meant for a freshly built test instance.
+var (
+	devctlTriggerPath = fmt.Sprintf(`C:\Users\Public\aishwin-devctl-request-%d`, os.Getpid())
+	devctlResultPath  = fmt.Sprintf(`C:\Users\Public\aishwin-devctl-result-%d`, os.Getpid())
 )
 
 var (
@@ -38,6 +45,9 @@ var (
 
 	devTextDialogMu   sync.Mutex
 	devTextDialogHwnd syscall.Handle
+
+	devSettingsDialogMu   sync.Mutex
+	devSettingsDialogHwnd syscall.Handle
 )
 
 func init() {
@@ -55,6 +65,16 @@ func init() {
 		devTextDialogMu.Lock()
 		devTextDialogHwnd = 0
 		devTextDialogMu.Unlock()
+	}
+	onSettingsDialogOpen = func(hwnd syscall.Handle) {
+		devSettingsDialogMu.Lock()
+		devSettingsDialogHwnd = hwnd
+		devSettingsDialogMu.Unlock()
+	}
+	onSettingsDialogClose = func() {
+		devSettingsDialogMu.Lock()
+		devSettingsDialogHwnd = 0
+		devSettingsDialogMu.Unlock()
 	}
 }
 
@@ -80,11 +100,16 @@ func startDevControlWatcher() {
 
 // runDevCommand dispatches one trigger-file command line:
 //
-//	menu:<leaf label>   invoke that menu item's registered action
-//	text:<value>        if a text-input dialog is open, set its edit box
-//	                     to value and click OK
-//	cancel              if a text-input dialog is open, click Cancel
+//	menu:<leaf label>       invoke that menu item's registered action
+//	text:<value>            if a text-input dialog is open, set its edit
+//	                        box to value and click OK
+//	cancel                  if a text-input dialog is open, click Cancel
+//	setting:<index>:<value> if the Settings dialog is open, set field
+//	                        <index>'s edit box to value
+//	settingsok              if the Settings dialog is open, click OK
+//	settingscancel          if the Settings dialog is open, click Cancel
 func runDevCommand(cmd string) string {
+	AppendLogColor("Dev command: "+cmd, colorRunning)
 	switch {
 	case strings.HasPrefix(cmd, "menu:"):
 		label := strings.TrimPrefix(cmd, "menu:")
@@ -118,6 +143,49 @@ func runDevCommand(cmd string) string {
 		devTextDialogMu.Unlock()
 		if hwnd == 0 {
 			return "error: no text-input dialog is currently open"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(idCancelBtn), 0)
+		return "ok"
+
+	case strings.HasPrefix(cmd, "setting:"):
+		rest := strings.TrimPrefix(cmd, "setting:")
+		indexStr, value, found := strings.Cut(rest, ":")
+		if !found {
+			return `error: expected "setting:<index>:<value>"`
+		}
+		index, err := strconv.Atoi(indexStr)
+		if err != nil {
+			return fmt.Sprintf("error: invalid field index %q", indexStr)
+		}
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Settings dialog is not currently open"
+		}
+		editHwnd, _, _ := procGetDlgItem.Call(uintptr(hwnd), uintptr(idSettingsEditBase+index))
+		if editHwnd == 0 {
+			return fmt.Sprintf("error: no settings field at index %d", index)
+		}
+		procSetWindowTextW.Call(editHwnd, uintptr(unsafe.Pointer(utf16ptr(value))))
+		return "ok"
+
+	case cmd == "settingsok":
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Settings dialog is not currently open"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(idOK), 0)
+		return "ok"
+
+	case cmd == "settingscancel":
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Settings dialog is not currently open"
 		}
 		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(idCancelBtn), 0)
 		return "ok"

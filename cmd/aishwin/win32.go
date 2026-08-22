@@ -185,6 +185,8 @@ const (
 	emGetLine     = 0x00C4
 	emLineFromChar = 0x00C9
 	emSetLimitText = 0x00C5
+	emGetLineCount = 0x00BA
+	emLineIndex    = 0x00BB
 
 	gwlpUserData = -21
 

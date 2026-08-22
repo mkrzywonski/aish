@@ -1,11 +1,12 @@
-﻿package main
+package main
 
-// screenshot.go: lets the AI see the actual GUI window without asking the
-// human to take a screenshot. A background goroutine polls for a trigger
-// file at a cross-account-readable path (C:\Users\Public -- the same fix
-// used earlier in this project for the mike/mk31 WSL-visibility split)
-// and, when it appears, captures hwndMain to a PNG at a second path and
-// deletes the trigger. This needs zero changes to aicmdd/the wire
+// screenshot.go: lets the AI see the actual GUI window (or, with
+// permission, the whole screen) without asking the human to take a
+// screenshot. A background goroutine polls for a trigger file at a
+// cross-account-readable path (C:\Users\Public -- the same fix used
+// earlier in this project for the mike/mk31 WSL-visibility split) and,
+// when it appears, captures a PNG at a second path, writes a result file,
+// and deletes the trigger. This needs zero changes to aicmdd/the wire
 // protocol: the AI creates the trigger and downloads the PNG using the
 // already-working exec/file_download tools.
 //
@@ -24,6 +25,8 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -34,12 +37,19 @@ var errNoWindow = errors.New("aishwin: no window to capture (target window is ze
 var (
 	screenshotTriggerPath = fmt.Sprintf(`C:\Users\Public\aishwin-screenshot-request-%d`, os.Getpid())
 	screenshotOutputPath  = fmt.Sprintf(`C:\Users\Public\aishwin-screenshot-%d.png`, os.Getpid())
+	screenshotResultPath  = fmt.Sprintf(`C:\Users\Public\aishwin-screenshot-result-%d`, os.Getpid())
 )
 
 const (
 	pwRenderFullContent = 0x00000002
 	biRGB               = 0
 	dibRGBColors        = 0
+	srcCopy             = 0x00CC0020
+
+	smXVirtualScreen  = 76
+	smYVirtualScreen  = 77
+	smCXVirtualScreen = 78
+	smCYVirtualScreen = 79
 )
 
 var (
@@ -54,6 +64,8 @@ var (
 	procGetDIBits                = gdi32.NewProc("GetDIBits")
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
+	procBitBlt                   = gdi32.NewProc("BitBlt")
 )
 
 type bitmapInfoHeader struct {
@@ -70,21 +82,79 @@ type bitmapInfoHeader struct {
 	clrImportant  uint32
 }
 
+// fullScreenGrantMu/fullScreenGranted implement a one-time-per-session
+// permission grant for full-screen capture, separate from (and stricter
+// than) the plain window capture: a full-screen shot can reveal whatever
+// else the human has open, not just what the AI itself is doing in this
+// window, so it warrants explicit consent rather than being always-on
+// like the window capture. AskYesNo already auto-approves in dev builds
+// (see gui_dialog.go), so this needs no separate devBuild bypass -- dev
+// testing gets the grant for free, same as the connection-approval dialog.
+var (
+	fullScreenGrantMu sync.Mutex
+	fullScreenGranted bool
+)
+
+func fullScreenCaptureAllowed() bool {
+	fullScreenGrantMu.Lock()
+	granted := fullScreenGranted
+	fullScreenGrantMu.Unlock()
+	if granted {
+		return true
+	}
+	if !AskYesNo("The AI wants to capture your ENTIRE screen (not just the aishwin window). Allow for the rest of this session?", 0) {
+		return false
+	}
+	fullScreenGrantMu.Lock()
+	fullScreenGranted = true
+	fullScreenGrantMu.Unlock()
+	return true
+}
+
 // startScreenshotWatcher polls for the trigger file every 500ms for the
 // life of the process. Safe to call once from main regardless of mode
 // (smoke-test or real): it only touches hwndMain, which both modes set.
+// The trigger file's content selects the capture mode: empty (the
+// existing `type nul >` usage) captures just the relevant window;
+// "full" or "screen" captures the whole screen instead, subject to the
+// one-time permission grant above.
 func startScreenshotWatcher() {
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for range ticker.C {
-			if _, err := os.Stat(screenshotTriggerPath); err != nil {
+			raw, err := os.ReadFile(screenshotTriggerPath)
+			if err != nil {
 				continue
 			}
 			_ = os.Remove(screenshotTriggerPath)
-			if err := CaptureWindowToFile(screenshotOutputPath); err != nil {
-				fmt.Fprintf(stderr, "aishwin: screenshot failed: %v\n", err)
+			mode := strings.TrimSpace(string(raw))
+
+			if mode == "full" || mode == "screen" {
+				if !fullScreenCaptureAllowed() {
+					AppendLogColor("Full-screen screenshot denied by user", colorRunning)
+					_ = os.WriteFile(screenshotResultPath, []byte("denied"), 0644)
+					continue
+				}
+				if err := CaptureFullScreenToFile(screenshotOutputPath); err != nil {
+					AppendLogColor(fmt.Sprintf("Screenshot failed: %v", err), colorRunning)
+					fmt.Fprintf(stderr, "aishwin: screenshot failed: %v\n", err)
+					_ = os.WriteFile(screenshotResultPath, []byte("error: "+err.Error()), 0644)
+					continue
+				}
+				AppendLogColor("Full-screen screenshot captured", colorRunning)
+				_ = os.WriteFile(screenshotResultPath, []byte("ok"), 0644)
+				continue
 			}
+
+			if err := CaptureWindowToFile(screenshotOutputPath); err != nil {
+				AppendLogColor(fmt.Sprintf("Screenshot failed: %v", err), colorRunning)
+				fmt.Fprintf(stderr, "aishwin: screenshot failed: %v\n", err)
+				_ = os.WriteFile(screenshotResultPath, []byte("error: "+err.Error()), 0644)
+				continue
+			}
+			AppendLogColor("Screenshot captured", colorRunning)
+			_ = os.WriteFile(screenshotResultPath, []byte("ok"), 0644)
 		}
 	}()
 }
@@ -139,6 +209,51 @@ func CaptureWindowToFile(path string) error {
 
 	procPrintWindow.Call(uintptr(hwnd), hdcMem, pwRenderFullContent)
 
+	return captureBitmapToPNG(hdcMem, hBitmap, width, height, path)
+}
+
+// CaptureFullScreenToFile renders the entire virtual screen (spanning all
+// monitors, not just the primary one) into a PNG at path. Gated by
+// fullScreenCaptureAllowed at the call site (startScreenshotWatcher), not
+// here, since this function is the mechanical capture step only.
+func CaptureFullScreenToFile(path string) error {
+	originX, _, _ := procGetSystemMetrics.Call(smXVirtualScreen)
+	originY, _, _ := procGetSystemMetrics.Call(smYVirtualScreen)
+	widthR, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
+	heightR, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
+	width, height := int(int32(widthR)), int(int32(heightR))
+	if width <= 0 || height <= 0 {
+		return errNoWindow
+	}
+
+	hdcScreen, _, _ := procGetDC.Call(0)
+	defer procReleaseDC.Call(0, hdcScreen)
+
+	hdcMem, _, _ := procCreateCompatibleDC.Call(hdcScreen)
+	defer procDeleteDC.Call(hdcMem)
+
+	hBitmap, _, _ := procCreateCompatibleBmp.Call(hdcScreen, uintptr(width), uintptr(height))
+	defer procDeleteObject.Call(hBitmap)
+
+	oldObj, _, _ := procSelectObject.Call(hdcMem, hBitmap)
+	defer procSelectObject.Call(hdcMem, oldObj)
+
+	// originX/originY can be negative (a monitor positioned left of or
+	// above the primary) -- int32->int->uintptr is a genuine runtime
+	// conversion here (not a constant expression), so it sign-extends
+	// correctly, unlike the CW_USEDEFAULT constant-folding pitfall
+	// elsewhere in this codebase.
+	procBitBlt.Call(hdcMem, 0, 0, uintptr(width), uintptr(height), hdcScreen, uintptr(int(int32(originX))), uintptr(int(int32(originY))), srcCopy)
+
+	return captureBitmapToPNG(hdcMem, hBitmap, width, height, path)
+}
+
+// captureBitmapToPNG extracts hBitmap's pixels (widthxheight, currently
+// selected into hdcMem) and encodes them as a PNG at path. Shared by
+// CaptureWindowToFile and CaptureFullScreenToFile, which differ only in
+// how they fill the bitmap (PrintWindow vs BitBlt) and where its
+// dimensions come from.
+func captureBitmapToPNG(hdcMem, hBitmap uintptr, width, height int, path string) error {
 	var bi bitmapInfoHeader
 	bi.size = uint32(unsafe.Sizeof(bi))
 	bi.width = int32(width)
