@@ -66,8 +66,11 @@ func refreshStatus() {
 	// aishwin.exe instance it is -- otherwise indistinguishable when
 	// several are running at once (e.g. a production session alongside a
 	// throwaway test instance) other than by cross-referencing
-	// Get-CimInstance/tasklist by hand.
-	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  aishwin %s", state, os.Getpid(), label, version)
+	// Get-CimInstance/tasklist by hand. buildStampStr's time (hostname
+	// omitted here for space -- Help>About has the full stamp) is what
+	// actually answers "is this the build I just made": the version string
+	// alone is identical for every build of the same commit.
+	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  aishwin %s (%s)", state, os.Getpid(), label, version, buildTimeOnly())
 	if snap.connected && snap.aicmddVersion != "" {
 		text += fmt.Sprintf("  |  aicmdd %s", snap.aicmddVersion)
 	}

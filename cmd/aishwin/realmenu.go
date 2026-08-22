@@ -98,8 +98,8 @@ func buildRealMenu() syscall.Handle {
 			aicmddVersion = "not connected"
 		}
 		ShowInfo("About aishwin", fmt.Sprintf(
-			"aishwin %s\n\nLets an AI assistant run commands and manage files on this computer, with everything it does shown in this window so you can see what happened.\n\nCompanion service: aicmdd %s",
-			version, aicmddVersion,
+			"aishwin %s\n%s\n\nLets an AI assistant run commands and manage files on this computer, with everything it does shown in this window so you can see what happened.\n\nCompanion service: aicmdd %s",
+			version, buildStampStr, aicmddVersion,
 		))
 	})
 
