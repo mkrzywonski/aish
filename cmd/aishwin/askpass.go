@@ -106,11 +106,21 @@ func askPassDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam ui
 }
 
 // buildPasswordDialogTemplate is structurally the same in-memory DLGTEMPLATE
-// technique as buildTextDialogTemplate (gui_input_dialog.go), sized larger
-// to fit a multi-line host-key fingerprint message in the label, and with
+// technique as buildTextDialogTemplate (gui_input_dialog.go), with a taller
+// label to fit a multi-line host-key fingerprint message, and with
 // esPassword set on the edit control. \n is normalized to \r\n first: the
 // STATIC control only honors explicit line breaks in that form, and ssh
 // assembles its host-key message with bare \n.
+//
+// The label/edit/button y-coordinates and the overall dialog height must
+// stay consistent by construction -- found live (a real screenshot) that an
+// earlier version's OK/Cancel row sat past the declared dialog height
+// entirely (buttons clipped off the bottom of the window), while the label
+// was far taller than any single-line password prompt ever needs (a wall
+// of blank space above the edit box). Both were just independently wrong
+// numbers, not a genuine layout constraint -- this version defines one
+// bottom Y and derives the dialog height from it instead of hand-picking
+// both separately.
 func buildPasswordDialogTemplate(title, prompt string) []byte {
 	prompt = strings.ReplaceAll(prompt, "\r\n", "\n")
 	prompt = strings.ReplaceAll(prompt, "\n", "\r\n")
@@ -129,11 +139,22 @@ func buildPasswordDialogTemplate(title, prompt string) []byte {
 		}
 	}
 
+	const (
+		dialogWidth = int16(300)
+		labelTop    = int16(10)
+		labelHeight = int16(70) // enough for a several-line host-key message; a one-line password prompt just leaves it mostly blank
+		editTop     = labelTop + labelHeight + 10
+		editHeight  = int16(20)
+		btnTop      = editTop + editHeight + 10
+		btnHeight   = int16(20)
+		dialogHeight = btnTop + btnHeight + 15 // bottom margin below the buttons
+	)
+
 	style := uint32(dsSetFont | dsModalFrame | dsCenter | wsPopup | wsCaption | wsSysMenu)
 	w(style)
 	w(uint32(0))
 	w(uint16(4)) // label, edit, OK, Cancel
-	w(int16(0)); w(int16(0)); w(int16(300)); w(int16(160))
+	w(int16(0)); w(int16(0)); w(dialogWidth); w(dialogHeight)
 	w(uint16(0))
 	w(uint16(0))
 	writeStr(title)
@@ -143,7 +164,7 @@ func buildPasswordDialogTemplate(title, prompt string) []byte {
 	align4()
 	w(uint32(wsChild | wsVisible))
 	w(uint32(0))
-	w(int16(10)); w(int16(10)); w(int16(280)); w(int16(110))
+	w(int16(10)); w(labelTop); w(int16(280)); w(labelHeight)
 	w(uint16(idStaticText))
 	w(uint16(0xFFFF)); w(uint16(0x0082)) // STATIC
 	writeStr(prompt)
@@ -152,7 +173,7 @@ func buildPasswordDialogTemplate(title, prompt string) []byte {
 	align4()
 	w(uint32(wsChild | wsVisible | wsBorder | wsTabStop | esAutoHScroll | esPassword))
 	w(uint32(0))
-	w(int16(10)); w(int16(125)); w(int16(280)); w(int16(20))
+	w(int16(10)); w(editTop); w(int16(280)); w(editHeight)
 	w(uint16(idInputEdit))
 	w(uint16(0xFFFF)); w(uint16(0x0081)) // EDIT
 	writeStr("")
@@ -161,7 +182,7 @@ func buildPasswordDialogTemplate(title, prompt string) []byte {
 	align4()
 	w(uint32(wsChild | wsVisible | wsTabStop | bsDefPushButton))
 	w(uint32(0))
-	w(int16(70)); w(int16(155)); w(int16(60)); w(int16(20))
+	w(int16(70)); w(btnTop); w(int16(60)); w(btnHeight)
 	w(uint16(idOK))
 	w(uint16(0xFFFF)); w(uint16(0x0080)) // BUTTON
 	writeStr("OK")
@@ -170,7 +191,7 @@ func buildPasswordDialogTemplate(title, prompt string) []byte {
 	align4()
 	w(uint32(wsChild | wsVisible | wsTabStop | bsPushButton))
 	w(uint32(0))
-	w(int16(160)); w(int16(155)); w(int16(60)); w(int16(20))
+	w(int16(160)); w(btnTop); w(int16(60)); w(btnHeight)
 	w(uint16(idCancelBtn))
 	w(uint16(0xFFFF)); w(uint16(0x0080)) // BUTTON
 	writeStr("Cancel")
