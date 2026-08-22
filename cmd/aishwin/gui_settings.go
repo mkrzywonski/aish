@@ -197,8 +197,10 @@ var onSettingsDialogClose = func() {}
 
 // trimScrollback deletes the oldest lines from the log view once it
 // exceeds the configured scrollback size. Called after every log-queue
-// drain (gui.go) rather than per line, since it needs one EM_GETLINECOUNT
-// round trip regardless of how many lines just landed.
+// drain (gui.go), before drainLogQueue's own scrollToBottom (which -- now
+// that scrolling is EM_LINESCROLL-based, not caret-based -- doesn't care
+// what this function leaves the selection at, so this no longer needs to
+// know or restore "were we following the bottom" itself).
 func trimScrollback() {
 	if hwndEdit == 0 {
 		return
@@ -217,11 +219,4 @@ func trimScrollback() {
 	procSendMessageW.Call(uintptr(hwndEdit), emSetSel, 0, cutIndex)
 	setCaretTextColor(hwndEdit, true, 0)
 	procSendMessageW.Call(uintptr(hwndEdit), emReplaceSel, 0, uintptr(unsafe.Pointer(utf16ptr(""))))
-
-	// Restore the caret/scroll position to the end, matching what every
-	// append already leaves it at -- the deletion above briefly moved the
-	// selection to the removed range.
-	const maxUint = ^uintptr(0)
-	procSendMessageW.Call(uintptr(hwndEdit), emSetSel, maxUint, maxUint)
-	procSendMessageW.Call(uintptr(hwndEdit), emScrollCaret, 0, 0)
 }

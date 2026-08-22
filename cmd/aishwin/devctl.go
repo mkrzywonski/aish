@@ -108,6 +108,10 @@ func startDevControlWatcher() {
 //	                        <index>'s edit box to value
 //	settingsok              if the Settings dialog is open, click OK
 //	settingscancel          if the Settings dialog is open, click Cancel
+//	clickjump               synthesize a BN_CLICKED on the jump-to-bottom
+//	                        button, exactly as a real mouse click would
+//	                        post it -- exercises the sticky-auto-scroll
+//	                        indicator without needing a human to click it
 func runDevCommand(cmd string) string {
 	AppendLogColor("Dev command: "+cmd, colorRunning)
 	switch {
@@ -188,6 +192,10 @@ func runDevCommand(cmd string) string {
 			return "error: the Settings dialog is not currently open"
 		}
 		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(idCancelBtn), 0)
+		return "ok"
+
+	case cmd == "clickjump":
+		procPostMessageW.Call(uintptr(hwndMain), wmCommand, uintptr(idJumpBtn), uintptr(hwndJumpBtn))
 		return "ok"
 
 	default:

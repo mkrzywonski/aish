@@ -62,6 +62,7 @@ var (
 	procIsDialogMessageW  = user32.NewProc("IsDialogMessageW")
 	procGetDlgItem        = user32.NewProc("GetDlgItem")
 	procMessageBoxW       = user32.NewProc("MessageBoxW")
+	procGetScrollInfo     = user32.NewProc("GetScrollInfo")
 
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procOpenProcess         = kernel32.NewProc("OpenProcess")
@@ -110,6 +111,21 @@ type rect struct {
 // EM_SETCHARFORMAT expects exactly -- RichEdit uses cbSize to tell which
 // CHARFORMAT version a caller is using, so a wrong size is rejected outright
 // rather than partially accepted.
+// scrollInfoT mirrors SCROLLINFO (winuser.h) field-for-field for
+// GetScrollInfo -- used to tell whether the log view is currently scrolled
+// to the bottom, without depending on where the caret/selection happens to
+// be (a user can scroll the view with the mouse wheel or scrollbar without
+// moving the caret at all).
+type scrollInfoT struct {
+	cbSize    uint32
+	fMask     uint32
+	nMin      int32
+	nMax      int32
+	nPage     uint32
+	nPos      int32
+	nTrackPos int32
+}
+
 type charFormat2W struct {
 	cbSize          uint32
 	dwMask          uint32
@@ -151,6 +167,14 @@ const (
 	esWantReturn = 0x1000
 
 	swShow = 5
+	swHide = 0
+
+	sbVert   = 1
+	sifRange = 0x0001
+	sifPage  = 0x0002
+	sifPos   = 0x0004
+
+	bnClicked = 0
 
 	colorWindow  = 5
 	colorBtnFace = 15
@@ -187,6 +211,8 @@ const (
 	emSetLimitText = 0x00C5
 	emGetLineCount = 0x00BA
 	emLineIndex    = 0x00BB
+	emLineScroll   = 0x00B6
+	emGetFirstVisibleLine = 0x00CE
 
 	gwlpUserData = -21
 
@@ -256,6 +282,28 @@ func ShowInfo(title, text string) {
 	procMessageBoxW.Call(uintptr(hwndMain), uintptr(unsafe.Pointer(utf16ptr(text))), uintptr(unsafe.Pointer(utf16ptr(title))), mbOk|mbIconInformation)
 }
 
+// isScrolledToBottom reports whether the log view's vertical scrollbar is
+// currently at (or past) its maximum position -- i.e. whether appending
+// more text and following it would be invisible anyway because the user is
+// already looking at the end. Checked via the control's real scrollbar
+// info (GetScrollInfo) rather than caret/selection position: a user can
+// scroll with the mouse wheel or drag the scrollbar thumb without moving
+// the caret at all, so caret position alone can't tell "are they reading
+// history" from "are they following the tail".
+func isScrolledToBottom() bool {
+	var si scrollInfoT
+	si.cbSize = uint32(unsafe.Sizeof(si))
+	si.fMask = sifRange | sifPage | sifPos
+	r, _, _ := procGetScrollInfo.Call(uintptr(hwndEdit), sbVert, uintptr(unsafe.Pointer(&si)))
+	if r == 0 || si.nPage == 0 {
+		// No scrollbar info yet, or content shorter than the view (nPage
+		// covers the whole range) -- nothing to scroll past, so "following"
+		// is trivially true.
+		return true
+	}
+	return si.nPos+int32(si.nPage) >= si.nMax
+}
+
 // setCaretTextColor sets the color newly appended text will be inserted
 // with, on the RichEdit control at hwnd. auto=true resets to the control's
 // normal default color (CFE_AUTOCOLOR); otherwise color is a COLORREF
@@ -301,4 +349,3 @@ func processExited(pid int) (exited bool, code int) {
 	}
 	return true, int(status)
 }
-
