@@ -35,6 +35,7 @@ func buildRealMenu() syscall.Handle {
 		enabled := !access.aiEnabled.Load()
 		access.aiEnabled.Store(enabled)
 		SetMenuChecked(accessMenu, accessID, enabled)
+		refreshStatus() // the status bar shows AI access directly now (Help>Status is gone)
 		if enabled {
 			AppendLog("aishwin: AI access enabled")
 		} else {
@@ -45,6 +46,7 @@ func buildRealMenu() syscall.Handle {
 		blocked := !access.newExecBlocked.Load()
 		access.newExecBlocked.Store(blocked)
 		SetMenuChecked(accessMenu, blockID, blocked)
+		refreshStatus() // the status bar shows blocked state directly now (Help>Status is gone)
 		if blocked {
 			AppendLog("aishwin: new commands blocked — already-running commands are unaffected")
 		} else {
@@ -82,15 +84,6 @@ func buildRealMenu() syscall.Handle {
 	AddMenuItem(settingsMenu, "Preferences...", func() { ShowSettingsDialog() })
 
 	helpMenu := NewSubmenu(bar, "Help")
-	AddMenuItem(helpMenu, "Status", func() {
-		snap := rt.snapshot()
-		ShowInfo("aishwin Status", fmt.Sprintf(
-			"Connected to linux half: %v\nSession: %s\nShell: %s\nAI access: %s\nNew commands blocked: %s",
-			snap.connected,
-			sessionLabel(aishwinwire.HelloAckData{SessionID: snap.sessionID, Name: snap.name}),
-			execD.kind, onOff(access.aiEnabled.Load()), onOff(access.newExecBlocked.Load()),
-		))
-	})
 	AddMenuItem(helpMenu, "About", func() {
 		snap := rt.snapshot()
 		aicmddVersion := snap.aicmddVersion
