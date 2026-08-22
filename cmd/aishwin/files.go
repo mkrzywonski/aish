@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 var (
@@ -120,7 +120,7 @@ func writeFileAtomic(path string, data []byte, mode, ifMatch string) error {
 	} else if fi, err := os.Stat(path); err == nil {
 		perm = fi.Mode().Perm()
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".aicmdtmp.*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".aishwintmp.*")
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func fileVersion(path, tokenKind string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return aicmdwire.SHA256Version(data), nil
+		return aishwinwire.SHA256Version(data), nil
 	case strings.HasPrefix(tokenKind, "mtime-size:"):
 		fi, err := os.Stat(path)
 		if err != nil {

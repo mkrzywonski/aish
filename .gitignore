@@ -1,4 +1,6 @@
 /aish
+/aicmdd
+*.exe
 /dist/
 /result
 /nixos-aish.md

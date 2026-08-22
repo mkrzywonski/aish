@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"os"
@@ -10,13 +10,13 @@ import (
 // TestShellAgainstRealWindowsHost drives the real shellSession.Run/
 // parseMarker logic against an actual Windows cmd.exe and powershell.exe
 // reached over ssh, instead of a synthetic byte stream. There is no Windows
-// host in ordinary CI, so this is opt-in: set AICMD_TEST_SSH_TARGET to an
+// host in ordinary CI, so this is opt-in: set AISHWIN_TEST_SSH_TARGET to an
 // ssh target that resolves to a Windows OpenSSH server (e.g. "localhost" on
 // a dev box configured that way) to run it.
 func TestShellAgainstRealWindowsHost(t *testing.T) {
-	target := os.Getenv("AICMD_TEST_SSH_TARGET")
+	target := os.Getenv("AISHWIN_TEST_SSH_TARGET")
 	if target == "" {
-		t.Skip("set AICMD_TEST_SSH_TARGET (an ssh target reaching a real Windows host) to run this test")
+		t.Skip("set AISHWIN_TEST_SSH_TARGET (an ssh target reaching a real Windows host) to run this test")
 	}
 
 	t.Run("cmd", func(t *testing.T) { testShellRun(t, shellCmd, target) })
@@ -40,7 +40,7 @@ func testShellRun(t *testing.T, kind shellKind, target string) {
 	}
 
 	// Successful command.
-	out, code, timedOut, err := s.Run("echo hello-from-aicmd-test", 20*time.Second)
+	out, code, timedOut, err := s.Run("echo hello-from-aishwin-test", 20*time.Second)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -50,7 +50,7 @@ func testShellRun(t *testing.T, kind shellKind, target string) {
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
-	if wantContains := "hello-from-aicmd-test"; !contains(out, wantContains) {
+	if wantContains := "hello-from-aishwin-test"; !contains(out, wantContains) {
 		t.Errorf("output = %q, want it to contain %q", out, wantContains)
 	}
 
@@ -59,11 +59,11 @@ func testShellRun(t *testing.T, kind shellKind, target string) {
 	var failCmd, cwdCmd, cwdWant string
 	switch kind {
 	case shellPowerShell:
-		failCmd = "Get-Item C:\\aicmd-test-does-not-exist-xyz"
+		failCmd = "Get-Item C:\\aishwin-test-does-not-exist-xyz"
 		cwdCmd = "(Get-Location).Path"
 		cwdWant = `C:\Windows`
 	default:
-		failCmd = "dir C:\\aicmd-test-does-not-exist-xyz"
+		failCmd = "dir C:\\aishwin-test-does-not-exist-xyz"
 		cwdCmd = "cd"
 		cwdWant = `C:\Windows`
 	}

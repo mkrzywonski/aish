@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bufio"
@@ -24,7 +24,7 @@ const (
 // shellSession owns one persistent Windows shell process fed via piped
 // stdin/stdout. Its output is mirrored byte-for-byte to this process's own
 // console (the human watches commands run in real time — visible, not
-// interactive, per the whole point of aicmd) and simultaneously parsed for
+// interactive, per the whole point of aishwin) and simultaneously parsed for
 // a nonce marker line to detect command completion and exit code: cmd.exe
 // and PowerShell have no OSC133-style structural framing, so this is the
 // only way to know where one command's output ends and the next begins.
@@ -99,16 +99,9 @@ func (s *shellSession) mirror(r io.Reader) {
 	close(s.lines)
 }
 
-// mirrorLine writes one line to the human's console, through the
-// CRLF-normalizing writer (stdout, crlf.go) rather than os.Stdout directly.
-// Real cmd.exe/PowerShell prompt/echo text already arrives as \r\n and so is
-// unaffected by the normalization, but a child process piped through the
-// shell (go build's own "downloading" progress lines, observed live) can
-// emit bare \n, which — unlike text written straight to a real console —
-// does not get an implicit carriage return here, so it needs the same fix
-// as this package's own console output (see crlf.go's doc comment).
+// mirrorLine shows one line of shell output in the GUI's log view.
 func mirrorLine(line string) {
-	fmt.Fprintln(stdout, line)
+	AppendLog(line)
 }
 
 // Run submits command to the persistent shell and blocks until its nonce
@@ -123,7 +116,7 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 	defer s.mu.Unlock()
 
 	nonce := randHex(8)
-	marker := "AICMD@" + nonce + "@"
+	marker := "aishwin@" + nonce + "@"
 
 	var script, markerCmd, resetCmd string
 	switch s.kind {
@@ -161,7 +154,7 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 
 			// Hide this session's own internal plumbing from the visible
 			// mirror — the human never typed the reset line or the marker
-			// command, so seeing them (and their raw "AICMD@<hash>@0@"
+			// command, so seeing them (and their raw "aishwin@<hash>@0@"
 			// expansion) would be confusing noise unrelated to their actual
 			// command. Checked before mirroring anything else below.
 			if resetCmd != "" && strings.HasSuffix(line, resetCmd) {
@@ -194,11 +187,11 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 }
 
 // parseMarker reports the exit code if line is exactly the expansion of the
-// marker for nonce (e.g. "AICMD@<nonce>@0@") — never the echo of the marker
+// marker for nonce (e.g. "aishwin@<nonce>@0@") — never the echo of the marker
 // command itself, which contains the unexpanded %errorlevel%/$(...) text and
 // so never matches this exact-prefix check.
 func parseMarker(line, nonce string) (int, bool) {
-	prefix := "AICMD@" + nonce + "@"
+	prefix := "aishwin@" + nonce + "@"
 	if !strings.HasPrefix(line, prefix) {
 		return 0, false
 	}

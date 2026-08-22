@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"os"
@@ -12,7 +12,7 @@ import (
 // unmodified from aish's own local-route implementation (filepath.WalkDir
 // + regexp, no shell-out), so the same behavior applies here unchanged.
 // The remote-SSH-specific tests in that file (parseGrep, grepCommand
-// backend selection) have no equivalent: aicmd never shells out to
+// backend selection) have no equivalent: aishwin never shells out to
 // rg/grep/find.
 
 func TestGrepLocal(t *testing.T) {

@@ -1,16 +1,16 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 func TestFileGrepRoundTrip(t *testing.T) {
-	sess := newTestWirePair(t, "test-fg", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		var req aicmdwire.GrepData
+	sess := newTestWirePair(t, "test-fg", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		var req aishwinwire.GrepData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			t.Error(err)
 			return
@@ -18,10 +18,10 @@ func TestFileGrepRoundTrip(t *testing.T) {
 		if req.Pattern != "hello" {
 			t.Errorf("Pattern = %q, want %q", req.Pattern, "hello")
 		}
-		data, _ := json.Marshal(aicmdwire.GrepResultData{
-			Matches: []aicmdwire.GrepMatchData{{Path: `C:\a.go`, Line: 2, Text: "func hello() {}"}},
+		data, _ := json.Marshal(aishwinwire.GrepResultData{
+			Matches: []aishwinwire.GrepMatchData{{Path: `C:\a.go`, Line: 2, Text: "func hello() {}"}},
 		})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_grep_result", ID: f.ID, Data: data})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_grep_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileGrep(context.Background(), nil, fileGrepArgs{Path: `C:\`, Pattern: "hello"})
@@ -31,14 +31,14 @@ func TestFileGrepRoundTrip(t *testing.T) {
 	if len(res.Matches) != 1 || res.Matches[0].Line != 2 {
 		t.Errorf("Matches = %+v", res.Matches)
 	}
-	if res.Via != "aicmd" {
-		t.Errorf("Via = %q, want %q", res.Via, "aicmd")
+	if res.Via != "aishwin" {
+		t.Errorf("Via = %q, want %q", res.Via, "aishwin")
 	}
 }
 
 func TestFileSearchRoundTrip(t *testing.T) {
-	sess := newTestWirePair(t, "test-fs2", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		var req aicmdwire.SearchData
+	sess := newTestWirePair(t, "test-fs2", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		var req aishwinwire.SearchData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			t.Error(err)
 			return
@@ -46,8 +46,8 @@ func TestFileSearchRoundTrip(t *testing.T) {
 		if req.Name != "*.go" {
 			t.Errorf("Name = %q, want %q", req.Name, "*.go")
 		}
-		data, _ := json.Marshal(aicmdwire.SearchResultData{Paths: []string{`C:\a.go`, `C:\sub\b.go`}})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_search_result", ID: f.ID, Data: data})
+		data, _ := json.Marshal(aishwinwire.SearchResultData{Paths: []string{`C:\a.go`, `C:\sub\b.go`}})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_search_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileSearch(context.Background(), nil, fileSearchArgs{Path: `C:\`, Name: "*.go"})

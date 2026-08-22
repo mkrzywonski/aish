@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // execArgs/execResult and execStatusArgs/execStatusResult mirror aish's own
@@ -70,7 +70,7 @@ func (s *aicmdSession) execTool(ctx context.Context, req *mcp.CallToolRequest, a
 		return nil, execResult{}, errors.New("command must not be empty")
 	}
 
-	data, err := json.Marshal(aicmdwire.ExecData{
+	data, err := json.Marshal(aishwinwire.ExecData{
 		Command:    args.Command,
 		Cwd:        args.Cwd,
 		Background: args.Background,
@@ -84,7 +84,7 @@ func (s *aicmdSession) execTool(ctx context.Context, req *mcp.CallToolRequest, a
 	if err != nil {
 		return nil, execResult{}, err
 	}
-	var res aicmdwire.ExecResultData
+	var res aishwinwire.ExecResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, execResult{}, fmt.Errorf("malformed exec result from the Windows peer: %w", err)
 	}
@@ -96,7 +96,7 @@ func (s *aicmdSession) execTool(ctx context.Context, req *mcp.CallToolRequest, a
 		ExitCode: res.ExitCode,
 		TaskID:   res.TaskID,
 		TimedOut: res.TimedOut,
-		Via:      "aicmd",
+		Via:      "aishwin",
 		Host:     s.displayHost(),
 	}, nil
 }
@@ -109,7 +109,7 @@ func (s *aicmdSession) execStatus(ctx context.Context, req *mcp.CallToolRequest,
 	if args.Cursor != nil {
 		cursor = *args.Cursor
 	}
-	data, err := json.Marshal(aicmdwire.ExecPollData{TaskID: args.TaskID, Cursor: cursor})
+	data, err := json.Marshal(aishwinwire.ExecPollData{TaskID: args.TaskID, Cursor: cursor})
 	if err != nil {
 		return nil, execStatusResult{}, err
 	}
@@ -118,7 +118,7 @@ func (s *aicmdSession) execStatus(ctx context.Context, req *mcp.CallToolRequest,
 	if err != nil {
 		return nil, execStatusResult{}, err
 	}
-	var res aicmdwire.ExecPollResultData
+	var res aishwinwire.ExecPollResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, execStatusResult{}, fmt.Errorf("malformed exec_poll result from the Windows peer: %w", err)
 	}
@@ -133,10 +133,10 @@ func (s *aicmdSession) execStatus(ctx context.Context, req *mcp.CallToolRequest,
 	}, nil
 }
 
-// execWaitTimeout bounds how long aicmdd waits for aicmd's exec_result
+// execWaitTimeout bounds how long aicmdd waits for aishwin's exec_result
 // before giving up on the wire round trip. Background requests reply almost
 // immediately (spawning, not completion) so get a short fixed bound;
-// foreground requests are bounded by the command's own timeout (which aicmd
+// foreground requests are bounded by the command's own timeout (which aishwin
 // enforces itself and replies promptly after) plus a buffer for wire
 // latency — this should essentially never fire in practice.
 func execWaitTimeout(args execArgs) time.Duration {

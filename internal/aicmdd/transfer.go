@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // fileUpload reads the whole local file, fileDownload's channel route
 // writes the whole decoded result in one os.WriteFile, neither chunked).
 // This cap exists because the wire protocol needs SOME bound for a
-// single-frame transfer; internal/aicmdwire.MaxFrameLine is sized to match.
+// single-frame transfer; internal/aishwinwire.MaxFrameLine is sized to match.
 const maxTransferBytes = 32 << 20
 
 // transferArgs/transferResult mirror aish's own schema
@@ -69,7 +69,7 @@ func (s *aicmdSession) fileUpload(ctx context.Context, req *mcp.CallToolRequest,
 	if err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(n), Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, transferResult{Bytes: int64(n), Via: "aishwin", Host: s.displayHost()}, nil
 }
 
 func (s *aicmdSession) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
@@ -84,10 +84,10 @@ func (s *aicmdSession) fileDownload(ctx context.Context, req *mcp.CallToolReques
 		return nil, transferResult{}, fmt.Errorf("remote file exceeds the file_download limit of %d bytes; chunk it with file_read/file_write instead", maxTransferBytes)
 	}
 	// Not atomic (plain os.WriteFile), matching aish's own channel-route
-	// file_download — only its SFTP route (which aicmd has no equivalent
+	// file_download — only its SFTP route (which aishwin has no equivalent
 	// of) writes via temp+rename.
 	if err := os.WriteFile(args.LocalPath, data, 0o644); err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(len(data)), Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, transferResult{Bytes: int64(len(data)), Via: "aishwin", Host: s.displayHost()}, nil
 }

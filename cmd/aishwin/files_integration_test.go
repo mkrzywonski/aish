@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"os"
@@ -15,20 +15,20 @@ import (
 // copied to and run ON a real Windows host over ssh, to prove the actual
 // production code against real NTFS semantics (drive-letter paths,
 // os.Rename's atomic-replace behavior, symlink detection) rather than
-// assumptions. Set AICMD_TEST_FILE_DIR to an existing writable directory to
+// assumptions. Set AISHWIN_TEST_FILE_DIR to an existing writable directory to
 // run it (skipped otherwise, so plain `go test` on this Linux dev box is
 // unaffected).
 func TestFileOpsAgainstRealWindowsHost(t *testing.T) {
-	dir := os.Getenv("AICMD_TEST_FILE_DIR")
+	dir := os.Getenv("AISHWIN_TEST_FILE_DIR")
 	if dir == "" {
-		t.Skip("set AICMD_TEST_FILE_DIR to a writable directory to run this test (intended to run cross-compiled, on a real Windows host)")
+		t.Skip("set AISHWIN_TEST_FILE_DIR to a writable directory to run this test (intended to run cross-compiled, on a real Windows host)")
 	}
 
-	path := filepath.Join(dir, "aicmd-filetest.txt")
+	path := filepath.Join(dir, "aishwin-filetest.txt")
 	defer os.Remove(path)
 
 	// Plain write + read round trip.
-	if err := writeFileAtomic(path, []byte("hello aicmd"), "", ""); err != nil {
+	if err := writeFileAtomic(path, []byte("hello aishwin"), "", ""); err != nil {
 		t.Fatalf("writeFileAtomic: %v", err)
 	}
 	data, eof, err := readFile(path, 0, 1<<20)
@@ -38,8 +38,8 @@ func TestFileOpsAgainstRealWindowsHost(t *testing.T) {
 	if !eof {
 		t.Error("eof = false, want true for a small file read within max")
 	}
-	if string(data) != "hello aicmd" {
-		t.Errorf("content = %q, want %q", data, "hello aicmd")
+	if string(data) != "hello aishwin" {
+		t.Errorf("content = %q, want %q", data, "hello aishwin")
 	}
 
 	// file_stat: type, size, and a version token that changes across writes.
@@ -50,8 +50,8 @@ func TestFileOpsAgainstRealWindowsHost(t *testing.T) {
 	if kind != "file" {
 		t.Errorf("type = %q, want %q", kind, "file")
 	}
-	if size != int64(len("hello aicmd")) {
-		t.Errorf("size = %d, want %d", size, len("hello aicmd"))
+	if size != int64(len("hello aishwin")) {
+		t.Errorf("size = %d, want %d", size, len("hello aishwin"))
 	}
 	if modifiedUnix == 0 {
 		t.Error("modified_unix = 0, want a real timestamp")

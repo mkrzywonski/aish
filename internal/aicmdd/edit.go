@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // maxFileEdit bounds file_edit/file_patch, matching aish's own limit
@@ -106,14 +106,14 @@ func (s *aicmdSession) fileEdit(ctx context.Context, req *mcp.CallToolRequest, a
 
 	// Automatic staleness protection: the write only applies if the file
 	// still hashes to what was just read, closing the read-modify-write race.
-	written, err := s.writeRemoteFile(args.Path, updated, "", aicmdwire.SHA256Version(data), false)
+	written, err := s.writeRemoteFile(args.Path, updated, "", aishwinwire.SHA256Version(data), false)
 	if err != nil {
 		return nil, fileEditResult{}, err
 	}
 	if !args.ReplaceAll {
 		count = 1
 	}
-	return nil, fileEditResult{Replacements: count, BytesWritten: written, Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, fileEditResult{Replacements: count, BytesWritten: written, Via: "aishwin", Host: s.displayHost()}, nil
 }
 
 func (s *aicmdSession) filePatch(ctx context.Context, req *mcp.CallToolRequest, args filePatchArgs) (*mcp.CallToolResult, filePatchResult, error) {
@@ -150,11 +150,11 @@ func (s *aicmdSession) filePatch(ctx context.Context, req *mcp.CallToolRequest, 
 	// what was just read (same TOCTOU guard as file_edit).
 	ifMatch := args.IfMatch
 	if ifMatch == "" {
-		ifMatch = aicmdwire.SHA256Version(data)
+		ifMatch = aishwinwire.SHA256Version(data)
 	}
 	written, err := s.writeRemoteFile(args.Path, updated, "", ifMatch, false)
 	if err != nil {
 		return nil, filePatchResult{}, err
 	}
-	return nil, filePatchResult{HunksApplied: len(hunks), BytesWritten: written, Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, filePatchResult{HunksApplied: len(hunks), BytesWritten: written, Via: "aishwin", Host: s.displayHost()}, nil
 }

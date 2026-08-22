@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 func TestFileUploadRoundTrip(t *testing.T) {
@@ -18,12 +18,12 @@ func TestFileUploadRoundTrip(t *testing.T) {
 	}
 
 	var sawIfMatch, sawAppend = "unset", false
-	sess := newMultiTestWirePair(t, "test-up", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
+	sess := newMultiTestWirePair(t, "test-up", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
 		if f.Type != "file_write" {
 			t.Errorf("unexpected frame type %q", f.Type)
 			return
 		}
-		var req aicmdwire.FileWriteData
+		var req aishwinwire.FileWriteData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			t.Error(err)
 			return
@@ -34,8 +34,8 @@ func TestFileUploadRoundTrip(t *testing.T) {
 		if string(decoded) != "upload me" {
 			t.Errorf("uploaded content = %q, want %q", decoded, "upload me")
 		}
-		data, _ := json.Marshal(aicmdwire.FileWriteResultData{BytesWritten: len(decoded)})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_write_result", ID: f.ID, Data: data})
+		data, _ := json.Marshal(aishwinwire.FileWriteResultData{BytesWritten: len(decoded)})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_write_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileUpload(context.Background(), nil, transferArgs{LocalPath: localPath, RemotePath: `C:\up.txt`})
@@ -56,12 +56,12 @@ func TestFileUploadRoundTrip(t *testing.T) {
 func TestFileDownloadRoundTrip(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "down.txt")
 
-	sess := newMultiTestWirePair(t, "test-down", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
+	sess := newMultiTestWirePair(t, "test-down", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
 		if f.Type != "file_read" {
 			t.Errorf("unexpected frame type %q", f.Type)
 			return
 		}
-		var req aicmdwire.FileReadData
+		var req aishwinwire.FileReadData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			t.Error(err)
 			return
@@ -69,11 +69,11 @@ func TestFileDownloadRoundTrip(t *testing.T) {
 		if req.MaxBytes != maxTransferBytes {
 			t.Errorf("MaxBytes = %d, want %d (maxTransferBytes)", req.MaxBytes, maxTransferBytes)
 		}
-		data, _ := json.Marshal(aicmdwire.FileReadResultData{
+		data, _ := json.Marshal(aishwinwire.FileReadResultData{
 			Content: base64.StdEncoding.EncodeToString([]byte("downloaded content")),
 			Eof:     true,
 		})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_read_result", ID: f.ID, Data: data})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_read_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileDownload(context.Background(), nil, transferArgs{LocalPath: localPath, RemotePath: `C:\down.txt`})
@@ -93,9 +93,9 @@ func TestFileDownloadRoundTrip(t *testing.T) {
 }
 
 func TestFileDownloadRejectsOversizedFile(t *testing.T) {
-	sess := newMultiTestWirePair(t, "test-down2", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		data, _ := json.Marshal(aicmdwire.FileReadResultData{Content: base64.StdEncoding.EncodeToString([]byte("partial")), Eof: false})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_read_result", ID: f.ID, Data: data})
+	sess := newMultiTestWirePair(t, "test-down2", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		data, _ := json.Marshal(aishwinwire.FileReadResultData{Content: base64.StdEncoding.EncodeToString([]byte("partial")), Eof: false})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_read_result", ID: f.ID, Data: data})
 	})
 
 	_, _, err := sess.fileDownload(context.Background(), nil, transferArgs{LocalPath: "/tmp/whatever", RemotePath: `C:\huge.bin`})

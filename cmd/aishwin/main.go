@@ -1,11 +1,12 @@
-// aicmd is the Windows half of aicmd: it spawns the Linux half (cmd/aicmdd)
+﻿// aishwin is the Windows half of the aish-driven Windows shell feature: it
+// spawns the Linux half (cmd/aicmdd)
 // as a child process — by default via `wsl.exe -- aicmdd`, or via
 // `ssh [user@]host aicmdd` with --ssh — and speaks the private wire
-// protocol (internal/aicmdwire) over its stdin/stdout, exactly like any
+// protocol (internal/aishwinwire) over its stdin/stdout, exactly like any
 // other stdio MCP server is launched. It owns everything the human
 // interacts with for this session: process execution on Windows (later
 // stages), file I/O (later stages), and the approval prompts/menu, since
-// this is the console the human is actually watching. See the aicmd plan
+// this is the console the human is actually watching. See the aishwin plan
 // doc for the full architecture.
 //
 // This binary must not import internal/mcpserver, internal/session,
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 )
 
@@ -28,16 +30,24 @@ var version = "dev"
 func main() {
 	version = resolveVersion(version)
 
-	fs := flag.NewFlagSet("aicmd", flag.ExitOnError)
+	fs := flag.NewFlagSet("aishwin", flag.ExitOnError)
 	sshTarget := fs.String("ssh", "", "spawn the Linux half over ssh instead of wsl.exe, as [user@]hostname")
 	distro := fs.String("distro", "", "WSL distro to use with wsl.exe -d (default distro if empty)")
 	name := fs.String("name", "", "session name to present to the aish proxy")
 	shell := fs.String("shell", "cmd", "persistent shell to drive: cmd or powershell")
 	showVersion := fs.Bool("version", false, "print version and exit")
+	guiSmokeTest := fs.Bool("gui-smoke-test", false, "TEMPORARY: show the GUI with fake data and exit, no wire connection")
 	_ = fs.Parse(os.Args[1:])
 
 	if *showVersion {
-		fmt.Fprintln(stdout, "aicmd", version)
+		fmt.Fprintln(stdout, "aishwin", version)
+		return
+	}
+
+	startScreenshotWatcher()
+
+	if *guiSmokeTest {
+		runGUISmokeTest()
 		return
 	}
 
@@ -56,10 +66,18 @@ func main() {
 		spawn = spawnSSH(*sshTarget)
 	}
 
-	fmt.Fprintln(stdout, "aicmd: type 'help' for console commands (rename, access on/off, block on/off, env vars)")
+	runtime.LockOSThread() // the window-owning thread must pump its own messages
 
-	if err := run(ctx, spawn, *name); err != nil {
-		fmt.Fprintln(stderr, "aicmd:", err)
+	go func() {
+		if err := run(ctx, spawn, *name); err != nil {
+			AppendLog(fmt.Sprintf("aishwin: %v", err))
+		}
+	}()
+
+	refreshStatus()
+
+	if err := StartGUI("aishwin", buildRealMenu, stop); err != nil {
+		fmt.Fprintln(stderr, "aishwin:", err)
 		os.Exit(1)
 	}
 }
@@ -69,7 +87,7 @@ func main() {
 // version derives g<revision>[-dirty] from Go's embedded VCS metadata
 // instead of reporting a bare "dev" — the difference between, say, two
 // native `go build`s of different commits that would otherwise both just
-// say "aicmd dev". Duplicated rather than imported since it's unexported in
+// say "aishwin dev". Duplicated rather than imported since it's unexported in
 // package main in each of those.
 func resolveVersion(stamped string) string {
 	if stamped != "" && stamped != "dev" {

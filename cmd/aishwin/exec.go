@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 const defaultExecTimeout = 30 * time.Second
@@ -59,7 +59,7 @@ func (d *execDispatcher) liveShell() *shellSession {
 	return d.shell
 }
 
-func (d *execDispatcher) handle(wc *aicmdwire.Conn, f aicmdwire.Frame) {
+func (d *execDispatcher) handle(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	switch f.Type {
 	case "exec":
 		d.handleExec(wc, f)
@@ -68,8 +68,8 @@ func (d *execDispatcher) handle(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 	}
 }
 
-func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
-	var req aicmdwire.ExecData
+func (d *execDispatcher) handleExec(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	var req aishwinwire.ExecData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
@@ -77,7 +77,7 @@ func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 	// exec_poll (checking on an already-started task) is exempt: only
 	// starting new work is gated, not observing what's already running.
 	if reason := access.checkExec(); reason != "" {
-		send(wc, "exec_result", f.ID, aicmdwire.ExecResultData{Error: reason})
+		send(wc, "exec_result", f.ID, aishwinwire.ExecResultData{Error: reason})
 		return
 	}
 
@@ -89,9 +89,9 @@ func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 		// string that cmd.exe /c *also* quotes was corrupting paths with
 		// spaces) to fold cwd into the command text here.
 		id, err := d.tasks.Start(d.kind, req.Command, req.Cwd)
-		result := aicmdwire.ExecResultData{TaskID: id}
+		result := aishwinwire.ExecResultData{TaskID: id}
 		if err != nil {
-			result = aicmdwire.ExecResultData{Error: err.Error()}
+			result = aishwinwire.ExecResultData{Error: err.Error()}
 		}
 		send(wc, "exec_result", f.ID, result)
 		return
@@ -106,7 +106,7 @@ func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 
 	shell, err := d.currentShell()
 	if err != nil {
-		send(wc, "exec_result", f.ID, aicmdwire.ExecResultData{Error: err.Error()})
+		send(wc, "exec_result", f.ID, aishwinwire.ExecResultData{Error: err.Error()})
 		return
 	}
 
@@ -116,7 +116,7 @@ func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 	}
 
 	output, exitCode, timedOut, err := shell.Run(command, timeout)
-	result := aicmdwire.ExecResultData{Output: output, TimedOut: timedOut}
+	result := aishwinwire.ExecResultData{Output: output, TimedOut: timedOut}
 	if err != nil {
 		result.Error = err.Error()
 	} else if !timedOut {
@@ -125,13 +125,13 @@ func (d *execDispatcher) handleExec(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 	send(wc, "exec_result", f.ID, result)
 }
 
-func (d *execDispatcher) handleExecPoll(wc *aicmdwire.Conn, f aicmdwire.Frame) {
-	var req aicmdwire.ExecPollData
+func (d *execDispatcher) handleExecPoll(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	var req aishwinwire.ExecPollData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
 	running, output, next, code, err := d.tasks.Poll(req.TaskID, req.Cursor)
-	result := aicmdwire.ExecPollResultData{Running: running, Output: output, NextCursor: next, ExitCode: code}
+	result := aishwinwire.ExecPollResultData{Running: running, Output: output, NextCursor: next, ExitCode: code}
 	if err != nil {
 		result.Error = err.Error()
 	}
@@ -153,10 +153,10 @@ func withCwd(kind shellKind, cwd, command string) string {
 	}
 }
 
-func send(wc *aicmdwire.Conn, frameType, id string, data any) {
+func send(wc *aishwinwire.Conn, frameType, id string, data any) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return
 	}
-	_ = wc.Send(aicmdwire.Frame{Type: frameType, ID: id, Data: b})
+	_ = wc.Send(aishwinwire.Frame{Type: frameType, ID: id, Data: b})
 }

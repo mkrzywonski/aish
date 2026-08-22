@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -26,7 +26,7 @@ const (
 // connAuth is the per-MCP-connection authorization state. Unlike
 // internal/mcpserver/connauth.go's version, there is no kernel-verified peer
 // (no SO_PEERCRED equivalent for a link relayed from a TCP connection to
-// Windows) and no persisted grants (every aicmd.exe restart re-prompts;
+// Windows) and no persisted grants (every aishwin.exe restart re-prompts;
 // acceptable since these sessions are expected to be long-lived, not
 // frequently restarted).
 type connAuth struct {

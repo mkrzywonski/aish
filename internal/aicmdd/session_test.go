@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 	"ai-ssh/internal/proxy"
 )
 
@@ -16,7 +16,7 @@ import (
 // plan doc: a Windows peer's stdio hello handshake produces a session
 // directory that internal/proxy discovers with zero changes to that package
 // — and that closing the input pipe (simulating the parent process exiting,
-// as it would when aicmd.exe's child aicmdd loses its stdin) tears the
+// as it would when aishwin.exe's child aicmdd loses its stdin) tears the
 // session back down.
 func TestRunRegistersDiscoverableSession(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -29,11 +29,11 @@ func TestRunRegistersDiscoverableSession(t *testing.T) {
 		done <- Run(context.Background(), inRead, out)
 	}()
 
-	helloPayload, err := json.Marshal(aicmdwire.HelloData{Proto: aicmdwire.ProtoVersion, Name: "win-test", Shell: "cmd"})
+	helloPayload, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: "win-test", Shell: "cmd"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, err := json.Marshal(aicmdwire.Frame{Type: "hello", Data: helloPayload})
+	line, err := json.Marshal(aishwinwire.Frame{Type: "hello", Data: helloPayload})
 	if err != nil {
 		t.Fatal(err)
 	}

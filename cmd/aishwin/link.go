@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // execD is the persistent shell/background-task dispatcher, constructed
@@ -31,7 +31,7 @@ func run(ctx context.Context, spawn spawnFunc, name string) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		fmt.Fprintf(stderr, "aicmd: linux side disconnected (%v) — retrying in %s\n", err, backoff)
+		AppendLog(fmt.Sprintf("aishwin: linux side disconnected (%v) — retrying in %s", err, backoff))
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
@@ -53,13 +53,13 @@ func runOnce(ctx context.Context, spawn spawnFunc, name string) error {
 	}
 	defer stdin.Close()
 
-	wc := aicmdwire.NewConn(childOut, stdin)
+	wc := aishwinwire.NewConn(childOut, stdin)
 
-	hello, err := json.Marshal(aicmdwire.HelloData{Proto: aicmdwire.ProtoVersion, Name: name, Shell: string(execD.kind)})
+	hello, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: name, Shell: string(execD.kind)})
 	if err != nil {
 		return err
 	}
-	if err := wc.Send(aicmdwire.Frame{Type: "hello", Data: hello}); err != nil {
+	if err := wc.Send(aishwinwire.Frame{Type: "hello", Data: hello}); err != nil {
 		return fmt.Errorf("sending hello: %w", err)
 	}
 
@@ -70,15 +70,15 @@ func runOnce(ctx context.Context, spawn spawnFunc, name string) error {
 	if ackFrame.Type != "hello_ack" {
 		return fmt.Errorf("expected hello_ack, got %q", ackFrame.Type)
 	}
-	var ack aicmdwire.HelloAckData
+	var ack aishwinwire.HelloAckData
 	if err := json.Unmarshal(ackFrame.Data, &ack); err != nil {
 		return fmt.Errorf("malformed hello_ack: %w", err)
 	}
 	rt.setConnected(wc, ack)
 
-	fmt.Fprintf(stdout, "aicmd: connected — session %s is now visible to the AI (type 'help' for console commands)\n", sessionLabel(ack))
+	AppendLog(fmt.Sprintf("aishwin: connected — session %s is now visible to the AI", sessionLabel(ack)))
 
-	readErr := wc.ReadLoop(func(f aicmdwire.Frame) {
+	readErr := wc.ReadLoop(func(f aishwinwire.Frame) {
 		handleFrame(wc, f)
 	})
 
@@ -92,14 +92,14 @@ func runOnce(ctx context.Context, spawn spawnFunc, name string) error {
 	return errors.New("linux half exited")
 }
 
-func sessionLabel(ack aicmdwire.HelloAckData) string {
+func sessionLabel(ack aishwinwire.HelloAckData) string {
 	if ack.Name != "" {
 		return fmt.Sprintf("%s (%s)", ack.SessionID, ack.Name)
 	}
 	return ack.SessionID
 }
 
-func handleFrame(wc *aicmdwire.Conn, f aicmdwire.Frame) {
+func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	switch f.Type {
 	case "prompt":
 		handlePrompt(wc, f)
@@ -129,27 +129,26 @@ func handleFrame(wc *aicmdwire.Conn, f aicmdwire.Frame) {
 	}
 }
 
-func handleNotify(f aicmdwire.Frame) {
-	var n aicmdwire.NotifyData
+func handleNotify(f aishwinwire.Frame) {
+	var n aishwinwire.NotifyData
 	if err := json.Unmarshal(f.Data, &n); err != nil {
 		return
 	}
-	fmt.Fprintln(stdout, n.Text)
+	AppendLog(n.Text)
 }
 
-func handlePrompt(wc *aicmdwire.Conn, f aicmdwire.Frame) {
-	var p aicmdwire.PromptData
+func handlePrompt(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	var p aishwinwire.PromptData
 	if err := json.Unmarshal(f.Data, &p); err != nil {
 		return
 	}
-	timeout := time.Duration(p.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 120 * time.Second
+	answer := "n"
+	if AskYesNo(p.Question, p.TimeoutSeconds) {
+		answer = "y"
 	}
-	answer := askYN(p.Question, timeout)
-	data, err := json.Marshal(aicmdwire.PromptAnswerData{Answer: answer})
+	data, err := json.Marshal(aishwinwire.PromptAnswerData{Answer: answer})
 	if err != nil {
 		return
 	}
-	_ = wc.Send(aicmdwire.Frame{Type: "prompt_answer", ID: f.ID, Data: data})
+	_ = wc.Send(aishwinwire.Frame{Type: "prompt_answer", ID: f.ID, Data: data})
 }

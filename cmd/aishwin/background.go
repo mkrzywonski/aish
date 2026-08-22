@@ -52,10 +52,7 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 	}
 
 	task := &backgroundTask{running: true}
-	// stdout (crlf.go), not os.Stdout directly: an arbitrary background
-	// command is just as likely as go build (see shell.go's Run) to emit
-	// bare \n for its own progress output.
-	sink := io.MultiWriter(stdout, &taskWriter{task: task})
+	sink := io.MultiWriter(guiLog, &taskWriter{task: task})
 	cmd.Stdout = sink
 	cmd.Stderr = sink
 

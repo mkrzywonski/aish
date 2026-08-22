@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -9,13 +9,13 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // These mirror aish's own file_grep/file_search schemas
 // (internal/mcpserver/search.go) minus SessionArg, same reasoning as the
-// other tool files. The actual search/walk runs on cmd/aicmd
-// (cmd/aicmd/search.go, a direct port of aish's own local-route grepLocal/
+// other tool files. The actual search/walk runs on cmd/aishwin
+// (cmd/aishwin/search.go, a direct port of aish's own local-route grepLocal/
 // searchLocal) since that's where the Windows filesystem is.
 
 type fileGrepArgs struct {
@@ -78,7 +78,7 @@ func (s *aicmdSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest, a
 		return nil, fileGrepResult{}, errors.New("pattern must not be empty")
 	}
 
-	data, err := json.Marshal(aicmdwire.GrepData{
+	data, err := json.Marshal(aishwinwire.GrepData{
 		Path: args.Path, Pattern: args.Pattern, Include: args.Include,
 		IgnoreCase: args.IgnoreCase, MaxResults: args.MaxResults,
 	})
@@ -89,7 +89,7 @@ func (s *aicmdSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest, a
 	if err != nil {
 		return nil, fileGrepResult{}, err
 	}
-	var res aicmdwire.GrepResultData
+	var res aishwinwire.GrepResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fileGrepResult{}, fmt.Errorf("malformed file_grep result from the Windows peer: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *aicmdSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest, a
 	for i, m := range res.Matches {
 		matches[i] = grepMatch{Path: m.Path, Line: m.Line, Text: m.Text}
 	}
-	return nil, fileGrepResult{Matches: matches, Truncated: res.Truncated, Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, fileGrepResult{Matches: matches, Truncated: res.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
 }
 
 func (s *aicmdSession) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fileSearchArgs) (*mcp.CallToolResult, fileSearchResult, error) {
@@ -111,7 +111,7 @@ func (s *aicmdSession) fileSearch(ctx context.Context, req *mcp.CallToolRequest,
 		return nil, fileSearchResult{}, fmt.Errorf("invalid type %q: use file, directory, or symlink", args.Type)
 	}
 
-	data, err := json.Marshal(aicmdwire.SearchData{Path: args.Path, Name: args.Name, Type: args.Type, MaxResults: args.MaxResults})
+	data, err := json.Marshal(aishwinwire.SearchData{Path: args.Path, Name: args.Name, Type: args.Type, MaxResults: args.MaxResults})
 	if err != nil {
 		return nil, fileSearchResult{}, err
 	}
@@ -119,12 +119,12 @@ func (s *aicmdSession) fileSearch(ctx context.Context, req *mcp.CallToolRequest,
 	if err != nil {
 		return nil, fileSearchResult{}, err
 	}
-	var res aicmdwire.SearchResultData
+	var res aishwinwire.SearchResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fileSearchResult{}, fmt.Errorf("malformed file_search result from the Windows peer: %w", err)
 	}
 	if res.Error != "" {
 		return nil, fileSearchResult{}, errors.New(res.Error)
 	}
-	return nil, fileSearchResult{Paths: res.Paths, Truncated: res.Truncated, Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, fileSearchResult{Paths: res.Paths, Truncated: res.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
 }

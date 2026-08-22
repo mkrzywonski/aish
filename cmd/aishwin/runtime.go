@@ -1,9 +1,10 @@
-package main
+﻿package main
 
 import (
+	"fmt"
 	"sync"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // runtimeState is connection/session info the menu (menu.go) needs to
@@ -12,7 +13,7 @@ import (
 // us about the session in its hello_ack.
 type runtimeState struct {
 	mu            sync.Mutex
-	wire          *aicmdwire.Conn
+	wire          *aishwinwire.Conn
 	connected     bool
 	sessionID     string
 	name          string
@@ -21,7 +22,7 @@ type runtimeState struct {
 
 var rt = &runtimeState{}
 
-func (r *runtimeState) setConnected(wc *aicmdwire.Conn, ack aicmdwire.HelloAckData) {
+func (r *runtimeState) setConnected(wc *aishwinwire.Conn, ack aishwinwire.HelloAckData) {
 	r.mu.Lock()
 	r.wire = wc
 	r.connected = true
@@ -29,22 +30,46 @@ func (r *runtimeState) setConnected(wc *aicmdwire.Conn, ack aicmdwire.HelloAckDa
 	r.name = ack.Name
 	r.aicmddVersion = ack.Version
 	r.mu.Unlock()
+	refreshStatus()
 }
 
 func (r *runtimeState) setDisconnected() {
 	r.mu.Lock()
 	r.connected = false
 	r.mu.Unlock()
+	refreshStatus()
 }
 
 func (r *runtimeState) setName(name string) {
 	r.mu.Lock()
 	r.name = name
 	r.mu.Unlock()
+	refreshStatus()
+}
+
+// refreshStatus renders the current connection state into the GUI status
+// bar. Safe to call before the window exists (SetStatus/AppendLog no-op
+// until hwndMain is set).
+func refreshStatus() {
+	snap := rt.snapshot()
+	state := "disconnected"
+	label := "none"
+	if snap.connected {
+		state = "connected"
+		label = snap.sessionID
+		if snap.name != "" {
+			label = fmt.Sprintf("%s (%s)", snap.sessionID, snap.name)
+		}
+	}
+	text := fmt.Sprintf("%s  |  session: %s  |  aishwin %s", state, label, version)
+	if snap.connected && snap.aicmddVersion != "" {
+		text += fmt.Sprintf("  |  aicmdd %s", snap.aicmddVersion)
+	}
+	SetStatus(text)
 }
 
 type runtimeSnapshot struct {
-	wire          *aicmdwire.Conn
+	wire          *aishwinwire.Conn
 	connected     bool
 	sessionID     string
 	name          string

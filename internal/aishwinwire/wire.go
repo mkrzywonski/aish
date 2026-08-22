@@ -1,11 +1,11 @@
-// Package aicmdwire is the private wire protocol between cmd/aicmd
+﻿// Package aishwinwire is the private wire protocol between cmd/aishwin
 // (Windows) and cmd/aicmdd (Linux): newline-delimited JSON over the child
 // process's stdio pipes, type-discriminated, correlated by request id.
 // Shared by both binaries so the frame shapes can't drift between them —
 // unlike the duplicated auth state machine (see internal/aicmdd/auth.go),
 // which is business logic private to aicmdd's own unexported types, this is
 // pure wire format both sides must agree on byte-for-byte.
-package aicmdwire
+package aishwinwire
 
 import (
 	"bufio"
@@ -47,7 +47,7 @@ type HelloData struct {
 
 // HelloAckData is aicmdd's one reply to the hello frame, sent once the
 // session directory/socket are up, before it starts serving MCP or reading
-// further wire frames. Lets aicmd display "connected as session <id>"
+// further wire frames. Lets aishwin display "connected as session <id>"
 // immediately and answer the menu's version command without a separate
 // round trip.
 type HelloAckData struct {
@@ -56,9 +56,9 @@ type HelloAckData struct {
 	Version   string `json:"version"`
 }
 
-// RenameData requests renaming the live session, sent by aicmd (from its
+// RenameData requests renaming the live session, sent by aishwin (from its
 // console menu) to aicmdd -- the reverse direction from exec/file_*, which
-// aicmdd sends to aicmd. Conn's Send/Await are symmetric, so no separate
+// aicmdd sends to aishwin. Conn's Send/Await are symmetric, so no separate
 // mechanism is needed for a request originating on this side.
 type RenameData struct {
 	Name string `json:"name"`

@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 	"ai-ssh/internal/paths"
 )
 
@@ -28,7 +28,7 @@ var Version = "dev"
 type aicmdSession struct {
 	id   string
 	name string
-	wire *aicmdwire.Conn
+	wire *aishwinwire.Conn
 	auth *authManager
 }
 
@@ -52,16 +52,16 @@ func (s *aicmdSession) Prompt(question, kind string, timeout time.Duration) (str
 	ch := s.wire.Await(id)
 	defer s.wire.CancelAwait(id)
 
-	data, err := json.Marshal(aicmdwire.PromptData{Question: question, Kind: kind, TimeoutSeconds: int(timeout / time.Second)})
+	data, err := json.Marshal(aishwinwire.PromptData{Question: question, Kind: kind, TimeoutSeconds: int(timeout / time.Second)})
 	if err != nil {
 		return "", false
 	}
-	if err := s.wire.Send(aicmdwire.Frame{Type: "prompt", ID: id, Data: data}); err != nil {
+	if err := s.wire.Send(aishwinwire.Frame{Type: "prompt", ID: id, Data: data}); err != nil {
 		return "", false
 	}
 	select {
 	case f := <-ch:
-		var pa aicmdwire.PromptAnswerData
+		var pa aishwinwire.PromptAnswerData
 		if err := json.Unmarshal(f.Data, &pa); err != nil || pa.Answer == "" {
 			return "", false
 		}
@@ -81,7 +81,7 @@ func (s *aicmdSession) roundTrip(frameType string, data json.RawMessage, timeout
 	id := randHex(8)
 	ch := s.wire.Await(id)
 	defer s.wire.CancelAwait(id)
-	if err := s.wire.Send(aicmdwire.Frame{Type: frameType, ID: id, Data: data}); err != nil {
+	if err := s.wire.Send(aishwinwire.Frame{Type: frameType, ID: id, Data: data}); err != nil {
 		return nil, fmt.Errorf("sending %s request to the Windows peer: %w", frameType, err)
 	}
 	select {
@@ -95,15 +95,15 @@ func (s *aicmdSession) roundTrip(frameType string, data json.RawMessage, timeout
 // Notify sends a one-way informational message to the Windows peer's
 // console, mirroring internal/session/console.go's Notify.
 func (s *aicmdSession) Notify(format string, args ...any) {
-	data, err := json.Marshal(aicmdwire.NotifyData{Text: fmt.Sprintf(format, args...)})
+	data, err := json.Marshal(aishwinwire.NotifyData{Text: fmt.Sprintf(format, args...)})
 	if err != nil {
 		return
 	}
-	_ = s.wire.Send(aicmdwire.Frame{Type: "notify", Data: data})
+	_ = s.wire.Send(aishwinwire.Frame{Type: "notify", Data: data})
 }
 
 // Run is aicmdd's entire job for one invocation: it is spawned as a child
-// process by aicmd.exe (by default via `wsl.exe -- aicmdd`, or via
+// process by aishwin.exe (by default via `wsl.exe -- aicmdd`, or via
 // `ssh [user@]host aicmdd`) and speaks the private wire protocol over in/out
 // — normally os.Stdin/os.Stdout. It reads the hello frame, stands up an
 // ordinary aish-shaped session directory and Unix socket (indistinguishable
@@ -114,9 +114,9 @@ func (s *aicmdSession) Notify(format string, args ...any) {
 // multiple connections could race over, so nothing analogous to name-based
 // eviction is needed here.
 func Run(ctx context.Context, in io.Reader, out io.Writer) error {
-	wc := aicmdwire.NewConn(in, out)
+	wc := aishwinwire.NewConn(in, out)
 
-	hello, err := aicmdwire.ReadHello(wc)
+	hello, err := aishwinwire.ReadHello(wc)
 	if err != nil {
 		return fmt.Errorf("rejecting connection: %w", err)
 	}
@@ -165,11 +165,11 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	defer cancelUnix()
 	go serveUnix(unixCtx, ul, server)
 
-	ackData, err := json.Marshal(aicmdwire.HelloAckData{SessionID: id, Name: sess.name, Version: Version})
+	ackData, err := json.Marshal(aishwinwire.HelloAckData{SessionID: id, Name: sess.name, Version: Version})
 	if err != nil {
 		return err
 	}
-	if err := wc.Send(aicmdwire.Frame{Type: "hello_ack", Data: ackData}); err != nil {
+	if err := wc.Send(aishwinwire.Frame{Type: "hello_ack", Data: ackData}); err != nil {
 		return fmt.Errorf("sending hello_ack: %w", err)
 	}
 
@@ -178,7 +178,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	// prompt_answer via the pending-request map; "rename" (from the Windows
 	// console's menu) is the only frame type this side needs to act on
 	// beyond that.
-	return wc.ReadLoop(func(f aicmdwire.Frame) {
+	return wc.ReadLoop(func(f aishwinwire.Frame) {
 		if f.Type == "rename" {
 			sess.handleRename(f)
 		}
@@ -187,9 +187,9 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 // handleRename applies a rename requested from the Windows console's menu
 // and replies with the outcome.
-func (s *aicmdSession) handleRename(f aicmdwire.Frame) {
-	var req aicmdwire.RenameData
-	result := aicmdwire.RenameResultData{}
+func (s *aicmdSession) handleRename(f aishwinwire.Frame) {
+	var req aishwinwire.RenameData
+	result := aishwinwire.RenameResultData{}
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		result.Error = "malformed rename request"
 	} else if !paths.ValidName(req.Name) {
@@ -203,7 +203,7 @@ func (s *aicmdSession) handleRename(f aicmdwire.Frame) {
 	if err != nil {
 		return
 	}
-	_ = s.wire.Send(aicmdwire.Frame{Type: "rename_result", ID: f.ID, Data: data})
+	_ = s.wire.Send(aishwinwire.Frame{Type: "rename_result", ID: f.ID, Data: data})
 }
 
 // serveUnix accepts MCP client connections (normally the aish proxy) on the

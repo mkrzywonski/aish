@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -7,20 +7,20 @@ import (
 	"io"
 	"testing"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // newTestWirePair sets up a session wired to a fake Windows peer, with
 // ReadLoop already running (see the comment on TestExecToolRoundTrip for why
 // that's required). handle is invoked once per request the fake peer
 // receives, and must send exactly one reply frame with a matching ID.
-func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame)) *aicmdSession {
+func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aicmdSession {
 	t.Helper()
 	peerIn, ourOut := io.Pipe()
 	ourIn, peerOut := io.Pipe()
-	wire := aicmdwire.NewConn(ourIn, ourOut)
-	peer := aicmdwire.NewConn(peerIn, peerOut)
-	go wire.ReadLoop(func(aicmdwire.Frame) {})
+	wire := aishwinwire.NewConn(ourIn, ourOut)
+	peer := aishwinwire.NewConn(peerIn, peerOut)
+	go wire.ReadLoop(func(aishwinwire.Frame) {})
 	go func() {
 		f, err := peer.ReadOne()
 		if err != nil {
@@ -34,13 +34,13 @@ func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *ai
 // newMultiTestWirePair is newTestWirePair for tool handlers that make more
 // than one sequential wire round trip (file_edit/file_patch: a file_read
 // followed by a file_write). handle is invoked once per request, in order.
-func newMultiTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame)) *aicmdSession {
+func newMultiTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aicmdSession {
 	t.Helper()
 	peerIn, ourOut := io.Pipe()
 	ourIn, peerOut := io.Pipe()
-	wire := aicmdwire.NewConn(ourIn, ourOut)
-	peer := aicmdwire.NewConn(peerIn, peerOut)
-	go wire.ReadLoop(func(aicmdwire.Frame) {})
+	wire := aishwinwire.NewConn(ourIn, ourOut)
+	peer := aishwinwire.NewConn(peerIn, peerOut)
+	go wire.ReadLoop(func(aishwinwire.Frame) {})
 	go func() {
 		for {
 			f, err := peer.ReadOne()
@@ -54,8 +54,8 @@ func newMultiTestWirePair(t *testing.T, id string, handle func(t *testing.T, pee
 }
 
 func TestFileReadRoundTrip(t *testing.T) {
-	sess := newTestWirePair(t, "test-fr", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		var req aicmdwire.FileReadData
+	sess := newTestWirePair(t, "test-fr", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		var req aishwinwire.FileReadData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			t.Error(err)
 			return
@@ -63,11 +63,11 @@ func TestFileReadRoundTrip(t *testing.T) {
 		if req.Path != `C:\test.txt` {
 			t.Errorf("Path = %q, want %q", req.Path, `C:\test.txt`)
 		}
-		data, _ := json.Marshal(aicmdwire.FileReadResultData{
+		data, _ := json.Marshal(aishwinwire.FileReadResultData{
 			Content: base64.StdEncoding.EncodeToString([]byte("hello")),
 			Eof:     true,
 		})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_read_result", ID: f.ID, Data: data})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_read_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileRead(context.Background(), nil, fileReadArgs{Path: `C:\test.txt`})
@@ -80,14 +80,14 @@ func TestFileReadRoundTrip(t *testing.T) {
 	if res.VersionKind != "sha256" || res.Version == "" {
 		t.Errorf("expected a sha256 version token for a full-file read, got kind=%q version=%q", res.VersionKind, res.Version)
 	}
-	if res.Via != "aicmd" || res.Host != "win-test" {
-		t.Errorf("Via/Host = %q/%q, want %q/%q", res.Via, res.Host, "aicmd", "win-test")
+	if res.Via != "aishwin" || res.Host != "win-test" {
+		t.Errorf("Via/Host = %q/%q, want %q/%q", res.Via, res.Host, "aishwin", "win-test")
 	}
 }
 
 func TestFileWriteRoundTrip(t *testing.T) {
-	sess := newTestWirePair(t, "test-fw", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		var req aicmdwire.FileWriteData
+	sess := newTestWirePair(t, "test-fw", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		var req aishwinwire.FileWriteData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			t.Error(err)
 			return
@@ -96,8 +96,8 @@ func TestFileWriteRoundTrip(t *testing.T) {
 		if string(decoded) != "new content" {
 			t.Errorf("decoded content = %q, want %q", decoded, "new content")
 		}
-		data, _ := json.Marshal(aicmdwire.FileWriteResultData{BytesWritten: len(decoded)})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_write_result", ID: f.ID, Data: data})
+		data, _ := json.Marshal(aishwinwire.FileWriteResultData{BytesWritten: len(decoded)})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_write_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileWrite(context.Background(), nil, fileWriteArgs{Path: `C:\test.txt`, Content: "new content"})
@@ -110,9 +110,9 @@ func TestFileWriteRoundTrip(t *testing.T) {
 }
 
 func TestFileStatRoundTrip(t *testing.T) {
-	sess := newTestWirePair(t, "test-fs", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		data, _ := json.Marshal(aicmdwire.FileStatResultData{Type: "file", Size: 42, Mode: "0644", ModifiedUnix: 1000})
-		_ = peer.Send(aicmdwire.Frame{Type: "file_stat_result", ID: f.ID, Data: data})
+	sess := newTestWirePair(t, "test-fs", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		data, _ := json.Marshal(aishwinwire.FileStatResultData{Type: "file", Size: 42, Mode: "0644", ModifiedUnix: 1000})
+		_ = peer.Send(aishwinwire.Frame{Type: "file_stat_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.fileStat(context.Background(), nil, fileStatArgs{Path: `C:\test.txt`})
@@ -129,14 +129,14 @@ func TestFileStatRoundTrip(t *testing.T) {
 }
 
 func TestDirectoryListRoundTrip(t *testing.T) {
-	sess := newTestWirePair(t, "test-dl", func(t *testing.T, peer *aicmdwire.Conn, f aicmdwire.Frame) {
-		data, _ := json.Marshal(aicmdwire.DirectoryListResultData{
-			Entries: []aicmdwire.DirEntryData{
+	sess := newTestWirePair(t, "test-dl", func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame) {
+		data, _ := json.Marshal(aishwinwire.DirectoryListResultData{
+			Entries: []aishwinwire.DirEntryData{
 				{Name: "a.txt", Type: "file", Size: 1, ModifiedUnix: 1},
 				{Name: "sub", Type: "directory", ModifiedUnix: 2},
 			},
 		})
-		_ = peer.Send(aicmdwire.Frame{Type: "directory_list_result", ID: f.ID, Data: data})
+		_ = peer.Send(aishwinwire.Frame{Type: "directory_list_result", ID: f.ID, Data: data})
 	})
 
 	_, res, err := sess.directoryList(context.Background(), nil, directoryListArgs{Path: `C:\`})

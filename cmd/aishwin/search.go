@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 // pure Go (filepath.WalkDir + regexp), not shelling out to rg/grep/find at
 // all for the local case, so they're already cross-platform and need no
 // Windows-specific rewrite. Only the remote-over-SSH path in aish shells
-// out to ripgrep/grep/find; that doesn't apply here since aicmd always
+// out to ripgrep/grep/find; that doesn't apply here since aishwin always
 // walks its own (Windows) local filesystem, the same relationship
 // file_stat/directory_list already have to aish's local route. Copied
 // rather than imported for the same reason as patch.go's diff logic: it

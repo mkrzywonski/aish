@@ -1,4 +1,4 @@
-package aicmdd
+﻿package aicmdd
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"ai-ssh/internal/aicmdwire"
+	"ai-ssh/internal/aishwinwire"
 )
 
 // These four mirror aish's own file_read/file_write/file_stat/directory_list
@@ -134,11 +134,11 @@ func (s *aicmdSession) fileRead(ctx context.Context, req *mcp.CallToolRequest, a
 		return nil, fileReadResult{}, err
 	}
 
-	out := fileReadResult{Eof: eof, Via: "aicmd", Host: s.displayHost()}
+	out := fileReadResult{Eof: eof, Via: "aishwin", Host: s.displayHost()}
 	if args.Offset == 0 && eof {
 		// The whole file is in hand: a sha256 over these exact bytes is a
 		// TOCTOU-correct version token for a later if_match write.
-		out.Version, out.VersionKind = aicmdwire.SHA256Version(raw), "sha256"
+		out.Version, out.VersionKind = aishwinwire.SHA256Version(raw), "sha256"
 	}
 	if utf8.Valid(raw) {
 		out.Content, out.Encoding = string(raw), "utf8"
@@ -153,11 +153,11 @@ func (s *aicmdSession) fileRead(ctx context.Context, req *mcp.CallToolRequest, a
 
 // readRemoteFile sends a file_read wire request and returns the decoded raw
 // bytes. maxBytes<=0 uses the Windows side's own default (see
-// defaultMaxFileRead in cmd/aicmd/files_dispatch.go). Shared by fileRead,
+// defaultMaxFileRead in cmd/aishwin/files_dispatch.go). Shared by fileRead,
 // fileEdit, and filePatch — each needs the same "get the file's current raw
 // bytes" step before doing something different with them.
 func (s *aicmdSession) readRemoteFile(path string, offset int64, maxBytes int) (data []byte, eof bool, err error) {
-	req, err := json.Marshal(aicmdwire.FileReadData{Path: path, MaxBytes: maxBytes, Offset: offset})
+	req, err := json.Marshal(aishwinwire.FileReadData{Path: path, MaxBytes: maxBytes, Offset: offset})
 	if err != nil {
 		return nil, false, err
 	}
@@ -165,7 +165,7 @@ func (s *aicmdSession) readRemoteFile(path string, offset int64, maxBytes int) (
 	if err != nil {
 		return nil, false, err
 	}
-	var wireRes aicmdwire.FileReadResultData
+	var wireRes aishwinwire.FileReadResultData
 	if err := json.Unmarshal(res, &wireRes); err != nil {
 		return nil, false, fmt.Errorf("malformed file_read result from the Windows peer: %w", err)
 	}
@@ -199,14 +199,14 @@ func (s *aicmdSession) fileWrite(ctx context.Context, req *mcp.CallToolRequest, 
 	if err != nil {
 		return nil, fileWriteResult{}, err
 	}
-	return nil, fileWriteResult{BytesWritten: n, Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, fileWriteResult{BytesWritten: n, Via: "aishwin", Host: s.displayHost()}, nil
 }
 
 // writeRemoteFile sends a file_write wire request. Shared by fileWrite,
 // fileEdit, and filePatch — the latter two derive ifMatch automatically
 // (from what they just read) rather than taking it from the caller.
 func (s *aicmdSession) writeRemoteFile(path string, data []byte, mode, ifMatch string, append bool) (bytesWritten int, err error) {
-	req, err := json.Marshal(aicmdwire.FileWriteData{
+	req, err := json.Marshal(aishwinwire.FileWriteData{
 		Path:    path,
 		Content: base64.StdEncoding.EncodeToString(data),
 		Append:  append,
@@ -220,7 +220,7 @@ func (s *aicmdSession) writeRemoteFile(path string, data []byte, mode, ifMatch s
 	if err != nil {
 		return 0, err
 	}
-	var wireRes aicmdwire.FileWriteResultData
+	var wireRes aishwinwire.FileWriteResultData
 	if err := json.Unmarshal(res, &wireRes); err != nil {
 		return 0, fmt.Errorf("malformed file_write result from the Windows peer: %w", err)
 	}
@@ -234,7 +234,7 @@ func (s *aicmdSession) fileStat(ctx context.Context, req *mcp.CallToolRequest, a
 	if args.Path == "" {
 		return nil, fileStatResult{}, errors.New("path must not be empty")
 	}
-	data, err := json.Marshal(aicmdwire.FileStatData{Path: args.Path})
+	data, err := json.Marshal(aishwinwire.FileStatData{Path: args.Path})
 	if err != nil {
 		return nil, fileStatResult{}, err
 	}
@@ -243,7 +243,7 @@ func (s *aicmdSession) fileStat(ctx context.Context, req *mcp.CallToolRequest, a
 	if err != nil {
 		return nil, fileStatResult{}, err
 	}
-	var wireRes aicmdwire.FileStatResultData
+	var wireRes aishwinwire.FileStatResultData
 	if err := json.Unmarshal(res, &wireRes); err != nil {
 		return nil, fileStatResult{}, fmt.Errorf("malformed file_stat result from the Windows peer: %w", err)
 	}
@@ -253,7 +253,7 @@ func (s *aicmdSession) fileStat(ctx context.Context, req *mcp.CallToolRequest, a
 
 	out := fileStatResult{
 		Path: args.Path, Type: wireRes.Type, Size: wireRes.Size, Mode: wireRes.Mode,
-		ModifiedUnix: wireRes.ModifiedUnix, Via: "aicmd", Host: s.displayHost(),
+		ModifiedUnix: wireRes.ModifiedUnix, Via: "aishwin", Host: s.displayHost(),
 	}
 	out.Version = fmt.Sprintf("mtime-size:%d:%d", out.ModifiedUnix, out.Size)
 	out.VersionKind = "mtime-size"
@@ -272,7 +272,7 @@ func (s *aicmdSession) directoryList(ctx context.Context, req *mcp.CallToolReque
 		return nil, directoryListResult{}, errors.New("max_entries must not exceed 10000")
 	}
 
-	data, err := json.Marshal(aicmdwire.DirectoryListData{Path: args.Path, MaxEntries: max})
+	data, err := json.Marshal(aishwinwire.DirectoryListData{Path: args.Path, MaxEntries: max})
 	if err != nil {
 		return nil, directoryListResult{}, err
 	}
@@ -281,7 +281,7 @@ func (s *aicmdSession) directoryList(ctx context.Context, req *mcp.CallToolReque
 	if err != nil {
 		return nil, directoryListResult{}, err
 	}
-	var wireRes aicmdwire.DirectoryListResultData
+	var wireRes aishwinwire.DirectoryListResultData
 	if err := json.Unmarshal(res, &wireRes); err != nil {
 		return nil, directoryListResult{}, fmt.Errorf("malformed directory_list result from the Windows peer: %w", err)
 	}
@@ -293,7 +293,7 @@ func (s *aicmdSession) directoryList(ctx context.Context, req *mcp.CallToolReque
 	for i, e := range wireRes.Entries {
 		entries[i] = directoryEntry{Name: e.Name, Type: e.Type, Size: e.Size, ModifiedUnix: e.ModifiedUnix}
 	}
-	return nil, directoryListResult{Entries: entries, Truncated: wireRes.Truncated, Via: "aicmd", Host: s.displayHost()}, nil
+	return nil, directoryListResult{Entries: entries, Truncated: wireRes.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
 }
 
 // numberLines renders content with 1-based line numbers (cat -n style),

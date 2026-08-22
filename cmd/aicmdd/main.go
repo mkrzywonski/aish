@@ -1,11 +1,11 @@
-// aicmdd is the Linux/WSL half of aicmd. aicmd.exe (Windows) spawns it as a
+﻿// aicmdd is the Linux/WSL half of aishwin. aishwin.exe (Windows) spawns it as a
 // child process — by default via `wsl.exe -- aicmdd`, or via
 // `ssh [user@]host aicmdd` for a non-WSL/remote Linux target — and speaks
 // the private wire protocol over its stdin/stdout, exactly like any other
 // stdio MCP server (including aish's own `aish mcp-proxy`). It presents an
 // ordinary aish-shaped MCP session (visible to the aish proxy's
 // list_sessions like any other session) backed by that Windows peer instead
-// of a local PTY. See the aicmd plan doc for the full architecture;
+// of a local PTY. See the aishwin plan doc for the full architecture;
 // internal/mcpserver, internal/session, internal/sshmux, and internal/term
 // are deliberately untouched by this binary.
 //
