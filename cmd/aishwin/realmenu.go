@@ -81,11 +81,22 @@ func buildRealMenu() syscall.Handle {
 	helpMenu := NewSubmenu(bar, "Help")
 	AddMenuItem(helpMenu, "Status", func() {
 		snap := rt.snapshot()
-		AppendLog(fmt.Sprintf(
-			"aishwin status: connected=%v session=%s shell=%s access=%s blocked=%s",
+		ShowInfo("aishwin Status", fmt.Sprintf(
+			"Connected to linux half: %v\nSession: %s\nShell: %s\nAI access: %s\nNew commands blocked: %s",
 			snap.connected,
 			sessionLabel(aishwinwire.HelloAckData{SessionID: snap.sessionID, Name: snap.name}),
 			execD.kind, onOff(access.aiEnabled.Load()), onOff(access.newExecBlocked.Load()),
+		))
+	})
+	AddMenuItem(helpMenu, "About", func() {
+		snap := rt.snapshot()
+		aicmddVersion := snap.aicmddVersion
+		if aicmddVersion == "" {
+			aicmddVersion = "not connected"
+		}
+		ShowInfo("About aishwin", fmt.Sprintf(
+			"aishwin %s\n\nLets an AI assistant run commands and manage files on this computer, with everything it does shown in this window so you can see what happened.\n\nCompanion service: aicmdd %s",
+			version, aicmddVersion,
 		))
 	})
 

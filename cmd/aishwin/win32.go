@@ -23,9 +23,10 @@ import (
 )
 
 var (
-	user32   = syscall.NewLazyDLL("user32.dll")
-	kernel32 = syscall.NewLazyDLL("kernel32.dll")
-	gdi32    = syscall.NewLazyDLL("gdi32.dll")
+	user32    = syscall.NewLazyDLL("user32.dll")
+	kernel32  = syscall.NewLazyDLL("kernel32.dll")
+	gdi32     = syscall.NewLazyDLL("gdi32.dll")
+	msftedit  = syscall.NewLazyDLL("msftedit.dll") // self-registers the RICHEDIT50W window class on load
 
 	procRegisterClassExW  = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW   = user32.NewProc("CreateWindowExW")
@@ -60,6 +61,7 @@ var (
 	procGetWindowRect     = user32.NewProc("GetWindowRect")
 	procIsDialogMessageW  = user32.NewProc("IsDialogMessageW")
 	procGetDlgItem        = user32.NewProc("GetDlgItem")
+	procMessageBoxW       = user32.NewProc("MessageBoxW")
 
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procOpenProcess         = kernel32.NewProc("OpenProcess")
@@ -101,6 +103,34 @@ type point struct {
 
 type rect struct {
 	left, top, right, bottom int32
+}
+
+// charFormat2W mirrors CHARFORMAT2W (richedit.h) field-for-field so its
+// size (computed via unsafe.Sizeof, not hardcoded) matches what
+// EM_SETCHARFORMAT expects exactly -- RichEdit uses cbSize to tell which
+// CHARFORMAT version a caller is using, so a wrong size is rejected outright
+// rather than partially accepted.
+type charFormat2W struct {
+	cbSize          uint32
+	dwMask          uint32
+	dwEffects       uint32
+	yHeight         int32
+	yOffset         int32
+	crTextColor     uint32
+	bCharSet        byte
+	bPitchAndFamily byte
+	szFaceName      [32]uint16
+	wWeight         uint16
+	sSpacing        int16
+	crBackColor     uint32
+	lcid            uint32
+	dwReserved      uint32
+	sStyle          int16
+	wKerning        uint16
+	bUnderlineType  byte
+	bAnimation      byte
+	bRevAuthor      byte
+	bReserved1      byte
 }
 
 // ---- constants ----
@@ -165,6 +195,21 @@ const (
 
 	processQueryLimitedInformation = 0x1000
 	stillActive                   = 259
+
+	mbOk              = 0x00000000
+	mbIconInformation = 0x00000040
+
+	// RichEdit char-formatting (richedit.h): EM_SETCHARFORMAT sets the
+	// format either of the current selection or, with an empty/collapsed
+	// selection, of text about to be inserted there -- exactly the caret
+	// position appendEditText already moves to before each append.
+	emSetCharFormat = wmUser + 68
+	scfSelection    = 0x0001
+	cfmColor        = 0x40000000
+	// cfeAutoColor reuses CFM_COLOR's own bit value in dwEffects (a real,
+	// documented Win32 API quirk, not a typo) to mean "automatic/default
+	// color" instead of crTextColor.
+	cfeAutoColor = 0x40000000
 )
 
 // cwUseDefault is CW_USEDEFAULT (0x80000000 as a 32-bit signed int, i.e.
@@ -197,6 +242,32 @@ func loadCursorArrow() syscall.Handle {
 func getModuleHandle() syscall.Handle {
 	h, _, _ := procGetModuleHandleW.Call(0)
 	return syscall.Handle(h)
+}
+
+// ShowInfo displays a modal, owned informational dialog with an OK button.
+// Unlike AskYesNo/AskText (hand-built DLGTEMPLATEs), this has no wire
+// deadline to respect -- it's only ever triggered by a human clicking a
+// menu item -- so a plain blocking MessageBoxW is the simplest correct
+// tool, not a corner cut. Must be called from the GUI's own thread (a menu
+// click handler, which mainWndProc already runs there).
+func ShowInfo(title, text string) {
+	procMessageBoxW.Call(uintptr(hwndMain), uintptr(unsafe.Pointer(utf16ptr(text))), uintptr(unsafe.Pointer(utf16ptr(title))), mbOk|mbIconInformation)
+}
+
+// setCaretTextColor sets the color newly appended text will be inserted
+// with, on the RichEdit control at hwnd. auto=true resets to the control's
+// normal default color (CFE_AUTOCOLOR); otherwise color is a COLORREF
+// (0x00BBGGRR -- reversed from RGB).
+func setCaretTextColor(hwnd syscall.Handle, auto bool, color uint32) {
+	var cf charFormat2W
+	cf.cbSize = uint32(unsafe.Sizeof(cf))
+	cf.dwMask = cfmColor
+	if auto {
+		cf.dwEffects = cfeAutoColor
+	} else {
+		cf.crTextColor = color
+	}
+	procSendMessageW.Call(uintptr(hwnd), emSetCharFormat, scfSelection, uintptr(unsafe.Pointer(&cf)))
 }
 
 // processExited independently checks, via OpenProcess+GetExitCodeProcess,

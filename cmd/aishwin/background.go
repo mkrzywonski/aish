@@ -3,9 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -52,10 +52,22 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 		cmd.Dir = cwd
 	}
 
+	// Background tasks can run concurrently with each other (unlike the
+	// single serialized foreground shell), so live-streaming their output
+	// line-by-line into the shared log view could interleave two commands'
+	// output into one unreadable stream. Instead: announce the command in
+	// red the moment it starts, capture its output silently (taskWriter,
+	// already needed for exec_status polling), and log the command plus
+	// its complete output as ONE atomic block in black once it finishes --
+	// drainLogQueue (gui.go) processes queued entries one at a time on a
+	// single thread, so a whole multi-line block queued as a single
+	// AppendLog call can never have another goroutine's entry land in the
+	// middle of it.
+	AppendLogColor("Running "+command, colorRunning)
+
 	task := &backgroundTask{running: true}
-	sink := io.MultiWriter(guiLog, &taskWriter{task: task})
-	cmd.Stdout = sink
-	cmd.Stderr = sink
+	cmd.Stdout = &taskWriter{task: task}
+	cmd.Stderr = &taskWriter{task: task}
 
 	if err := cmd.Start(); err != nil {
 		return "", err
@@ -76,7 +88,14 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 		task.mu.Lock()
 		task.running = false
 		task.exitCode = &code
+		output := task.buf.String()
 		task.mu.Unlock()
+
+		block := command
+		if trimmed := strings.TrimRight(output, "\r\n"); trimmed != "" {
+			block += "\r\n" + trimmed
+		}
+		AppendLog(block)
 	}()
 
 	return id, nil

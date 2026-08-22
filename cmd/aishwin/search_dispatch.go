@@ -2,6 +2,7 @@
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"ai-ssh/internal/aishwinwire"
 )
@@ -23,6 +24,7 @@ func handleGrep(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		return
 	}
 	max := clampResults(req.MaxResults, grepDefaultResults, grepMaxResults)
+	AppendLogColor(fmt.Sprintf("Grepping %s for %q", req.Path, req.Pattern), colorFileOp)
 	matches, truncated, err := grepLocal(req.Path, req.Pattern, req.Include, req.IgnoreCase, max)
 	if err != nil {
 		send(wc, "file_grep_result", f.ID, aishwinwire.GrepResultData{Error: err.Error()})
@@ -45,6 +47,7 @@ func handleSearch(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		return
 	}
 	max := clampResults(req.MaxResults, searchDefaultMax, searchMaxResults)
+	AppendLogColor(fmt.Sprintf("Finding files in %s matching %q", req.Path, req.Name), colorFileOp)
 	paths, truncated, err := searchLocal(req.Path, req.Name, req.Type, max)
 	if err != nil {
 		send(wc, "file_search_result", f.ID, aishwinwire.SearchResultData{Error: err.Error()})

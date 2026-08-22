@@ -3,6 +3,7 @@
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	"ai-ssh/internal/aishwinwire"
 )
@@ -22,6 +23,7 @@ func handleFileRead(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	if max <= 0 {
 		max = defaultMaxFileRead
 	}
+	AppendLogColor("Reading "+req.Path, colorFileOp)
 	data, eof, err := readFile(req.Path, req.Offset, max)
 	if err != nil {
 		send(wc, "file_read_result", f.ID, aishwinwire.FileReadResultData{Error: err.Error()})
@@ -48,6 +50,12 @@ func handleFileWrite(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		return
 	}
 
+	if req.Append {
+		AppendLogColor(fmt.Sprintf("Appending to %s (%d bytes)", req.Path, len(data)), colorFileOp)
+	} else {
+		AppendLogColor(fmt.Sprintf("Writing %s (%d bytes)", req.Path, len(data)), colorFileOp)
+	}
+
 	var n int
 	if req.Append {
 		n, err = appendFile(req.Path, data, req.Mode)
@@ -72,6 +80,7 @@ func handleFileStat(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		send(wc, "file_stat_result", f.ID, aishwinwire.FileStatResultData{Error: reason})
 		return
 	}
+	AppendLogColor("Checking "+req.Path, colorFileOp)
 	kind, mode, size, modifiedUnix, err := statFile(req.Path)
 	if err != nil {
 		send(wc, "file_stat_result", f.ID, aishwinwire.FileStatResultData{Error: err.Error()})
@@ -95,6 +104,7 @@ func handleDirectoryList(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	if max <= 0 {
 		max = 1000
 	}
+	AppendLogColor("Listing "+req.Path, colorFileOp)
 	entries, truncated, err := listDir(req.Path, max)
 	if err != nil {
 		send(wc, "directory_list_result", f.ID, aishwinwire.DirectoryListResultData{Error: err.Error()})

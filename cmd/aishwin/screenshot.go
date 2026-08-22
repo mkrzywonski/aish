@@ -24,11 +24,12 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"syscall"
 	"time"
 	"unsafe"
 )
 
-var errNoWindow = errors.New("aishwin: no window to capture (hwndMain is zero-sized or unset)")
+var errNoWindow = errors.New("aishwin: no window to capture (target window is zero-sized or unset)")
 
 var (
 	screenshotTriggerPath = fmt.Sprintf(`C:\Users\Public\aishwin-screenshot-request-%d`, os.Getpid())
@@ -42,15 +43,17 @@ const (
 )
 
 var (
-	procGetDC                = user32.NewProc("GetDC")
-	procReleaseDC             = user32.NewProc("ReleaseDC")
-	procPrintWindow           = user32.NewProc("PrintWindow")
-	procCreateCompatibleDC    = gdi32.NewProc("CreateCompatibleDC")
-	procCreateCompatibleBmp   = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject          = gdi32.NewProc("SelectObject")
-	procDeleteDC              = gdi32.NewProc("DeleteDC")
-	procDeleteObject          = gdi32.NewProc("DeleteObject")
-	procGetDIBits             = gdi32.NewProc("GetDIBits")
+	procGetDC                    = user32.NewProc("GetDC")
+	procReleaseDC                = user32.NewProc("ReleaseDC")
+	procPrintWindow              = user32.NewProc("PrintWindow")
+	procCreateCompatibleDC       = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleBmp      = gdi32.NewProc("CreateCompatibleBitmap")
+	procSelectObject             = gdi32.NewProc("SelectObject")
+	procDeleteDC                 = gdi32.NewProc("DeleteDC")
+	procDeleteObject             = gdi32.NewProc("DeleteObject")
+	procGetDIBits                = gdi32.NewProc("GetDIBits")
+	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 )
 
 type bitmapInfoHeader struct {
@@ -86,11 +89,36 @@ func startScreenshotWatcher() {
 	}()
 }
 
-// CaptureWindowToFile renders hwndMain (including non-client chrome, via
-// PrintWindow) into a PNG at path.
+// targetWindow returns the window to capture: the current foreground
+// window if it belongs to this process, else hwndMain. A modal dialog
+// (MessageBoxW's ShowInfo, or AskYesNo/AskText's own DLGTEMPLATE windows)
+// is a SEPARATE top-level window merely owned by hwndMain -- PrintWindow
+// only ever renders the specific window handle it's given, so capturing
+// hwndMain while a dialog is open silently shows the main window looking
+// perfectly normal, with the dialog invisible to the screenshot entirely
+// (found live: triggering Help>Status via devctl and screenshotting
+// showed no dialog at all, even though it was genuinely open on screen).
+func targetWindow() syscall.Handle {
+	fg, _, _ := procGetForegroundWindow.Call()
+	if fg == 0 {
+		return hwndMain
+	}
+	var pid uint32
+	procGetWindowThreadProcessId.Call(fg, uintptr(unsafe.Pointer(&pid)))
+	if int(pid) != os.Getpid() {
+		return hwndMain // some other application is focused; nothing of ours to prefer
+	}
+	return syscall.Handle(fg)
+}
+
+// CaptureWindowToFile renders the relevant window for this process
+// (targetWindow -- either hwndMain or a currently open modal dialog,
+// including non-client chrome via PrintWindow) into a PNG at path.
 func CaptureWindowToFile(path string) error {
+	hwnd := targetWindow()
+
 	var rc rect
-	procGetWindowRect.Call(uintptr(hwndMain), uintptr(unsafe.Pointer(&rc)))
+	procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc)))
 	width := int(rc.right - rc.left)
 	height := int(rc.bottom - rc.top)
 	if width <= 0 || height <= 0 {
@@ -109,7 +137,7 @@ func CaptureWindowToFile(path string) error {
 	oldObj, _, _ := procSelectObject.Call(hdcMem, hBitmap)
 	defer procSelectObject.Call(hdcMem, oldObj)
 
-	procPrintWindow.Call(uintptr(hwndMain), hdcMem, pwRenderFullContent)
+	procPrintWindow.Call(uintptr(hwnd), hdcMem, pwRenderFullContent)
 
 	var bi bitmapInfoHeader
 	bi.size = uint32(unsafe.Sizeof(bi))

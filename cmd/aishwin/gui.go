@@ -35,7 +35,7 @@ var (
 	nextMenuID    uint16 = idMenuFirst
 
 	logMu    sync.Mutex
-	logQueue []string
+	logQueue []logEntry
 
 	uiFuncMu    sync.Mutex
 	uiFuncQueue []func()
@@ -156,9 +156,16 @@ func StartGUI(title string, buildMenu func() syscall.Handle, onCloseFn func()) e
 }
 
 func createChildWidgets(parent syscall.Handle, inst syscall.Handle) {
+	// RICHEDIT50W (msftedit.dll), not plain EDIT: only a RichEdit control
+	// supports per-run text color (EM_SETCHARFORMAT), needed to show file
+	// operations in a different color from shell/exec output. Load() is
+	// called explicitly since nothing else in this process ever calls a
+	// msftedit proc directly -- the whole point of loading it is its
+	// side effect of registering the RICHEDIT50W window class.
+	msftedit.Load()
 	editHandle, _, editErr := procCreateWindowExW.Call(
 		0,
-		uintptr(unsafe.Pointer(utf16ptr("EDIT"))),
+		uintptr(unsafe.Pointer(utf16ptr("RICHEDIT50W"))),
 		uintptr(unsafe.Pointer(utf16ptr(""))),
 		uintptr(wsChild|wsVisible|wsBorder|wsVScroll|esMultiline|esAutoVScroll|esReadOnly|esWantReturn),
 		0, 0, 0, 0,
@@ -166,10 +173,10 @@ func createChildWidgets(parent syscall.Handle, inst syscall.Handle) {
 	)
 	hwndEdit = syscall.Handle(editHandle)
 	if hwndEdit == 0 {
-		fmt.Fprintf(stderr, "aishwin: CreateWindowExW(EDIT) failed: %v\n", editErr)
+		fmt.Fprintf(stderr, "aishwin: CreateWindowExW(RICHEDIT50W) failed: %v\n", editErr)
 	}
 	// Remove the legacy ~32KB text limit (0 means "no practical limit" on
-	// modern EDIT controls when sent EM_SETLIMITTEXT).
+	// modern EDIT/RichEdit controls when sent EM_SETLIMITTEXT).
 	procSendMessageW.Call(uintptr(hwndEdit), emSetLimitText, 0, 0)
 
 	// The status strip is a plain bordered STATIC control, not the native
@@ -263,11 +270,41 @@ func mainWndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) ui
 
 // ---- thread-safe entry points for other goroutines ----
 
+// colorFileOp is the COLORREF (0x00BBGGRR) used for file-operation log
+// lines (AppendLogColor), visually distinguishing them from shell/exec
+// output -- there is no shared interactive tty in aishwin the way there is
+// in aish, so the log view is the only record of what happened at all,
+// in-band or out-of-band alike; color is what separates "a file operation
+// touched this path" from "the shell printed this line" at a glance.
+const colorFileOp = 0x00FF0000 // blue
+const colorRunning = 0x000000FF // red -- "a command just started" announcement
+
+// logEntry is one queued log line and how to render it: useColor false
+// means "reset to the control's automatic default color" (never silently
+// inherit color left over from a previous colored line at the same caret
+// position), true means render in color.
+type logEntry struct {
+	text     string
+	color    uint32
+	useColor bool
+}
+
 // AppendLog queues line for the log view and wakes the UI thread to render
-// it. Safe to call from any goroutine.
+// it, in the control's normal default color. Safe to call from any
+// goroutine.
 func AppendLog(line string) {
+	appendLogEntry(logEntry{text: line})
+}
+
+// AppendLogColor is AppendLog, rendered in color (a COLORREF, 0x00BBGGRR)
+// instead of the default.
+func AppendLogColor(line string, color uint32) {
+	appendLogEntry(logEntry{text: line, color: color, useColor: true})
+}
+
+func appendLogEntry(e logEntry) {
 	logMu.Lock()
-	logQueue = append(logQueue, line)
+	logQueue = append(logQueue, e)
 	logMu.Unlock()
 	if hwndMain != 0 {
 		procPostMessageW.Call(uintptr(hwndMain), wmAppLog, 0, 0)
@@ -282,14 +319,16 @@ func drainLogQueue() {
 	if len(pending) == 0 || hwndEdit == 0 {
 		return
 	}
-	for _, line := range pending {
-		appendEditText(line + "\r\n")
+	for _, e := range pending {
+		setCaretTextColor(hwndEdit, !e.useColor, e.color)
+		appendEditText(e.text + "\r\n")
 	}
 }
 
 func appendEditText(text string) {
 	// Move the caret to the end, then insert there, then scroll it into
-	// view -- the standard EDIT-control append idiom.
+	// view -- the standard EDIT/RichEdit append idiom. The color for this
+	// insertion was already set via setCaretTextColor before this call.
 	const maxUint = ^uintptr(0)
 	procSendMessageW.Call(uintptr(hwndEdit), emSetSel, maxUint, maxUint)
 	procSendMessageW.Call(uintptr(hwndEdit), emReplaceSel, 0, uintptr(unsafe.Pointer(utf16ptr(text))))
