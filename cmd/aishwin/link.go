@@ -20,13 +20,15 @@ var execD *execDispatcher
 
 // run drives the connection to the Linux half for the lifetime of the
 // process: spawn, handshake, serve until the link drops, then relaunch with
-// backoff. Returns only once ctx is canceled.
-func run(ctx context.Context, spawn spawnFunc, name string) error {
+// backoff. Returns only once ctx is canceled. Takes no session name --
+// runOnce reads CurrentSessionName() fresh on each iteration, so a rename
+// made between automatic retries is picked up by the very next one.
+func run(ctx context.Context, spawn spawnFunc) error {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 
 	for ctx.Err() == nil {
-		err := runOnce(ctx, spawn, name)
+		err := runOnce(ctx, spawn)
 		rt.setDisconnected()
 		if ctx.Err() != nil {
 			return nil
@@ -46,7 +48,7 @@ func run(ctx context.Context, spawn spawnFunc, name string) error {
 
 // runOnce spawns one instance of the Linux half, completes the hello
 // handshake, and serves frames from it until the link drops.
-func runOnce(ctx context.Context, spawn spawnFunc, name string) error {
+func runOnce(ctx context.Context, spawn spawnFunc) error {
 	cmd, stdin, childOut, err := spawn(ctx)
 	if err != nil {
 		return fmt.Errorf("launching linux half: %w", err)
@@ -55,7 +57,7 @@ func runOnce(ctx context.Context, spawn spawnFunc, name string) error {
 
 	wc := aishwinwire.NewConn(childOut, stdin)
 
-	hello, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: name, Shell: string(execD.kind)})
+	hello, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: CurrentSessionName(), Shell: string(execD.kind)})
 	if err != nil {
 		return err
 	}

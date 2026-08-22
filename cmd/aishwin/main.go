@@ -75,19 +75,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// distroFlagValue/requestedSessionName are read later by the Settings
-	// dialog's Connect button (gui_settings.go), which reconnects using
-	// fresh Connection settings rather than these CLI flags -- see
-	// resolveSpawnFromSettings.
+	// distroFlagValue is read later by the Settings dialog's Connect button
+	// (gui_settings.go), which reconnects using fresh Connection settings
+	// rather than this CLI flag -- see resolveSpawnFromSettings.
 	distroFlagValue = *distro
-	requestedSessionName = *name
+	SetSessionName(*name)
 
 	spawn := resolveSpawn(*sshTarget, *wslFlag)
 
 	runtime.LockOSThread() // the window-owning thread must pump its own messages
 
 	InitConnectionContext(ctx)
-	StartConnection(spawn, *name)
+	StartConnection(spawn)
 
 	refreshStatus()
 

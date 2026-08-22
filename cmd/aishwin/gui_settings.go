@@ -201,7 +201,7 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 				return 1
 			}
 			AppendLog("aishwin: connecting using the Connection settings just entered...")
-			StartConnection(resolveSpawnFromSettings(), requestedSessionName)
+			StartConnection(resolveSpawnFromSettings())
 			return 1
 		case idOK:
 			var errs []string

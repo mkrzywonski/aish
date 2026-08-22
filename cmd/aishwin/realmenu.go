@@ -143,6 +143,7 @@ func menuRename(name string) {
 			return
 		}
 		rt.setName(name)
+		SetSessionName(name) // so the NEXT reconnect (auto-retry or Settings > Connect) keeps this name instead of reverting to the --name flag's original value
 		AppendLog(fmt.Sprintf("aishwin: renamed to %q", name))
 	case <-time.After(10 * time.Second):
 		AppendLog("aishwin: rename timed out")
