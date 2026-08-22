@@ -1,4 +1,4 @@
-﻿// aishwin is the Windows half of the aish-driven Windows shell feature: it
+// aishwin is the Windows half of the aish-driven Windows shell feature: it
 // spawns the Linux half (cmd/aicmdd)
 // as a child process — by default via `wsl.exe -- aicmdd`, or via
 // `ssh [user@]host aicmdd` with --ssh — and speaks the private wire
@@ -23,11 +23,22 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strings"
 )
 
 var version = "dev"
 
 func main() {
+	// Checked before anything else, including flag parsing: when spawnSSH's
+	// ssh child needs a password/passphrase/host-key confirmation, it execs
+	// $SSH_ASKPASS (this same exe, per spawnSSH) with the prompt text as a
+	// plain positional argument -- which flag.Parse would otherwise choke
+	// on or misinterpret as a flag. See askpass.go.
+	if os.Getenv("AISHWIN_ASKPASS") == "1" {
+		runtime.LockOSThread() // dialog creation is thread-affine, same as StartGUI
+		os.Exit(runAskPass(strings.Join(os.Args[1:], " ")))
+	}
+
 	version = resolveVersion(version)
 
 	fs := flag.NewFlagSet("aishwin", flag.ExitOnError)
