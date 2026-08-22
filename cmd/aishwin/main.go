@@ -43,6 +43,7 @@ func main() {
 
 	fs := flag.NewFlagSet("aishwin", flag.ExitOnError)
 	sshTarget := fs.String("ssh", "", "spawn the Linux half over ssh instead of wsl.exe, as [user@]hostname")
+	wslFlag := fs.Bool("wsl", false, "force WSL mode for this run, overriding a persisted SSH connection setting (Settings > Connection)")
 	distro := fs.String("distro", "", "WSL distro to use with wsl.exe -d (default distro if empty)")
 	name := fs.String("name", "", "session name to present to the aish proxy")
 	shell := fs.String("shell", "cmd", "persistent shell to drive: cmd or powershell")
@@ -73,18 +74,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	spawn := spawnWSL(*distro)
-	if *sshTarget != "" {
-		spawn = spawnSSH(*sshTarget)
-	}
+	// distroFlagValue/requestedSessionName are read later by the Settings
+	// dialog's Connect button (gui_settings.go), which reconnects using
+	// fresh Connection settings rather than these CLI flags -- see
+	// resolveSpawnFromSettings.
+	distroFlagValue = *distro
+	requestedSessionName = *name
+
+	spawn := resolveSpawn(*sshTarget, *wslFlag)
 
 	runtime.LockOSThread() // the window-owning thread must pump its own messages
 
-	go func() {
-		if err := run(ctx, spawn, *name); err != nil {
-			AppendLog(fmt.Sprintf("aishwin: %v", err))
-		}
-	}()
+	InitConnectionContext(ctx)
+	StartConnection(spawn, *name)
 
 	refreshStatus()
 

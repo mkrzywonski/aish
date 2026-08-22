@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -46,8 +47,32 @@ func spawnWSL(distro string) spawnFunc {
 // versions simply ignore the unknown variable and use askpass anyway,
 // since our stdin already isn't a tty.
 func spawnSSH(target string) spawnFunc {
+	return sshSpawn([]string{target, "aicmdd"})
+}
+
+// spawnSSHConfig is spawnSSH built from discrete host/port/user settings
+// (Settings > Connection) instead of a single pre-formatted
+// "[user@]hostname" string -- the shape the GUI collects, so a user who
+// has never touched their ssh_config can still set a non-default port.
+func spawnSSHConfig(host string, port int, user string) spawnFunc {
+	target := host
+	if user != "" {
+		target = user + "@" + host
+	}
+	args := []string{}
+	if port > 0 {
+		args = append(args, "-p", strconv.Itoa(port))
+	}
+	args = append(args, target, "aicmdd")
+	return sshSpawn(args)
+}
+
+// sshSpawn is the shared ssh-child setup both spawnSSH and spawnSSHConfig
+// build on: the SSH_ASKPASS wiring (askpass.go) is identical regardless of
+// how the target/port/user were assembled into args.
+func sshSpawn(args []string) spawnFunc {
 	return func(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
-		cmd := exec.CommandContext(ctx, "ssh", target, "aicmdd")
+		cmd := exec.CommandContext(ctx, "ssh", args...)
 		exe, err := os.Executable()
 		if err != nil {
 			return nil, nil, nil, err

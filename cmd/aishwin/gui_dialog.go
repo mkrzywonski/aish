@@ -29,8 +29,14 @@ const (
 	wsCaption    = 0x00C00000
 	wsSysMenu    = 0x00080000
 
-	bsDefPushButton = 0x0001
-	bsPushButton    = 0x0000
+	bsDefPushButton   = 0x0001
+	bsPushButton      = 0x0000
+	bsAutoRadioButton = 0x0009
+
+	// wsGroup marks the first control of a new keyboard-navigation/radio
+	// group; dialog items are grouped by tab order (template order) from
+	// there until the next WS_GROUP control.
+	wsGroup = 0x00020000
 
 	idYes        = 6
 	idNoBtn      = 7

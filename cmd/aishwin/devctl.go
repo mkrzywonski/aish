@@ -112,6 +112,18 @@ func startDevControlWatcher() {
 //	                        button, exactly as a real mouse click would
 //	                        post it -- exercises the sticky-auto-scroll
 //	                        indicator without needing a human to click it
+//	connset:<host|port|user>:<value>  if the Settings dialog is open, set
+//	                        that Connection-page field's text
+//	tabselect:<index>       if the Settings dialog is open, select tab
+//	                        <index> (0=General, 1=Connection) on the real
+//	                        SysTabControl32, mirroring a user click
+//	radioclick:<id>         simulate a real click (BM_CLICK) on the given
+//	                        control id -- needed for BS_AUTORADIOBUTTON
+//	                        controls, whose check/uncheck auto-behavior a
+//	                        synthetic WM_COMMAND does not trigger
+//	settingsclick:<id>      post a synthetic WM_COMMAND(id) to the open
+//	                        Settings dialog -- fine for plain pushbuttons
+//	                        (OK/Cancel/Connect), not for radio buttons
 func runDevCommand(cmd string) string {
 	AppendLogColor("Dev command: "+cmd, colorRunning)
 	switch {
@@ -196,6 +208,85 @@ func runDevCommand(cmd string) string {
 
 	case cmd == "clickjump":
 		procPostMessageW.Call(uintptr(hwndMain), wmCommand, uintptr(idJumpBtn), uintptr(hwndJumpBtn))
+		return "ok"
+
+	case strings.HasPrefix(cmd, "connset:"):
+		rest := strings.TrimPrefix(cmd, "connset:")
+		field, value, found := strings.Cut(rest, ":")
+		if !found {
+			return `error: expected "connset:<host|port|user>:<value>"`
+		}
+		var id uintptr
+		switch field {
+		case "host":
+			id = idConnHost
+		case "port":
+			id = idConnPort
+		case "user":
+			id = idConnUser
+		default:
+			return fmt.Sprintf("error: unknown connection field %q", field)
+		}
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Settings dialog is not currently open"
+		}
+		editHwnd, _, _ := procGetDlgItem.Call(uintptr(hwnd), id)
+		procSetWindowTextW.Call(editHwnd, uintptr(unsafe.Pointer(utf16ptr(value))))
+		return "ok"
+
+	case strings.HasPrefix(cmd, "tabselect:"):
+		idxStr := strings.TrimPrefix(cmd, "tabselect:")
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			return fmt.Sprintf("error: invalid tab index %q", idxStr)
+		}
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 || settingsTabHwnd == 0 {
+			return "error: the Settings dialog is not currently open"
+		}
+		procSendMessageW.Call(uintptr(settingsTabHwnd), tcmSetCurSel, uintptr(idx), 0)
+		showSettingsPage(hwnd, idx)
+		return "ok"
+
+	case strings.HasPrefix(cmd, "radioclick:"):
+		// A synthetic WM_COMMAND to the dialog (unlike settingsclick's
+		// plain-pushbutton case) does NOT trigger BS_AUTORADIOBUTTON's own
+		// check/uncheck handling -- that's implemented inside the button
+		// control's own window procedure in response to a real click.
+		// BM_CLICK, sent to the control itself, simulates that real click.
+		idStr := strings.TrimPrefix(cmd, "radioclick:")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return fmt.Sprintf("error: invalid control id %q", idStr)
+		}
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Settings dialog is not currently open"
+		}
+		ctrlHwnd, _, _ := procGetDlgItem.Call(uintptr(hwnd), uintptr(id))
+		procSendMessageW.Call(ctrlHwnd, bmClick, 0, 0)
+		return "ok"
+
+	case strings.HasPrefix(cmd, "settingsclick:"):
+		idStr := strings.TrimPrefix(cmd, "settingsclick:")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return fmt.Sprintf("error: invalid control id %q", idStr)
+		}
+		devSettingsDialogMu.Lock()
+		hwnd := devSettingsDialogHwnd
+		devSettingsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Settings dialog is not currently open"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(id), 0)
 		return "ok"
 
 	default:

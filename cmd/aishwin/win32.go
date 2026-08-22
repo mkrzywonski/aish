@@ -63,6 +63,8 @@ var (
 	procGetDlgItem        = user32.NewProc("GetDlgItem")
 	procMessageBoxW       = user32.NewProc("MessageBoxW")
 	procGetScrollInfo     = user32.NewProc("GetScrollInfo")
+	procCheckRadioButton  = user32.NewProc("CheckRadioButton")
+	procIsDlgButtonChecked = user32.NewProc("IsDlgButtonChecked")
 
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procOpenProcess         = kernel32.NewProc("OpenProcess")
@@ -191,6 +193,7 @@ const (
 	wmSetFont    = 0x0030
 	wmInitDialog = 0x0110
 	wmGetMinMaxInfo = 0x0024
+	wmNotify     = 0x004E
 
 	mfString   = 0x00000000
 	mfPopup    = 0x00000010
