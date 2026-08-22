@@ -10,15 +10,15 @@ import (
 
 // runtimeState is connection/session info the menu (menu.go) needs to
 // reach across from link.go's per-connection scope: the current wire link
-// (for sending a menu-originated request like rename), and what aicmdd told
+// (for sending a menu-originated request like rename), and what aishwnd told
 // us about the session in its hello_ack.
 type runtimeState struct {
-	mu            sync.Mutex
-	wire          *aishwinwire.Conn
-	connected     bool
-	sessionID     string
-	name          string
-	aicmddVersion string
+	mu             sync.Mutex
+	wire           *aishwinwire.Conn
+	connected      bool
+	sessionID      string
+	name           string
+	aishwndVersion string
 }
 
 var rt = &runtimeState{}
@@ -29,7 +29,7 @@ func (r *runtimeState) setConnected(wc *aishwinwire.Conn, ack aishwinwire.HelloA
 	r.connected = true
 	r.sessionID = ack.SessionID
 	r.name = ack.Name
-	r.aicmddVersion = ack.Version
+	r.aishwndVersion = ack.Version
 	r.mu.Unlock()
 	refreshStatus()
 }
@@ -75,18 +75,18 @@ func refreshStatus() {
 	// glance at, not look up.
 	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  shell: %s  |  AI access: %s  |  blocked: %s  |  aishwin %s (%s)",
 		state, os.Getpid(), label, execD.kind, onOff(access.aiEnabled.Load()), onOff(access.newExecBlocked.Load()), version, buildTimeOnly())
-	if snap.connected && snap.aicmddVersion != "" {
-		text += fmt.Sprintf("  |  aicmdd %s", snap.aicmddVersion)
+	if snap.connected && snap.aishwndVersion != "" {
+		text += fmt.Sprintf("  |  aishwnd %s", snap.aishwndVersion)
 	}
 	SetStatus(text)
 }
 
 type runtimeSnapshot struct {
-	wire          *aishwinwire.Conn
-	connected     bool
-	sessionID     string
-	name          string
-	aicmddVersion string
+	wire           *aishwinwire.Conn
+	connected      bool
+	sessionID      string
+	name           string
+	aishwndVersion string
 }
 
 func (r *runtimeState) snapshot() runtimeSnapshot {
@@ -94,6 +94,6 @@ func (r *runtimeState) snapshot() runtimeSnapshot {
 	defer r.mu.Unlock()
 	return runtimeSnapshot{
 		wire: r.wire, connected: r.connected,
-		sessionID: r.sessionID, name: r.name, aicmddVersion: r.aicmddVersion,
+		sessionID: r.sessionID, name: r.name, aishwndVersion: r.aishwndVersion,
 	}
 }

@@ -1,4 +1,4 @@
-package aicmdd
+package aishwnd
 
 import "github.com/modelcontextprotocol/go-sdk/mcp"
 

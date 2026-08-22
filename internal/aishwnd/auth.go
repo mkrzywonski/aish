@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -47,10 +47,10 @@ type authChallengeState struct {
 	expires time.Time
 }
 
-// authManager holds all auth state for one aicmdSession, shared by every MCP
+// authManager holds all auth state for one aishwndSession, shared by every MCP
 // client connection to its Unix socket.
 type authManager struct {
-	sess *aicmdSession
+	sess *aishwndSession
 
 	mu         sync.Mutex
 	conns      map[*mcp.ServerSession]*connAuth
@@ -58,7 +58,7 @@ type authManager struct {
 	challenges map[string]authChallengeState
 }
 
-func newAuthManager(sess *aicmdSession) *authManager {
+func newAuthManager(sess *aishwndSession) *authManager {
 	return &authManager{
 		sess:       sess,
 		conns:      map[*mcp.ServerSession]*connAuth{},

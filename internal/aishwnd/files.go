@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -96,7 +96,7 @@ type directoryListResult struct {
 	Host      string           `json:"host"`
 }
 
-func registerFileTools(s *mcp.Server, sess *aicmdSession) {
+func registerFileTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_read",
 		Annotations: readOnlyTool("Read file on Windows host"),
@@ -125,7 +125,7 @@ func registerFileTools(s *mcp.Server, sess *aicmdSession) {
 	}, sess.directoryList)
 }
 
-func (s *aicmdSession) fileRead(ctx context.Context, req *mcp.CallToolRequest, args fileReadArgs) (*mcp.CallToolResult, fileReadResult, error) {
+func (s *aishwndSession) fileRead(ctx context.Context, req *mcp.CallToolRequest, args fileReadArgs) (*mcp.CallToolResult, fileReadResult, error) {
 	if args.Path == "" {
 		return nil, fileReadResult{}, errors.New("path must not be empty")
 	}
@@ -156,7 +156,7 @@ func (s *aicmdSession) fileRead(ctx context.Context, req *mcp.CallToolRequest, a
 // defaultMaxFileRead in cmd/aishwin/files_dispatch.go). Shared by fileRead,
 // fileEdit, and filePatch — each needs the same "get the file's current raw
 // bytes" step before doing something different with them.
-func (s *aicmdSession) readRemoteFile(path string, offset int64, maxBytes int) (data []byte, eof bool, err error) {
+func (s *aishwndSession) readRemoteFile(path string, offset int64, maxBytes int) (data []byte, eof bool, err error) {
 	req, err := json.Marshal(aishwinwire.FileReadData{Path: path, MaxBytes: maxBytes, Offset: offset})
 	if err != nil {
 		return nil, false, err
@@ -179,7 +179,7 @@ func (s *aicmdSession) readRemoteFile(path string, offset int64, maxBytes int) (
 	return raw, wireRes.Eof, nil
 }
 
-func (s *aicmdSession) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fileWriteArgs) (*mcp.CallToolResult, fileWriteResult, error) {
+func (s *aishwndSession) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fileWriteArgs) (*mcp.CallToolResult, fileWriteResult, error) {
 	if args.Path == "" {
 		return nil, fileWriteResult{}, errors.New("path must not be empty")
 	}
@@ -205,7 +205,7 @@ func (s *aicmdSession) fileWrite(ctx context.Context, req *mcp.CallToolRequest, 
 // writeRemoteFile sends a file_write wire request. Shared by fileWrite,
 // fileEdit, and filePatch — the latter two derive ifMatch automatically
 // (from what they just read) rather than taking it from the caller.
-func (s *aicmdSession) writeRemoteFile(path string, data []byte, mode, ifMatch string, append bool) (bytesWritten int, err error) {
+func (s *aishwndSession) writeRemoteFile(path string, data []byte, mode, ifMatch string, append bool) (bytesWritten int, err error) {
 	req, err := json.Marshal(aishwinwire.FileWriteData{
 		Path:    path,
 		Content: base64.StdEncoding.EncodeToString(data),
@@ -230,7 +230,7 @@ func (s *aicmdSession) writeRemoteFile(path string, data []byte, mode, ifMatch s
 	return wireRes.BytesWritten, nil
 }
 
-func (s *aicmdSession) fileStat(ctx context.Context, req *mcp.CallToolRequest, args fileStatArgs) (*mcp.CallToolResult, fileStatResult, error) {
+func (s *aishwndSession) fileStat(ctx context.Context, req *mcp.CallToolRequest, args fileStatArgs) (*mcp.CallToolResult, fileStatResult, error) {
 	if args.Path == "" {
 		return nil, fileStatResult{}, errors.New("path must not be empty")
 	}
@@ -260,7 +260,7 @@ func (s *aicmdSession) fileStat(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, out, nil
 }
 
-func (s *aicmdSession) directoryList(ctx context.Context, req *mcp.CallToolRequest, args directoryListArgs) (*mcp.CallToolResult, directoryListResult, error) {
+func (s *aishwndSession) directoryList(ctx context.Context, req *mcp.CallToolRequest, args directoryListArgs) (*mcp.CallToolResult, directoryListResult, error) {
 	if args.Path == "" {
 		return nil, directoryListResult{}, errors.New("path must not be empty")
 	}

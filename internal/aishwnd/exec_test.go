@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -10,15 +10,15 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-// TestExecToolRoundTrip drives aicmdSession.execTool/execStatus directly
+// TestExecToolRoundTrip drives aishwndSession.execTool/execStatus directly
 // against a fake Windows peer (an io.Pipe, not a real cmd/aishwin process) to
-// verify the wire round trip: the frame aicmdd sends, and how it maps a
+// verify the wire round trip: the frame aishwnd sends, and how it maps a
 // synthetic response back into execResult/execStatusResult. Real cmd.exe/
 // PowerShell behavior is covered separately by
 // cmd/aishwin's TestShellAgainstRealWindowsHost.
 func TestExecToolRoundTrip(t *testing.T) {
-	peerIn, ourOut := io.Pipe() // aicmdd -> fake peer
-	ourIn, peerOut := io.Pipe() // fake peer -> aicmdd
+	peerIn, ourOut := io.Pipe() // aishwnd -> fake peer
+	ourIn, peerOut := io.Pipe() // fake peer -> aishwnd
 	wire := aishwinwire.NewConn(ourIn, ourOut)
 	peer := aishwinwire.NewConn(peerIn, peerOut)
 	// ReadLoop is what delivers responses to Await-registered channels in
@@ -26,7 +26,7 @@ func TestExecToolRoundTrip(t *testing.T) {
 	// select on the Await channel would never see the peer's reply.
 	go wire.ReadLoop(func(aishwinwire.Frame) {})
 
-	sess := &aicmdSession{id: "test0001", name: "win-test", wire: wire}
+	sess := &aishwndSession{id: "test0001", name: "win-test", wire: wire}
 
 	// Fake peer: read the next frame, reply with a canned exec_result.
 	go func() {
@@ -76,7 +76,7 @@ func TestExecStatusRoundTrip(t *testing.T) {
 	peer := aishwinwire.NewConn(peerIn, peerOut)
 	go wire.ReadLoop(func(aishwinwire.Frame) {})
 
-	sess := &aicmdSession{id: "test0002", wire: wire}
+	sess := &aishwndSession{id: "test0002", wire: wire}
 
 	go func() {
 		f, err := peer.ReadOne()
@@ -125,7 +125,7 @@ func TestExecToolTimesOutCleanly(t *testing.T) {
 	// timeout ever being reached.
 	go func() { _, _ = io.Copy(io.Discard, peerIn) }()
 
-	sess := &aicmdSession{id: "test0003", wire: wire}
+	sess := &aishwndSession{id: "test0003", wire: wire}
 
 	done := make(chan error, 1)
 	go func() {

@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 // execArgs/execResult and execStatusArgs/execStatusResult mirror aish's own
 // exec/exec_status schemas (internal/mcpserver/tools_remote.go's execArgs
-// etc.) minus the SessionArg routing field — aicmdd doesn't implement
+// etc.) minus the SessionArg routing field — aishwnd doesn't implement
 // cross-session forwarding, so declaring a field for it would advertise a
 // capability that doesn't exist.
 type execArgs struct {
@@ -45,7 +45,7 @@ type execStatusResult struct {
 	ExitCode   *int   `json:"exit_code,omitempty"`
 }
 
-func registerExecTools(s *mcp.Server, sess *aicmdSession) {
+func registerExecTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "exec",
 		Annotations: commandTool("Run command on Windows host"),
@@ -65,7 +65,7 @@ func registerExecTools(s *mcp.Server, sess *aicmdSession) {
 	}, sess.execStatus)
 }
 
-func (s *aicmdSession) execTool(ctx context.Context, req *mcp.CallToolRequest, args execArgs) (*mcp.CallToolResult, execResult, error) {
+func (s *aishwndSession) execTool(ctx context.Context, req *mcp.CallToolRequest, args execArgs) (*mcp.CallToolResult, execResult, error) {
 	if args.Command == "" {
 		return nil, execResult{}, errors.New("command must not be empty")
 	}
@@ -101,7 +101,7 @@ func (s *aicmdSession) execTool(ctx context.Context, req *mcp.CallToolRequest, a
 	}, nil
 }
 
-func (s *aicmdSession) execStatus(ctx context.Context, req *mcp.CallToolRequest, args execStatusArgs) (*mcp.CallToolResult, execStatusResult, error) {
+func (s *aishwndSession) execStatus(ctx context.Context, req *mcp.CallToolRequest, args execStatusArgs) (*mcp.CallToolResult, execStatusResult, error) {
 	if args.TaskID == "" {
 		return nil, execStatusResult{}, errors.New("task_id must not be empty")
 	}
@@ -133,7 +133,7 @@ func (s *aicmdSession) execStatus(ctx context.Context, req *mcp.CallToolRequest,
 	}, nil
 }
 
-// execWaitTimeout bounds how long aicmdd waits for aishwin's exec_result
+// execWaitTimeout bounds how long aishwnd waits for aishwin's exec_result
 // before giving up on the wire round trip. Background requests reply almost
 // immediately (spawning, not completion) so get a short fixed bound;
 // foreground requests are bounded by the command's own timeout (which aishwin

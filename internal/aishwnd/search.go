@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -53,7 +53,7 @@ type fileSearchResult struct {
 	Host      string   `json:"host"`
 }
 
-func registerSearchTools(s *mcp.Server, sess *aicmdSession) {
+func registerSearchTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_grep",
 		Annotations: readOnlyTool("Search file contents on Windows host"),
@@ -70,7 +70,7 @@ func registerSearchTools(s *mcp.Server, sess *aicmdSession) {
 	}, sess.fileSearch)
 }
 
-func (s *aicmdSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest, args fileGrepArgs) (*mcp.CallToolResult, fileGrepResult, error) {
+func (s *aishwndSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest, args fileGrepArgs) (*mcp.CallToolResult, fileGrepResult, error) {
 	if args.Path == "" {
 		return nil, fileGrepResult{}, errors.New("path must not be empty")
 	}
@@ -103,7 +103,7 @@ func (s *aicmdSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, fileGrepResult{Matches: matches, Truncated: res.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
 }
 
-func (s *aicmdSession) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fileSearchArgs) (*mcp.CallToolResult, fileSearchResult, error) {
+func (s *aishwndSession) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fileSearchArgs) (*mcp.CallToolResult, fileSearchResult, error) {
 	if args.Path == "" {
 		return nil, fileSearchResult{}, errors.New("path must not be empty")
 	}

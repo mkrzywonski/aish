@@ -1,4 +1,4 @@
-package aicmdd
+package aishwnd
 
 import (
 	"errors"
@@ -11,7 +11,7 @@ import (
 // The parsing/applying logic below is a direct port of the pure functions
 // in internal/mcpserver/patch.go (hunk, hunkHeader, parseUnifiedDiff,
 // applyUnifiedDiff, locateBlock, matchAt, patchMismatch, splitLines,
-// joinLines) — copied rather than reimplemented so aicmdd's file_patch
+// joinLines) — copied rather than reimplemented so aishwnd's file_patch
 // applies hunks with the exact same, already-tested logic as aish's own,
 // not a fresh reimplementation that could reintroduce bugs aish already
 // fixed. Not imported directly: it lives in package mcpserver alongside

@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -17,15 +17,15 @@ import (
 	"ai-ssh/internal/paths"
 )
 
-// Version is stamped by cmd/aicmdd's main from the build's version string,
+// Version is stamped by cmd/aishwnd's main from the build's version string,
 // and reported both as the MCP server's Implementation.Version and by
 // version_info.
 var Version = "dev"
 
-// aicmdSession is the one Windows peer's session this process serves: its
+// aishwndSession is the one Windows peer's session this process serves: its
 // wire link, its auth state, and the id/session-directory it presents to
 // internal/proxy as an ordinary aish session.
-type aicmdSession struct {
+type aishwndSession struct {
 	id   string
 	name string
 	wire *aishwinwire.Conn
@@ -34,9 +34,9 @@ type aicmdSession struct {
 
 // displayHost is the "host" label reported by exec/session_status results:
 // the declared session name if there is one, else a generic placeholder —
-// aicmdd never learns the Windows machine's real hostname over the wire
+// aishwnd never learns the Windows machine's real hostname over the wire
 // protocol.
-func (s *aicmdSession) displayHost() string {
+func (s *aishwndSession) displayHost() string {
 	if s.name != "" {
 		return s.name
 	}
@@ -47,7 +47,7 @@ func (s *aicmdSession) displayHost() string {
 // blocks for its answer, mirroring internal/session/console.go's Prompt but
 // over the wire link instead of a shared PTY. Returns ("", false) on
 // timeout, send failure, or a malformed answer.
-func (s *aicmdSession) Prompt(question, kind string, timeout time.Duration) (string, bool) {
+func (s *aishwndSession) Prompt(question, kind string, timeout time.Duration) (string, bool) {
 	id := randHex(8)
 	ch := s.wire.Await(id)
 	defer s.wire.CancelAwait(id)
@@ -77,7 +77,7 @@ func (s *aicmdSession) Prompt(question, kind string, timeout time.Duration) (str
 // bounded timeout. Prompt (above) predates this helper and has different
 // semantics (a typed y/n answer, not a raw JSON payload to unmarshal at the
 // call site), so it stays its own method.
-func (s *aicmdSession) roundTrip(frameType string, data json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
+func (s *aishwndSession) roundTrip(frameType string, data json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	id := randHex(8)
 	ch := s.wire.Await(id)
 	defer s.wire.CancelAwait(id)
@@ -94,7 +94,7 @@ func (s *aicmdSession) roundTrip(frameType string, data json.RawMessage, timeout
 
 // Notify sends a one-way informational message to the Windows peer's
 // console, mirroring internal/session/console.go's Notify.
-func (s *aicmdSession) Notify(format string, args ...any) {
+func (s *aishwndSession) Notify(format string, args ...any) {
 	data, err := json.Marshal(aishwinwire.NotifyData{Text: fmt.Sprintf(format, args...)})
 	if err != nil {
 		return
@@ -102,9 +102,9 @@ func (s *aicmdSession) Notify(format string, args ...any) {
 	_ = s.wire.Send(aishwinwire.Frame{Type: "notify", Data: data})
 }
 
-// Run is aicmdd's entire job for one invocation: it is spawned as a child
-// process by aishwin.exe (by default via `wsl.exe -- aicmdd`, or via
-// `ssh [user@]host aicmdd`) and speaks the private wire protocol over in/out
+// Run is aishwnd's entire job for one invocation: it is spawned as a child
+// process by aishwin.exe (by default via `wsl.exe -- aishwnd`, or via
+// `ssh [user@]host aishwnd`) and speaks the private wire protocol over in/out
 // — normally os.Stdin/os.Stdout. It reads the hello frame, stands up an
 // ordinary aish-shaped session directory and Unix socket (indistinguishable
 // to internal/proxy from a normal aish session), serves MCP over that Unix
@@ -122,7 +122,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 
 	id := newSessionID()
-	sess := &aicmdSession{id: id, wire: wc}
+	sess := &aishwndSession{id: id, wire: wc}
 	sess.auth = newAuthManager(sess)
 
 	dir := paths.SessionDir(id)
@@ -152,7 +152,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 	defer ul.Close()
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "aicmdd", Version: Version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "aishwnd", Version: Version}, nil)
 	registerAuthTools(server, sess.auth)
 	registerExecTools(server, sess)
 	registerFileTools(server, sess)
@@ -187,7 +187,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 // handleRename applies a rename requested from the Windows console's menu
 // and replies with the outcome.
-func (s *aicmdSession) handleRename(f aishwinwire.Frame) {
+func (s *aishwndSession) handleRename(f aishwinwire.Frame) {
 	var req aishwinwire.RenameData
 	result := aishwinwire.RenameResultData{}
 	if err := json.Unmarshal(f.Data, &req); err != nil {

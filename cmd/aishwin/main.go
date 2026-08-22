@@ -1,7 +1,7 @@
 // aishwin is the Windows half of the aish-driven Windows shell feature: it
-// spawns the Linux half (cmd/aicmdd)
-// as a child process — by default via `wsl.exe -- aicmdd`, or via
-// `ssh [user@]host aicmdd` with --ssh — and speaks the private wire
+// spawns the Linux half (cmd/aishwnd)
+// as a child process — by default via `wsl.exe -- aishwnd`, or via
+// `ssh [user@]host aishwnd` with --ssh — and speaks the private wire
 // protocol (internal/aishwinwire) over its stdin/stdout, exactly like any
 // other stdio MCP server is launched. It owns everything the human
 // interacts with for this session: process execution on Windows (later
@@ -101,7 +101,7 @@ func main() {
 }
 
 // resolveVersion mirrors cmd/aish/main.go's function of the same name (and
-// cmd/aicmdd/main.go's copy of it): a build without a linker-injected
+// cmd/aishwnd/main.go's copy of it): a build without a linker-injected
 // version derives g<revision>[-dirty] from Go's embedded VCS metadata
 // instead of reporting a bare "dev" — the difference between, say, two
 // native `go build`s of different commits that would otherwise both just

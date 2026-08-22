@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -33,7 +33,7 @@ type transferResult struct {
 	Host  string `json:"host"`
 }
 
-func registerTransferTools(s *mcp.Server, sess *aicmdSession) {
+func registerTransferTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_upload",
 		Annotations: mutatingTool("Upload file to Windows host", true, false),
@@ -51,7 +51,7 @@ func registerTransferTools(s *mcp.Server, sess *aicmdSession) {
 	}, sess.fileDownload)
 }
 
-func (s *aicmdSession) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
+func (s *aishwndSession) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
 	if args.LocalPath == "" || args.RemotePath == "" {
 		return nil, transferResult{}, errors.New("local_path and remote_path must not be empty")
 	}
@@ -72,7 +72,7 @@ func (s *aicmdSession) fileUpload(ctx context.Context, req *mcp.CallToolRequest,
 	return nil, transferResult{Bytes: int64(n), Via: "aishwin", Host: s.displayHost()}, nil
 }
 
-func (s *aicmdSession) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
+func (s *aishwndSession) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
 	if args.LocalPath == "" || args.RemotePath == "" {
 		return nil, transferResult{}, errors.New("local_path and remote_path must not be empty")
 	}

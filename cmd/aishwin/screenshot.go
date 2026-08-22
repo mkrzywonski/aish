@@ -6,7 +6,7 @@ package main
 // cross-account-readable path (C:\Users\Public -- the same fix used
 // earlier in this project for the mike/mk31 WSL-visibility split) and,
 // when it appears, captures a PNG at a second path, writes a result file,
-// and deletes the trigger. This needs zero changes to aicmdd/the wire
+// and deletes the trigger. This needs zero changes to aishwnd/the wire
 // protocol: the AI creates the trigger and downloads the PNG using the
 // already-working exec/file_download tools.
 //

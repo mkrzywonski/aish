@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -60,7 +60,7 @@ func TestFileSearchRoundTrip(t *testing.T) {
 }
 
 func TestFileSearchRejectsInvalidType(t *testing.T) {
-	sess := &aicmdSession{id: "test-fs3", name: "win-test"}
+	sess := &aishwndSession{id: "test-fs3", name: "win-test"}
 	_, _, err := sess.fileSearch(context.Background(), nil, fileSearchArgs{Path: `C:\`, Type: "bogus"})
 	if err == nil {
 		t.Fatal("expected an error for an invalid type")

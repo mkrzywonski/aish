@@ -15,7 +15,7 @@ package main
 // parameters, so a rename (Session > Rename) persists across every future
 // reconnect -- automatic retries inside run()'s own loop and an explicit
 // Settings > Connect click alike. Each reconnect spawns a genuinely new
-// aicmdd process (a fresh random session id, no daemon to resume into), so
+// aishwnd process (a fresh random session id, no daemon to resume into), so
 // without this the renamed session reverted to showing its bare id the
 // moment anything reconnected -- found live after renaming to "VM", then
 // changing Connection settings and clicking Connect.

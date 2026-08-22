@@ -8,7 +8,7 @@ import (
 )
 
 // accessState holds the console-menu-toggled switches that gate new AI
-// work locally, without touching the wire protocol or aicmdd: pausing AI
+// work locally, without touching the wire protocol or aishwnd: pausing AI
 // access entirely, or just blocking new exec starts (a panic button that
 // doesn't interrupt already-running commands), plus a persistent set of
 // env vars applied to commands this process spawns.

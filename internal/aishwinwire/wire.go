@@ -1,9 +1,9 @@
 ﻿// Package aishwinwire is the private wire protocol between cmd/aishwin
-// (Windows) and cmd/aicmdd (Linux): newline-delimited JSON over the child
+// (Windows) and cmd/aishwnd (Linux): newline-delimited JSON over the child
 // process's stdio pipes, type-discriminated, correlated by request id.
 // Shared by both binaries so the frame shapes can't drift between them —
-// unlike the duplicated auth state machine (see internal/aicmdd/auth.go),
-// which is business logic private to aicmdd's own unexported types, this is
+// unlike the duplicated auth state machine (see internal/aishwnd/auth.go),
+// which is business logic private to aishwnd's own unexported types, this is
 // pure wire format both sides must agree on byte-for-byte.
 package aishwinwire
 
@@ -20,7 +20,7 @@ import (
 const ProtoVersion = 1
 
 // MaxFrameLine bounds a single wire frame. Sized for file_upload/
-// file_download (internal/aicmdd's maxTransferBytes, 32MiB), which -- like
+// file_download (internal/aishwnd's maxTransferBytes, 32MiB), which -- like
 // aish's own file_upload/file_download -- transfer a whole file as one
 // atomic operation rather than chunking it, so the base64-encoded content
 // (~4/3 inflation) of the largest allowed transfer must fit in one frame
@@ -45,7 +45,7 @@ type HelloData struct {
 	Shell string `json:"shell,omitempty"`
 }
 
-// HelloAckData is aicmdd's one reply to the hello frame, sent once the
+// HelloAckData is aishwnd's one reply to the hello frame, sent once the
 // session directory/socket are up, before it starts serving MCP or reading
 // further wire frames. Lets aishwin display "connected as session <id>"
 // immediately and answer the menu's version command without a separate
@@ -57,8 +57,8 @@ type HelloAckData struct {
 }
 
 // RenameData requests renaming the live session, sent by aishwin (from its
-// console menu) to aicmdd -- the reverse direction from exec/file_*, which
-// aicmdd sends to aishwin. Conn's Send/Await are symmetric, so no separate
+// console menu) to aishwnd -- the reverse direction from exec/file_*, which
+// aishwnd sends to aishwin. Conn's Send/Await are symmetric, so no separate
 // mechanism is needed for a request originating on this side.
 type RenameData struct {
 	Name string `json:"name"`
@@ -85,7 +85,7 @@ type NotifyData struct {
 
 // ExecData requests a command run on the Windows peer, mirroring aish's own
 // exec tool args (internal/mcpserver/tools_remote.go's execArgs) minus the
-// SessionArg routing field, which aicmdd doesn't implement cross-session
+// SessionArg routing field, which aishwnd doesn't implement cross-session
 // forwarding for.
 type ExecData struct {
 	Command    string `json:"command"`
@@ -95,7 +95,7 @@ type ExecData struct {
 }
 
 // ExecResultData answers an ExecData request, mirroring aish's execResult
-// shape (minus Via/Host, which aicmdd fills in itself since they're
+// shape (minus Via/Host, which aishwnd fills in itself since they're
 // constant for this transport).
 type ExecResultData struct {
 	Output   string `json:"output,omitempty"`
@@ -131,7 +131,7 @@ type FileReadData struct {
 
 // FileReadResultData answers a FileReadData request. Content is always
 // base64 here (binary-safe, one wire encoding) regardless of what the AI
-// asked for — aicmdd decides utf8-vs-base64 presentation after decoding,
+// asked for — aishwnd decides utf8-vs-base64 presentation after decoding,
 // exactly like aish's own fileRead does for its "local" route.
 type FileReadResultData struct {
 	Content string `json:"content,omitempty"`

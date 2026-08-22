@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -49,7 +49,7 @@ type filePatchResult struct {
 	Host         string `json:"host"`
 }
 
-func registerEditTools(s *mcp.Server, sess *aicmdSession) {
+func registerEditTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_edit",
 		Annotations: mutatingTool("Edit file on Windows host", true, false),
@@ -69,7 +69,7 @@ func registerEditTools(s *mcp.Server, sess *aicmdSession) {
 	}, sess.filePatch)
 }
 
-func (s *aicmdSession) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args fileEditArgs) (*mcp.CallToolResult, fileEditResult, error) {
+func (s *aishwndSession) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args fileEditArgs) (*mcp.CallToolResult, fileEditResult, error) {
 	if args.Path == "" {
 		return nil, fileEditResult{}, errors.New("path must not be empty")
 	}
@@ -116,7 +116,7 @@ func (s *aicmdSession) fileEdit(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, fileEditResult{Replacements: count, BytesWritten: written, Via: "aishwin", Host: s.displayHost()}, nil
 }
 
-func (s *aicmdSession) filePatch(ctx context.Context, req *mcp.CallToolRequest, args filePatchArgs) (*mcp.CallToolResult, filePatchResult, error) {
+func (s *aishwndSession) filePatch(ctx context.Context, req *mcp.CallToolRequest, args filePatchArgs) (*mcp.CallToolResult, filePatchResult, error) {
 	if args.Path == "" {
 		return nil, filePatchResult{}, errors.New("path must not be empty")
 	}

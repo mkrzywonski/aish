@@ -33,16 +33,16 @@ LDFLAGS := -X main.version=$(VERSION)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-.PHONY: build install aishwin aishwin-dev aicmdd install-aicmdd test vet check fmt version clean
+.PHONY: build install aishwin aishwin-dev aishwnd install-aishwnd test vet check fmt version clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o aish ./cmd/aish
 
-# aicmdd is the Linux/WSL half of the aishwin feature — installs alongside
-# aish so `wsl.exe -- aicmdd` (aishwin.exe's default launch path) finds it
+# aishwnd is the Linux/WSL half of the aishwin feature — installs alongside
+# aish so `wsl.exe -- aishwnd` (aishwin.exe's default launch path) finds it
 # on PATH.
-aicmdd:
-	go build -ldflags "$(LDFLAGS)" -o aicmdd ./cmd/aicmdd
+aishwnd:
+	go build -ldflags "$(LDFLAGS)" -o aishwnd ./cmd/aishwnd
 
 # aishwin.exe is the Windows half — cross-compiled, copy it to the Windows
 # machine (there's no `make install` target for it; see README/plan doc for
@@ -72,14 +72,14 @@ install:
 	install -m 755 aish $(DESTDIR)$(BINDIR)/aish
 	@echo "installed $(DESTDIR)$(BINDIR)/aish -> $$($(DESTDIR)$(BINDIR)/aish version)"
 
-# Separate from install: aicmdd needs to land on PATH (same one-location
-# rule as aish, since `wsl.exe -- aicmdd`, aishwin.exe's default launch path,
+# Separate from install: aishwnd needs to land on PATH (same one-location
+# rule as aish, since `wsl.exe -- aishwnd`, aishwin.exe's default launch path,
 # resolves PATH the way a non-interactive WSL invocation does) but is kept
 # as its own step rather than folded into the primary aish install path.
-install-aicmdd:
-	@test -f aicmdd || { echo "no ./aicmdd — run 'make aicmdd' as your own user first, so the version stamp is right"; exit 1; }
-	install -m 755 aicmdd $(DESTDIR)$(BINDIR)/aicmdd
-	@echo "installed $(DESTDIR)$(BINDIR)/aicmdd -> $$($(DESTDIR)$(BINDIR)/aicmdd --version)"
+install-aishwnd:
+	@test -f aishwnd || { echo "no ./aishwnd — run 'make aishwnd' as your own user first, so the version stamp is right"; exit 1; }
+	install -m 755 aishwnd $(DESTDIR)$(BINDIR)/aishwnd
+	@echo "installed $(DESTDIR)$(BINDIR)/aishwnd -> $$($(DESTDIR)$(BINDIR)/aishwnd --version)"
 
 test:
 	go test ./...
@@ -99,4 +99,4 @@ version:
 	@echo $(VERSION)
 
 clean:
-	rm -f aish aicmdd aishwin.exe
+	rm -f aish aishwnd aishwin.exe

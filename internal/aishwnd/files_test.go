@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 // ReadLoop already running (see the comment on TestExecToolRoundTrip for why
 // that's required). handle is invoked once per request the fake peer
 // receives, and must send exactly one reply frame with a matching ID.
-func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aicmdSession {
+func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aishwndSession {
 	t.Helper()
 	peerIn, ourOut := io.Pipe()
 	ourIn, peerOut := io.Pipe()
@@ -28,13 +28,13 @@ func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *ai
 		}
 		handle(t, peer, f)
 	}()
-	return &aicmdSession{id: id, name: "win-test", wire: wire}
+	return &aishwndSession{id: id, name: "win-test", wire: wire}
 }
 
 // newMultiTestWirePair is newTestWirePair for tool handlers that make more
 // than one sequential wire round trip (file_edit/file_patch: a file_read
 // followed by a file_write). handle is invoked once per request, in order.
-func newMultiTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aicmdSession {
+func newMultiTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aishwndSession {
 	t.Helper()
 	peerIn, ourOut := io.Pipe()
 	ourIn, peerOut := io.Pipe()
@@ -50,7 +50,7 @@ func newMultiTestWirePair(t *testing.T, id string, handle func(t *testing.T, pee
 			handle(t, peer, f)
 		}
 	}()
-	return &aicmdSession{id: id, name: "win-test", wire: wire}
+	return &aishwndSession{id: id, name: "win-test", wire: wire}
 }
 
 func TestFileReadRoundTrip(t *testing.T) {

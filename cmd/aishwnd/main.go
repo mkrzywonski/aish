@@ -1,6 +1,6 @@
-﻿// aicmdd is the Linux/WSL half of aishwin. aishwin.exe (Windows) spawns it as a
-// child process — by default via `wsl.exe -- aicmdd`, or via
-// `ssh [user@]host aicmdd` for a non-WSL/remote Linux target — and speaks
+﻿// aishwnd is the Linux/WSL half of aishwin. aishwin.exe (Windows) spawns it as a
+// child process — by default via `wsl.exe -- aishwnd`, or via
+// `ssh [user@]host aishwnd` for a non-WSL/remote Linux target — and speaks
 // the private wire protocol over its stdin/stdout, exactly like any other
 // stdio MCP server (including aish's own `aish mcp-proxy`). It presents an
 // ordinary aish-shaped MCP session (visible to the aish proxy's
@@ -22,30 +22,30 @@ import (
 	"runtime/debug"
 	"syscall"
 
-	"ai-ssh/internal/aicmdd"
+	"ai-ssh/internal/aishwnd"
 )
 
 var version = "dev"
 
 func main() {
 	version = resolveVersion(version)
-	aicmdd.Version = version
+	aishwnd.Version = version
 
-	fs := flag.NewFlagSet("aicmdd", flag.ExitOnError)
+	fs := flag.NewFlagSet("aishwnd", flag.ExitOnError)
 	showVersion := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(os.Args[1:])
 
 	if *showVersion {
 		// Safe on stdout: only reached when not serving the wire protocol.
-		fmt.Println("aicmdd", version)
+		fmt.Println("aishwnd", version)
 		return
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	if err := aicmdd.Run(ctx, os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "aicmdd:", err)
+	if err := aishwnd.Run(ctx, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "aishwnd:", err)
 		os.Exit(1)
 	}
 }

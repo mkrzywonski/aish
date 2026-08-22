@@ -1,4 +1,4 @@
-﻿package aicmdd
+﻿package aishwnd
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 // plan doc: a Windows peer's stdio hello handshake produces a session
 // directory that internal/proxy discovers with zero changes to that package
 // — and that closing the input pipe (simulating the parent process exiting,
-// as it would when aishwin.exe's child aicmdd loses its stdin) tears the
+// as it would when aishwin.exe's child aishwnd loses its stdin) tears the
 // session back down.
 func TestRunRegistersDiscoverableSession(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -79,7 +79,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 // syncBuffer is a minimal concurrency-safe io.Writer sink standing in for
-// aicmdd's stdout in tests that don't need to inspect the frames it sends.
+// aishwnd's stdout in tests that don't need to inspect the frames it sends.
 type syncBuffer struct {
 	mu sync.Mutex
 }

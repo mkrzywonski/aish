@@ -1,4 +1,4 @@
-package aicmdd
+package aishwnd
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 
 // These mirror internal/mcpserver/patch_test.go's pure-logic tests (not the
 // Core-based TestFilePatchLocal, which has no equivalent here since
-// aicmdd's filePatch talks over the wire rather than a local os.WriteFile —
+// aishwnd's filePatch talks over the wire rather than a local os.WriteFile —
 // see TestFilePatchRoundTrip in files_test.go for that side) — kept in sync
 // by hand alongside patch.go's ported algorithm.
 
