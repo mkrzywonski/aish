@@ -2,12 +2,15 @@ package main
 
 // gui_statusbar.go: the graphical status bar, replacing the old plain-text
 // strip (gui.go's original STATIC control, one long SetWindowTextW string
-// of pid/session/shell/version). Two items so far: a connected/
+// of pid/session/shell/version). Three items so far: a connected/
 // not-connected LED on the left (hoverable for a tooltip, clickable to jump
-// straight to Settings' Connection page), and an Auto Scroll switch on the
-// right (see gui.go's drainLogQueue/pollAutoScrollState for the log-view
-// side of that feature). More items can be appended to statusItems later
-// without changing the layout/hit-test/paint machinery below.
+// straight to Settings' Connection page), a connected-client count right
+// after it (polled periodically from aishwnd, hoverable for a per-client
+// tooltip, clickable to open the Clients dialog), and an Auto Scroll switch
+// on the right (see gui.go's drainLogQueue/pollAutoScrollState for the
+// log-view side of that feature). More items can be appended to
+// statusItems later without changing the layout/hit-test/paint machinery
+// below.
 //
 // The hover tooltip (showTooltip/hideTooltip, tooltipWndProc) is a
 // hand-rolled popup window, not the real Windows tooltip common control
@@ -26,9 +29,14 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"ai-ssh/internal/aishwinwire"
 )
 
 const statusBarClassName = "AishwinStatusBar"
@@ -85,6 +93,7 @@ func buildStatusItems() []statusItem {
 				ShowSettingsDialogPage(1) // Connection page
 			},
 		},
+		buildClientsItem(),
 		buildAutoScrollItem(),
 	}
 }
@@ -127,6 +136,12 @@ func SetConnected(connected bool) {
 			procInvalidateRect.Call(uintptr(hwndStatus), 0, 1)
 		}
 	})
+	if connected {
+		// Otherwise the client-count item could show a stale "0 clients"
+		// for up to startClientCountPoller's own 3-second tick right after
+		// a fresh connect.
+		go refreshClientCount()
+	}
 }
 
 // statusItemRect returns item i's client-area rectangle within the status
@@ -195,6 +210,117 @@ func drawConnectedLED(hdc syscall.Handle, r rect) {
 	procSelectObject.Call(uintptr(hdc), oldBrush)
 	procSelectObject.Call(uintptr(hdc), oldPen)
 	procDeleteObject.Call(brush)
+}
+
+// ---- connected client count ----
+
+const clientsSizingTemplate = "88 clients connected" // 2-digit template, sized once at construction (see buildClientsItem)
+
+// clientCountMu guards the last-known client list rendering, refreshed
+// periodically off the GUI thread by refreshClientCount (fetchClients,
+// gui_clients.go, is a wire round trip -- far too slow to run directly
+// inside a WM_TIMER handler the way pollAutoScrollState's local-only check
+// does). The status bar's draw/tooltip callbacks only ever read this.
+var (
+	clientCountMu   sync.Mutex
+	clientCountText = "0 clients connected"
+	clientTooltip   = "0 clients connected"
+)
+
+// buildClientsItem sizes itself once against a 2-digit template rather
+// than remeasuring as the real count changes: the alternative -- resizing
+// the item every time a client connects/disconnects -- would shift every
+// item to its right (Auto Scroll included) each time, which is worse than
+// the rare case of a 100+ client count clipping slightly.
+func buildClientsItem() statusItem {
+	width := measureTextWidth(clientsSizingTemplate)
+	return statusItem{
+		width: width,
+		align: alignLeft,
+		draw:  drawClientCount,
+		tooltip: func() string {
+			clientCountMu.Lock()
+			defer clientCountMu.Unlock()
+			return clientTooltip
+		},
+		onClick: func() {
+			ShowClientsDialog()
+		},
+	}
+}
+
+func drawClientCount(hdc syscall.Handle, r rect) {
+	clientCountMu.Lock()
+	text := clientCountText
+	clientCountMu.Unlock()
+	textPtr, textLen := utf16CountedString(text)
+	textY := r.top + (r.bottom-r.top-textHeight(hdc))/2
+	procTextOutW.Call(uintptr(hdc), uintptr(r.left), uintptr(textY), uintptr(unsafe.Pointer(textPtr)), uintptr(textLen))
+}
+
+// startClientCountPoller periodically refreshes the client-count item from
+// aishwnd's live connection list -- there's no push notification for this
+// (unlike SetConnected, which runtimeState already updates the instant the
+// wire link's own state changes), so polling is the only option. Called
+// once from main.go; fetchClients itself handles "not connected yet"
+// gracefully (returns an error this just ignores, leaving the last-known
+// text in place), so it's safe to start immediately at process startup.
+func startClientCountPoller() {
+	refreshClientCount()
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			refreshClientCount()
+		}
+	}()
+}
+
+// refreshClientCount fetches the current client list and updates the
+// cached text/tooltip, repainting the status bar if anything changed. Safe
+// to call from any goroutine (RunOnUIThread does the actual repaint).
+func refreshClientCount() {
+	clients, err := fetchClients()
+	if err != nil {
+		return // keep showing the last-known state rather than flashing errors
+	}
+	text, tooltip := formatClientCount(clients)
+
+	clientCountMu.Lock()
+	changed := clientCountText != text
+	clientCountText = text
+	clientTooltip = tooltip
+	clientCountMu.Unlock()
+
+	if changed {
+		RunOnUIThread(func() {
+			if hwndStatus != 0 {
+				procInvalidateRect.Call(uintptr(hwndStatus), 0, 1)
+			}
+		})
+	}
+}
+
+// formatClientCount builds the item's label ("0 clients connected", "1
+// client connected", ...) and its tooltip -- the same text when there are
+// none, otherwise one formatClientLine (gui_clients.go, already used by
+// the Clients dialog itself) per line, so hovering shows exactly what
+// opening the dialog would.
+func formatClientCount(clients []aishwinwire.ClientData) (text, tooltip string) {
+	n := len(clients)
+	label := "clients"
+	if n == 1 {
+		label = "client"
+	}
+	text = fmt.Sprintf("%d %s connected", n, label)
+	if n == 0 {
+		return text, text
+	}
+	lines := make([]string, len(clients))
+	for i, c := range clients {
+		lines[i] = formatClientLine(c)
+	}
+	return text, text + "\n" + strings.Join(lines, "\n")
 }
 
 // ---- Auto Scroll switch ----
@@ -329,7 +455,14 @@ func measureTextWidth(s string) int32 {
 	defer procReleaseDC.Call(0, hdc)
 	oldFont := selectStatusFont(syscall.Handle(hdc))
 	defer procSelectObject.Call(hdc, oldFont)
+	return measureTextWidthHDC(hdc, s)
+}
 
+// measureTextWidthHDC is measureTextWidth given an already-open hdc with
+// the desired font already selected -- for measuring several lines (the
+// tooltip popup's multi-line sizing) without repeating GetDC/SelectObject
+// per line.
+func measureTextWidthHDC(hdc uintptr, s string) int32 {
 	textPtr, textLen := utf16CountedString(s)
 	var sz sizeT
 	procGetTextExtentPoint32W.Call(hdc, uintptr(unsafe.Pointer(textPtr)), uintptr(textLen), uintptr(unsafe.Pointer(&sz)))
@@ -481,32 +614,40 @@ func createTooltipWindow(inst syscall.Handle) {
 	}
 }
 
-// showTooltip sizes the popup to fit text and shows it ABOVE (screenX,
-// screenY) -- the anchor point is the hovered item's top-left corner, in
-// screen coordinates, so the popup's bottom edge ends up a small gap above
-// the status bar itself. The status bar sits at the bottom of the window,
-// which is often near the bottom of the screen (with the taskbar right
-// there too), so positioning below the anchor (this function's first cut)
-// could clip the popup off-screen entirely; above always has the whole
-// window and status bar itself as headroom. Shown without stealing focus
-// (SWP_NOACTIVATE -- a tooltip that could steal keyboard focus from
-// whatever the user was doing would be a real, surprising bug, not just a
-// cosmetic one).
+// showTooltip sizes the popup to fit text (which may be multiple lines,
+// separated by \n -- the client-count item's tooltip lists one line per
+// connected client) and shows it ABOVE (screenX, screenY) -- the anchor
+// point is the hovered item's top-left corner, in screen coordinates, so
+// the popup's bottom edge ends up a small gap above the status bar
+// itself. The status bar sits at the bottom of the window, which is often
+// near the bottom of the screen (with the taskbar right there too), so
+// positioning below the anchor (this function's first cut) could clip the
+// popup off-screen entirely; above always has the whole window and status
+// bar itself as headroom. Shown without stealing focus (SWP_NOACTIVATE --
+// a tooltip that could steal keyboard focus from whatever the user was
+// doing would be a real, surprising bug, not just a cosmetic one).
 func showTooltip(text string, screenX, screenY int32) {
 	if hwndTooltip == 0 || text == "" {
 		return
 	}
 	tooltipText = text
+	lines := strings.Split(text, "\n")
 
-	textPtr, textLen := utf16CountedString(text)
 	hdc, _, _ := procGetDC.Call(uintptr(hwndTooltip))
-	var sz sizeT
-	procGetTextExtentPoint32W.Call(hdc, uintptr(unsafe.Pointer(textPtr)), uintptr(textLen), uintptr(unsafe.Pointer(&sz)))
+	oldFont := selectStatusFont(syscall.Handle(hdc))
+	lineHeight := textHeight(syscall.Handle(hdc))
+	var maxWidth int32
+	for _, line := range lines {
+		if w := measureTextWidthHDC(hdc, line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	procSelectObject.Call(hdc, oldFont)
 	procReleaseDC.Call(uintptr(hwndTooltip), hdc)
 
-	const padX, padY = 8, 4
-	w := sz.cx + padX*2
-	h := sz.cy + padY*2
+	const padX, padY, lineGap = 8, 4, 2
+	w := maxWidth + padX*2
+	h := lineHeight*int32(len(lines)) + lineGap*int32(len(lines)-1) + padY*2
 
 	const gap = 6
 	x := screenX
@@ -528,12 +669,20 @@ func tooltipWndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr)
 	case wmPaint:
 		var ps paintStruct
 		hdc, _, _ := procBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
+		oldFont := selectStatusFont(syscall.Handle(hdc))
 		textColor, _, _ := procGetSysColor.Call(colorInfoText)
 		bkColor, _, _ := procGetSysColor.Call(colorInfoBk)
 		procSetTextColor.Call(hdc, textColor)
 		procSetBkColor.Call(hdc, bkColor)
-		textPtr, textLen := utf16CountedString(tooltipText)
-		procTextOutW.Call(hdc, 8, 4, uintptr(unsafe.Pointer(textPtr)), uintptr(textLen))
+		const padX, padY, lineGap = 8, 4, 2
+		lineHeight := textHeight(syscall.Handle(hdc))
+		y := int32(padY)
+		for _, line := range strings.Split(tooltipText, "\n") {
+			textPtr, textLen := utf16CountedString(line)
+			procTextOutW.Call(hdc, padX, uintptr(y), uintptr(unsafe.Pointer(textPtr)), uintptr(textLen))
+			y += lineHeight + lineGap
+		}
+		procSelectObject.Call(hdc, oldFont)
 		procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 		return 0
 	}

@@ -196,6 +196,24 @@ func (a *authManager) disconnectClient(id string) bool {
 	return true
 }
 
+// forget removes ss's tracked connection state once its connection has
+// actually closed (for any reason) -- called from serveUnix after
+// ss.Wait() returns. Unlike disconnectClient, this never touches
+// a.grants: the whole point of a grant is to survive exactly this kind of
+// ordinary reconnect (the aish proxy's own connection pool can
+// legitimately close and reopen a connection) without re-prompting, so
+// only the stale per-connection state that made this connection LOOK
+// still-open goes away here. Without this, a.conns only ever shrank via
+// an explicit Disconnect click, so listClients kept reporting every
+// connection that had EVER authenticated, not just what's still live --
+// found live testing the status bar's client-count indicator, which
+// polls listClients periodically and would otherwise only ever grow.
+func (a *authManager) forget(ss *mcp.ServerSession) {
+	a.mu.Lock()
+	delete(a.conns, ss)
+	a.mu.Unlock()
+}
+
 // middleware rejects every tool call until the connection has obtained an
 // interactive grant, mirroring connAuthMiddleware in
 // internal/mcpserver/connauth.go. The three auth tools themselves stay

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -119,6 +120,26 @@ func Main(version string, args []string) int {
 	for _, c := range res.Content {
 		if tc, ok := c.(*mcp.TextContent); ok && res.StructuredContent == nil {
 			fmt.Println(tc.Text)
+		}
+		// ImageContent (e.g. capture_screen) has no textual form to print --
+		// save it to a temp file and name it, rather than silently doing
+		// nothing, which previously made a successful image-returning call
+		// indistinguishable from one that returned nothing at all.
+		if ic, ok := c.(*mcp.ImageContent); ok {
+			ext := ".bin"
+			if strings.HasPrefix(ic.MIMEType, "image/") {
+				ext = "." + strings.TrimPrefix(ic.MIMEType, "image/")
+			}
+			f, err := os.CreateTemp("", "aish-client-image-*"+ext)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "aish client: saving image content:", err)
+				continue
+			}
+			if _, err := f.Write(ic.Data); err != nil {
+				fmt.Fprintln(os.Stderr, "aish client: saving image content:", err)
+			}
+			f.Close()
+			fmt.Println("image content saved to", f.Name())
 		}
 	}
 	if res.IsError {

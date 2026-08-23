@@ -58,6 +58,7 @@ func main() {
 	}
 
 	startDevControlWatcher()
+	startClientCountPoller()
 
 	if *guiSmokeTest {
 		runGUISmokeTest()

@@ -164,7 +164,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 	unixCtx, cancelUnix := context.WithCancel(ctx)
 	defer cancelUnix()
-	go serveUnix(unixCtx, ul, server)
+	go serveUnix(unixCtx, ul, server, sess.auth)
 
 	ackData, err := json.Marshal(aishwinwire.HelloAckData{SessionID: id, Name: sess.name, Version: Version})
 	if err != nil {
@@ -254,7 +254,7 @@ func (s *aishwndSession) handleDisconnectClient(f aishwinwire.Frame) {
 // serveUnix accepts MCP client connections (normally the aish proxy) on the
 // session's Unix socket until ctx is canceled, mirroring the shape of
 // internal/mcpserver/server.go's Serve() loop.
-func serveUnix(ctx context.Context, l net.Listener, server *mcp.Server) {
+func serveUnix(ctx context.Context, l net.Listener, server *mcp.Server, auth *authManager) {
 	go func() {
 		<-ctx.Done()
 		l.Close()
@@ -271,6 +271,7 @@ func serveUnix(ctx context.Context, l net.Listener, server *mcp.Server) {
 				return
 			}
 			ss.Wait()
+			auth.forget(ss)
 		}()
 	}
 }

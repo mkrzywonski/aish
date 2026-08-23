@@ -194,8 +194,14 @@ func statusBarCheckString() string {
 		sel, _, _ := procSendMessageW.Call(uintptr(settingsTabHwnd), tcmGetCurSel, 0, 0)
 		tabSel = int(int32(sel))
 	}
-	return fmt.Sprintf("connected=%v hotItem=%d tooltipVisible=%v tooltipText=%q settingsOpen=%v tabSel=%d autoScrollEnabled=%v",
-		statusConnected.Load(), statusHotItem, tipVisible != 0, tooltipText, settingsHwnd != 0, tabSel, autoScrollEnabled)
+	clientCountMu.Lock()
+	clientText := clientCountText
+	clientCountMu.Unlock()
+	devClientsDialogMu.Lock()
+	clientsDialogOpen := devClientsDialogHwnd != 0
+	devClientsDialogMu.Unlock()
+	return fmt.Sprintf("connected=%v hotItem=%d tooltipVisible=%v tooltipText=%q settingsOpen=%v tabSel=%d autoScrollEnabled=%v clientCountText=%q clientsDialogOpen=%v",
+		statusConnected.Load(), statusHotItem, tipVisible != 0, tooltipText, settingsHwnd != 0, tabSel, autoScrollEnabled, clientText, clientsDialogOpen)
 }
 
 // statusItemCenterLParam resolves idxStr to a status bar item index and
@@ -483,6 +489,13 @@ func runDevCommand(cmd string) string {
 		}
 		procSendMessageW.Call(uintptr(hwndStatus), wmMouseMove, 0, lParam)
 		return fmt.Sprintf("item=%d %s", idx, statusBarCheckString())
+
+	case cmd == "refreshclients":
+		refreshClientCount()
+		clientCountMu.Lock()
+		text := clientCountText
+		clientCountMu.Unlock()
+		return text
 
 	case cmd == "statusbarcheck":
 		return statusBarCheckString()
