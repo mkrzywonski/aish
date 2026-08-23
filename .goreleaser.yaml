@@ -25,8 +25,43 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
+  # aishwnd is the Linux/WSL half of the aishwin feature (see cmd/aishwnd) —
+  # built the same way as aish itself, since it's equally pure Go.
+  - id: aishwnd
+    main: ./cmd/aishwnd
+    binary: aishwnd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  # aishwin is the Windows half (see cmd/aishwin): raw syscall-based Win32
+  # GUI code, no cgo, so it cross-compiles from this Linux CI runner exactly
+  # like the other two.
+  - id: aishwin
+    main: ./cmd/aishwin
+    binary: aishwin
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
 archives:
   - id: aish
+    ids: [aish]
     # Version-less names so releases/latest/download/aish_linux_amd64.tar.gz is a
     # stable URL the README and install scripts can hard-code.
     name_template: "aish_{{ .Os }}_{{ .Arch }}"
@@ -34,6 +69,27 @@ archives:
     files:
       - README.md
       - LICENSE
+
+  - id: aishwnd
+    ids: [aishwnd]
+    name_template: "aishwnd_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+
+  - id: aishwin
+    ids: [aishwin]
+    name_template: "aishwin_{{ .Os }}_{{ .Arch }}"
+    formats: [zip] # Windows-idiomatic, and archives/formats can't mix per id
+    files:
+      - README.md
+      - LICENSE
+      # side-by-side manifest: Windows only honors this if it sits next to
+      # aishwin.exe under the exact name "aishwin.exe.manifest" (no embedded
+      # resource is built into the binary) — see cmd/aishwin/gui_settings.go.
+      - src: aishwin.exe.manifest
+        dst: aishwin.exe.manifest
 
 checksum:
   name_template: "checksums.txt"

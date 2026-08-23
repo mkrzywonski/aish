@@ -74,6 +74,21 @@ sudo install -m 755 aish /usr/local/bin/aish && rm aish   # or: install -m 755 a
 aish version
 ```
 
+### Install script
+
+`install.sh` wraps the two methods above into one command: it tries the
+prebuilt binary first and falls back to building from source (installing Go
+if needed) if no prebuilt binary fits the machine.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mkrzywonski/aish/main/install.sh | bash
+# no sudo, installs to ~/.local/bin instead of /usr/local/bin:
+curl -fsSL https://raw.githubusercontent.com/mkrzywonski/aish/main/install.sh | bash -s -- --user
+```
+
+Run `install.sh --help` (or read the script) for `--source`/`--prebuilt`,
+`--prefix`, `--version`, and `--update-rc` options.
+
 ### NixOS
 
 This repo is a flake exporting the package and an overlay:
@@ -112,6 +127,24 @@ wsl --install -d Ubuntu   # once, then reboot / open Ubuntu
 Inside the Ubuntu shell, build from source or grab the prebuilt `linux_amd64`
 binary as above. Your MCP client (e.g. Claude Code) must also run inside WSL to
 reach the session's Unix socket.
+
+### aishwin — driving a native Windows shell (experimental)
+
+Separate from AISH's own PTY, `aishwin` lets an AI drive a native Windows
+shell (cmd/PowerShell) directly, with everything visible in its own window.
+It has two halves: `aishwin.exe` on Windows, and `aishwnd` on the Linux/WSL
+side it connects to (by default via `wsl.exe`, or over `ssh` for a separate
+remote Linux box).
+
+```powershell
+iwr https://raw.githubusercontent.com/mkrzywonski/aish/main/install.ps1 | iex
+```
+
+Then install `aishwnd` on the Linux side it will connect to (e.g. inside WSL):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mkrzywonski/aish/main/install.sh | bash -s -- --components aishwnd
+```
 
 ## Running AISH
 
