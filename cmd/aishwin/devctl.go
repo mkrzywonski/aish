@@ -54,6 +54,9 @@ var (
 
 	devClientsDialogMu   sync.Mutex
 	devClientsDialogHwnd syscall.Handle
+
+	devInfoDialogMu   sync.Mutex
+	devInfoDialogHwnd syscall.Handle
 )
 
 func init() {
@@ -91,6 +94,16 @@ func init() {
 		devClientsDialogMu.Lock()
 		devClientsDialogHwnd = 0
 		devClientsDialogMu.Unlock()
+	}
+	onInfoDialogOpen = func(hwnd syscall.Handle) {
+		devInfoDialogMu.Lock()
+		devInfoDialogHwnd = hwnd
+		devInfoDialogMu.Unlock()
+	}
+	onInfoDialogClose = func() {
+		devInfoDialogMu.Lock()
+		devInfoDialogHwnd = 0
+		devInfoDialogMu.Unlock()
 	}
 }
 
@@ -173,6 +186,8 @@ func startDevControlWatcher() {
 //	                        off when the user scrolls away
 //	scrollcheck             report the log view's current scroll position
 //	                        and the Auto Scroll switch's state
+//	infook                  if an info dialog (Help>About) is currently
+//	                        open, click its OK button to dismiss it
 //
 // currentEnvEditControl returns whichever control the Environment tab's
 // in-place edit is currently focused on: the Value overlay if the value
@@ -200,8 +215,11 @@ func statusBarCheckString() string {
 	devClientsDialogMu.Lock()
 	clientsDialogOpen := devClientsDialogHwnd != 0
 	devClientsDialogMu.Unlock()
-	return fmt.Sprintf("connected=%v hotItem=%d tooltipVisible=%v tooltipText=%q settingsOpen=%v tabSel=%d autoScrollEnabled=%v clientCountText=%q clientsDialogOpen=%v",
-		statusConnected.Load(), statusHotItem, tipVisible != 0, tooltipText, settingsHwnd != 0, tabSel, autoScrollEnabled, clientText, clientsDialogOpen)
+	devInfoDialogMu.Lock()
+	infoDialogOpen := devInfoDialogHwnd != 0
+	devInfoDialogMu.Unlock()
+	return fmt.Sprintf("connected=%v hotItem=%d tooltipVisible=%v tooltipText=%q settingsOpen=%v tabSel=%d autoScrollEnabled=%v clientCountText=%q clientsDialogOpen=%v infoDialogOpen=%v",
+		statusConnected.Load(), statusHotItem, tipVisible != 0, tooltipText, settingsHwnd != 0, tabSel, autoScrollEnabled, clientText, clientsDialogOpen, infoDialogOpen)
 }
 
 // statusItemCenterLParam resolves idxStr to a status bar item index and
@@ -535,6 +553,16 @@ func runDevCommand(cmd string) string {
 		lineCount, _, _ := procSendMessageW.Call(uintptr(hwndEdit), emGetLineCount, 0, 0)
 		return fmt.Sprintf("atBottom=%v firstVisibleLine=%d lineCount=%d autoScrollEnabled=%v",
 			isScrolledToBottom(), int32(first), int32(lineCount), autoScrollEnabled)
+
+	case cmd == "infook":
+		devInfoDialogMu.Lock()
+		hwnd := devInfoDialogHwnd
+		devInfoDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: no info dialog is currently open"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(idOK), 0)
+		return "ok"
 
 	default:
 		return fmt.Sprintf("error: unrecognized dev command %q", cmd)

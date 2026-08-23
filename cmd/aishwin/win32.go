@@ -61,7 +61,6 @@ var (
 	procGetWindowRect     = user32.NewProc("GetWindowRect")
 	procIsDialogMessageW  = user32.NewProc("IsDialogMessageW")
 	procGetDlgItem        = user32.NewProc("GetDlgItem")
-	procMessageBoxW       = user32.NewProc("MessageBoxW")
 	procGetScrollInfo     = user32.NewProc("GetScrollInfo")
 	procCheckRadioButton  = user32.NewProc("CheckRadioButton")
 	procIsDlgButtonChecked = user32.NewProc("IsDlgButtonChecked")
@@ -326,9 +325,6 @@ const (
 	processQueryLimitedInformation = 0x1000
 	stillActive                   = 259
 
-	mbOk              = 0x00000000
-	mbIconInformation = 0x00000040
-
 	// RichEdit char-formatting (richedit.h): EM_SETCHARFORMAT sets the
 	// format either of the current selection or, with an empty/collapsed
 	// selection, of text about to be inserted there -- exactly the caret
@@ -422,16 +418,6 @@ func getModuleHandle() syscall.Handle {
 // the dialog procedure afterward to indicate the message was handled.
 func setDlgMsgResult(hwndDlg syscall.Handle, result uintptr) {
 	procSetWindowLongPtrW.Call(uintptr(hwndDlg), uintptr(dwlpMsgResult), result)
-}
-
-// ShowInfo displays a modal, owned informational dialog with an OK button.
-// Unlike AskYesNo/AskText (hand-built DLGTEMPLATEs), this has no wire
-// deadline to respect -- it's only ever triggered by a human clicking a
-// menu item -- so a plain blocking MessageBoxW is the simplest correct
-// tool, not a corner cut. Must be called from the GUI's own thread (a menu
-// click handler, which mainWndProc already runs there).
-func ShowInfo(title, text string) {
-	procMessageBoxW.Call(uintptr(hwndMain), uintptr(unsafe.Pointer(utf16ptr(text))), uintptr(unsafe.Pointer(utf16ptr(title))), mbOk|mbIconInformation)
 }
 
 // isScrolledToBottom reports whether the log view's vertical scrollbar is
