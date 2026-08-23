@@ -54,32 +54,6 @@ func buildRealMenu() syscall.Handle {
 		}
 	})
 
-	envMenu := NewSubmenu(bar, "Env")
-	AddMenuItem(envMenu, "Set variable...", func() {
-		kv, ok := AskText("Set Env Var", "KEY=VALUE:", "")
-		if !ok || kv == "" {
-			return
-		}
-		key, value, found := strings.Cut(kv, "=")
-		if !found || key == "" {
-			AppendLog("aishwin: invalid input, expected KEY=VALUE")
-			return
-		}
-		access.setEnv(key, value)
-		pushLiveEnv(key, value)
-		AppendLog(fmt.Sprintf("aishwin: set %s (applies to new commands now; already-running ones are unaffected)", key))
-	})
-	AddMenuItem(envMenu, "List variables", func() {
-		vars := access.listEnv()
-		if len(vars) == 0 {
-			AppendLog("aishwin: no persistent env vars set")
-			return
-		}
-		for _, v := range vars {
-			AppendLog(v)
-		}
-	})
-
 	settingsMenu := NewSubmenu(bar, "Settings")
 	AddMenuItem(settingsMenu, "Preferences...", func() { ShowSettingsDialog() })
 

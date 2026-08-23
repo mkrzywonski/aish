@@ -65,6 +65,8 @@ var (
 	procGetScrollInfo     = user32.NewProc("GetScrollInfo")
 	procCheckRadioButton  = user32.NewProc("CheckRadioButton")
 	procIsDlgButtonChecked = user32.NewProc("IsDlgButtonChecked")
+	procMapDialogRect     = user32.NewProc("MapDialogRect")
+	procCallWindowProcW   = user32.NewProc("CallWindowProcW")
 
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procOpenProcess         = kernel32.NewProc("OpenProcess")
@@ -219,6 +221,47 @@ const (
 
 	gwlpUserData = -21
 
+	wmKeyDown   = 0x0100
+	wmChar      = 0x0102
+	wmKillFocus = 0x0008
+	vkReturn    = 0x0D
+	vkEscape    = 0x1B
+	vkTab       = 0x09
+
+	// wmEnvKeyEditDone/wmEnvValueEditDone are private, posted (never sent)
+	// messages the Environment tab's edit-control subclasses use to defer
+	// their own teardown (destroying/canceling the very control currently
+	// running their WM_KEYDOWN handler) until after that handler returns
+	// and the message loop picks the deferred message back up -- safer
+	// than a synchronous self-destroy from inside one's own message
+	// handling, which is the kind of reentrancy Win32 code conventionally
+	// avoids even when it happens to work.
+	wmEnvKeyEditDone   = wmApp + 1
+	wmEnvValueEditDone = wmApp + 2
+
+	// wmGetDlgCode/dlgcWantAllKeys: a subclassed control must claim
+	// DLGC_WANTALLKEYS in reply to WM_GETDLGCODE, or the modal dialog's
+	// IsDialogMessage loop intercepts VK_RETURN itself and invokes the
+	// dialog's default button (OK) directly -- never dispatching the
+	// keystroke as a normal message at all, so a subclass's own WM_KEYDOWN
+	// handling never runs. Found live: Tab (plain focus loss, caught by
+	// WM_KILLFOCUS regardless of cause) correctly saved the Value overlay's
+	// text, but Enter silently discarded it and closed the whole Settings
+	// dialog, because idOK's handler abandons any in-progress env-tab edit
+	// before closing.
+	wmGetDlgCode    = 0x0087
+	dlgcWantAllKeys = 0x0004
+
+	// dwlpMsgResult is DWLP_MSGRESULT, the dialog-extra-bytes offset a
+	// DLGPROC must write a WM_NOTIFY reply through via SetWindowLongPtr --
+	// unlike a plain WNDPROC, a dialog procedure's own return value only
+	// means "did I handle this message", not the notification's actual
+	// result; returning a meaningful value directly (as if this were a
+	// normal WNDPROC) leaves comctl32 reading whatever was last in this
+	// slot. Found live: skipping this for LVN_ENDLABELEDIT correlated with
+	// the whole Settings dialog closing after a single keystroke.
+	dwlpMsgResult = 0
+
 	swpNoSize     = 0x0001
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
@@ -253,6 +296,14 @@ const (
 var cwUseDefaultI32 int32 = -2147483648
 var cwUseDefault = uintptr(cwUseDefaultI32)
 
+// gwlpWndProc is GWLP_WNDPROC (-4), computed the same way as cwUseDefault
+// above and for the same reason: converting the untyped constant -4
+// directly to uintptr is a compile error, since constant conversions use
+// the constant's own value rather than runtime two's-complement sign
+// extension.
+var gwlpWndProcI32 int32 = -4
+var gwlpWndProc = uintptr(gwlpWndProcI32)
+
 // ---- thin wrappers ----
 
 func utf16ptr(s string) *uint16 {
@@ -273,6 +324,13 @@ func loadCursorArrow() syscall.Handle {
 func getModuleHandle() syscall.Handle {
 	h, _, _ := procGetModuleHandleW.Call(0)
 	return syscall.Handle(h)
+}
+
+// setDlgMsgResult stores a WM_NOTIFY reply value the correct way for a
+// DLGPROC (see dwlpMsgResult) -- the caller must still return TRUE/1 from
+// the dialog procedure afterward to indicate the message was handled.
+func setDlgMsgResult(hwndDlg syscall.Handle, result uintptr) {
+	procSetWindowLongPtrW.Call(uintptr(hwndDlg), uintptr(dwlpMsgResult), result)
 }
 
 // ShowInfo displays a modal, owned informational dialog with an OK button.

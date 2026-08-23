@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -87,9 +86,15 @@ func (a *accessState) environ(base []string) []string {
 	return out
 }
 
-// listEnv returns the custom vars sorted by key, for the menu's status/env
-// list commands.
-func (a *accessState) listEnv() []string {
+// envEntry is one key/value pair, exposed for the Settings dialog's
+// Environment tab list view (gui_settings.go).
+type envEntry struct {
+	Key   string
+	Value string
+}
+
+// entries returns the custom vars sorted by key.
+func (a *accessState) entries() []envEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	keys := make([]string, 0, len(a.env))
@@ -97,9 +102,9 @@ func (a *accessState) listEnv() []string {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	lines := make([]string, len(keys))
+	out := make([]envEntry, len(keys))
 	for i, k := range keys {
-		lines[i] = fmt.Sprintf("%s=%s", k, a.env[k])
+		out[i] = envEntry{Key: k, Value: a.env[k]}
 	}
-	return lines
+	return out
 }

@@ -115,8 +115,24 @@ func startDevControlWatcher() {
 //	connset:<host|port|user>:<value>  if the Settings dialog is open, set
 //	                        that Connection-page field's text
 //	tabselect:<index>       if the Settings dialog is open, select tab
-//	                        <index> (0=General, 1=Connection) on the real
-//	                        SysTabControl32, mirroring a user click
+//	                        <index> (0=General, 1=Connection, 2=Environment)
+//	                        on the real SysTabControl32, mirroring a user click
+//	envselect:<index>       if the Settings dialog's Environment tab is
+//	                        open, select row <index> of the env var list --
+//	                        needed before settingsclick:<idEnvEditBtn> or
+//	                        settingsclick:<idEnvDeleteBtn>, mirroring a
+//	                        user clicking a row before Edit/Delete
+//	envtype:<value>         if the Environment tab's in-place Key or Value
+//	                        edit is currently active, set its text
+//	envcommit               if the Environment tab's in-place Key or Value
+//	                        edit is currently active, commit it (mirrors
+//	                        Enter/Tab/losing focus -- posted as a real
+//	                        WM_KEYDOWN so the list view's own built-in
+//	                        Key-cell label-edit handling runs exactly as it
+//	                        would for a real keypress)
+//	envcancel               if the Environment tab's in-place Key or Value
+//	                        edit is currently active, cancel it (mirrors
+//	                        Escape)
 //	radioclick:<id>         simulate a real click (BM_CLICK) on the given
 //	                        control id -- needed for BS_AUTORADIOBUTTON
 //	                        controls, whose check/uncheck auto-behavior a
@@ -124,6 +140,22 @@ func startDevControlWatcher() {
 //	settingsclick:<id>      post a synthetic WM_COMMAND(id) to the open
 //	                        Settings dialog -- fine for plain pushbuttons
 //	                        (OK/Cancel/Connect), not for radio buttons
+// currentEnvEditControl returns whichever control the Environment tab's
+// in-place edit is currently focused on: the Value overlay if the value
+// step is active, else the list view's own built-in Key-cell label-edit
+// control (retrieved via LVM_GETEDITCONTROL) if the key step is active,
+// else 0.
+func currentEnvEditControl() syscall.Handle {
+	if envValueEditHwnd != 0 {
+		return envValueEditHwnd
+	}
+	if currentEnvEdit.active && envListHwnd != 0 {
+		h, _, _ := procSendMessageW.Call(uintptr(envListHwnd), lvmGetEditControl, 0, 0)
+		return syscall.Handle(h)
+	}
+	return 0
+}
+
 func runDevCommand(cmd string) string {
 	AppendLogColor("Dev command: "+cmd, colorRunning)
 	switch {
@@ -251,6 +283,44 @@ func runDevCommand(cmd string) string {
 		}
 		procSendMessageW.Call(uintptr(settingsTabHwnd), tcmSetCurSel, uintptr(idx), 0)
 		showSettingsPage(hwnd, idx)
+		return "ok"
+
+	case strings.HasPrefix(cmd, "envselect:"):
+		idxStr := strings.TrimPrefix(cmd, "envselect:")
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			return fmt.Sprintf("error: invalid row index %q", idxStr)
+		}
+		if envListHwnd == 0 {
+			return "error: the Settings dialog's Environment tab is not currently open"
+		}
+		item := lvItemW{mask: lvifState, state: lvisSelected | lvisFocused, stateMask: lvisSelected | lvisFocused}
+		procSendMessageW.Call(uintptr(envListHwnd), lvmSetItemState, uintptr(idx), uintptr(unsafe.Pointer(&item)))
+		return "ok"
+
+	case strings.HasPrefix(cmd, "envtype:"):
+		value := strings.TrimPrefix(cmd, "envtype:")
+		hwnd := currentEnvEditControl()
+		if hwnd == 0 {
+			return "error: no environment-tab edit is currently active"
+		}
+		procSetWindowTextW.Call(uintptr(hwnd), uintptr(unsafe.Pointer(utf16ptr(value))))
+		return "ok"
+
+	case cmd == "envcommit":
+		hwnd := currentEnvEditControl()
+		if hwnd == 0 {
+			return "error: no environment-tab edit is currently active"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmKeyDown, uintptr(vkReturn), 0)
+		return "ok"
+
+	case cmd == "envcancel":
+		hwnd := currentEnvEditControl()
+		if hwnd == 0 {
+			return "error: no environment-tab edit is currently active"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmKeyDown, uintptr(vkEscape), 0)
 		return "ok"
 
 	case strings.HasPrefix(cmd, "radioclick:"):
