@@ -92,7 +92,17 @@ install_binary() {
 	# shellcheck disable=SC2086 -- SUDO_CMD is intentionally either empty or "sudo"
 	$SUDO_CMD mkdir -p "$BINDIR"
 	$SUDO_CMD install -m 755 "$src" "$BINDIR/$name"
-	log "installed $BINDIR/$name -> $("$BINDIR/$name" version 2>/dev/null || "$BINDIR/$name" --version 2>/dev/null || echo "(installed)")"
+	# aish takes a "version" subcommand; aishwnd (and anything else) takes a
+	# --version flag instead -- aishwnd has no subcommand dispatch at all, so
+	# a bare "version" positional arg is silently ignored by flag.Parse and
+	# falls through into aishwnd.Run(), which blocks forever reading stdin
+	# for a wire-protocol hello that will never come. Found live: install.sh
+	# hung on this exact line. `timeout` is a second, defense-in-depth guard
+	# in case some future component has the same footgun.
+	version_arg="--version"
+	[ "$name" = "aish" ] && version_arg="version"
+	shown=$(timeout 5 "$BINDIR/$name" "$version_arg" 2>/dev/null) || shown="(installed)"
+	log "installed $BINDIR/$name -> $shown"
 }
 
 install_prebuilt() {
