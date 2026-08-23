@@ -91,12 +91,12 @@ func menuRename(name string) {
 
 // pushLiveEnv applies a newly-set var to every currently-running persistent
 // shell immediately, if any -- otherwise it only takes effect the next
-// time each shell (re)starts. More than one kind can be live at once now
-// (cmd, powershell, and bash each keep their own independent persistent
-// process -- see execDispatcher, exec.go), so this pushes into all of
-// them, each with its own correct set-var syntax, rather than a single
-// fixed shell. Best-effort: output isn't captured or checked, matching a
-// human just typing the equivalent command themselves.
+// time each shell (re)starts. More than one kind can be live at once (cmd
+// and powershell each keep their own independent persistent process -- see
+// execDispatcher, exec.go), so this pushes into all of them, each with its
+// own correct set-var syntax, rather than a single fixed shell.
+// Best-effort: output isn't captured or checked, matching a human just
+// typing the equivalent command themselves.
 func pushLiveEnv(key, value string) {
 	for _, shell := range execD.liveShells() {
 		setCmd := envSetCommand(shell.kind, key, value)
@@ -108,8 +108,6 @@ func envSetCommand(kind shellKind, key, value string) string {
 	switch kind {
 	case shellPowerShell:
 		return fmt.Sprintf(`$env:%s = "%s"`, key, strings.ReplaceAll(value, `"`, "`\""))
-	case shellBash:
-		return fmt.Sprintf("export %s=%s", key, bashSingleQuote(value))
 	default:
 		return fmt.Sprintf("set %s=%s", key, value)
 	}

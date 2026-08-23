@@ -50,7 +50,7 @@ type execStatusResult struct {
 
 func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []string, defaultShell string) {
 	if defaultShell == "" {
-		defaultShell = "cmd"
+		defaultShell = "powershell"
 	}
 	if len(availableShells) == 0 {
 		availableShells = []string{defaultShell}
@@ -63,9 +63,9 @@ func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []st
 			"terminal here to be invisible relative to. Runs against a persistent shell that keeps its working " +
 			"directory and environment between calls; set cwd to change directory just for this one command. " +
 			"Available shells on this host: " + strings.Join(availableShells, ", ") + " (default " + defaultShell +
-			" when shell is omitted). Pick whichever fits the command: cmd or powershell for native Windows " +
-			"tooling, bash for POSIX-style tools/scripts, if it's available. Each shell kind keeps its OWN " +
-			"persistent process with its own working directory and environment, independent of the others — " +
+			" when shell is omitted; powershell is the more capable option for most tasks, cmd for simpler " +
+			"cases). Each shell kind keeps its OWN persistent process with its own working directory and " +
+			"environment, independent of the others — " +
 			"switching which one you use for one call never loses another kind's state. " +
 			"Use background=true for long-running commands, then poll exec_status. A foreground command that " +
 			"times out kills and replaces that shell's persistent process (state is lost) rather than risk its " +

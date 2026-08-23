@@ -40,13 +40,12 @@ type Frame struct {
 }
 
 // AvailableShells/DefaultShell tell aishwnd, before it ever registers the
-// exec tool, which persistent shells this Windows host can actually run
-// (cmd and powershell always; bash only if a real bash.exe was found --
-// see cmd/aishwin/shell.go's detectAvailableShells) and which one a call
-// gets when it doesn't name one explicitly. This replaces the old single
-// Shell field (aishwnd never actually read it -- the whole session was
-// locked to one fixed kind for its entire lifetime, chosen once at aishwin
-// startup) now that exec lets the AI pick per call.
+// exec tool, which persistent shells this Windows host can run (cmd and
+// powershell) and which one a call gets when it doesn't name one
+// explicitly. This replaces the old single Shell field (aishwnd never
+// actually read it -- the whole session was locked to one fixed kind for
+// its entire lifetime, chosen once at aishwin startup) now that exec lets
+// the AI pick per call.
 type HelloData struct {
 	Proto           int      `json:"proto"`
 	Name            string   `json:"name,omitempty"`
@@ -160,8 +159,8 @@ type ExecData struct {
 	Cwd        string `json:"cwd,omitempty"`
 	Background bool   `json:"background,omitempty"`
 	TimeoutMs  int    `json:"timeout_ms,omitempty"`
-	// Shell picks which persistent shell kind (cmd/powershell/bash) runs
-	// this command; empty means aishwin's own configured default. See
+	// Shell picks which persistent shell kind (cmd/powershell) runs this
+	// command; empty means aishwin's own configured default. See
 	// HelloData.AvailableShells for what a given host actually supports.
 	Shell string `json:"shell,omitempty"`
 }

@@ -15,13 +15,13 @@ const defaultExecTimeout = 30 * time.Second
 // execDispatcher wires incoming exec/exec_poll wire frames to a persistent
 // shell (foreground) or the background task table (background). It is not
 // locked to one fixed shellKind for its whole lifetime: each supported kind
-// (cmd, powershell, and bash if available) gets its own independently
-// lazily-started, independently-dying persistent shell, so the AI can pick
-// whichever fits a given command without losing another kind's cwd/env
-// state by switching to it.
+// (cmd, powershell) gets its own independently lazily-started,
+// independently-dying persistent shell, so the AI can pick whichever fits
+// a given command without losing another kind's cwd/env state by switching
+// to it.
 type execDispatcher struct {
 	defaultKind shellKind   // used when a request doesn't specify shell
-	available   []shellKind // kinds this host can actually run (bash may be absent)
+	available   []shellKind // kinds this host can actually run
 
 	mu     sync.Mutex // guards shells: one entry swapped out after Run reports it dead
 	shells map[shellKind]*shellSession
@@ -49,18 +49,16 @@ func (d *execDispatcher) isAvailable(kind shellKind) bool {
 
 // resolveKind maps an exec call's (possibly empty) requested shell name to
 // a validated shellKind, applying d.defaultKind when unspecified. Rejects
-// both a genuinely unknown name and a recognized-but-unavailable one (bash,
-// most commonly) up front with an actionable message, rather than trying
-// and failing obscurely once startShell itself can't find the binary.
+// an unknown name up front with an actionable message.
 func (d *execDispatcher) resolveKind(requested string) (shellKind, error) {
 	kind := d.defaultKind
 	if requested != "" {
 		kind = shellKind(requested)
 	}
 	switch kind {
-	case shellCmd, shellPowerShell, shellBash:
+	case shellCmd, shellPowerShell:
 	default:
-		return "", fmt.Errorf("unknown shell %q (use cmd, powershell, or bash)", requested)
+		return "", fmt.Errorf("unknown shell %q (use cmd or powershell)", requested)
 	}
 	if !d.isAvailable(kind) {
 		return "", fmt.Errorf("shell %q is not available on this host (available: %s)", kind, strings.Join(shellKindStrings(d.available), ", "))
@@ -115,8 +113,8 @@ func (d *execDispatcher) liveShells() []*shellSession {
 // own launch directory instead of "wherever the AI thinks it's working" —
 // a real, confusing mismatch found live (a `go build` failed with a
 // misleading "not a module" error instead of an obvious cwd-mismatch
-// signal). Keyed by kind: a background bash call inherits bash's own last
-// cwd, not cmd's or powershell's.
+// signal). Keyed by kind: a background powershell call inherits
+// powershell's own last cwd, not cmd's, and vice versa.
 func (d *execDispatcher) liveCWD(kind shellKind) string {
 	d.mu.Lock()
 	s := d.shells[kind]
@@ -225,8 +223,6 @@ func withCwd(kind shellKind, cwd, command string) string {
 	switch kind {
 	case shellPowerShell:
 		return fmt.Sprintf("Set-Location -LiteralPath '%s'; %s", strings.ReplaceAll(cwd, "'", "''"), command)
-	case shellBash:
-		return fmt.Sprintf("cd %s && %s", bashSingleQuote(cwd), command)
 	default:
 		return fmt.Sprintf(`cd /d "%s" && %s`, cwd, command)
 	}
