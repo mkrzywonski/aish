@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -15,12 +16,25 @@ import (
 // when the link drops (process exited, WSL/ssh hiccup, etc).
 type spawnFunc func(ctx context.Context) (cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, err error)
 
+// connDescriptor describes what a spawnFunc actually connects to, returned
+// alongside it and captured once (StartConnection, connection.go) rather
+// than re-derived later from settings -- settings can change after the
+// fact, and the very first connection can come from a --ssh/--wsl CLI
+// override that never touches settings at all, so re-reading settings
+// later could describe a different connection than the one actually live.
+// Used to enrich the status bar's connected LED tooltip (gui_statusbar.go)
+// with how/what it's connected to, not just that it is.
+type connDescriptor struct {
+	mode   string // connModeWSL or connModeSSH
+	target string // ssh: "[user@]host" or "[user@]host:port"; wsl: distro name, or "" for the default distro
+}
+
 // spawnWSL launches the Linux half via `wsl.exe -- aishwnd` (or
 // `wsl.exe -d <distro> -- aishwnd` if distro is set) — the default path,
 // zero-config for the common case since aishwnd only needs to be on PATH
 // inside WSL.
-func spawnWSL(distro string) spawnFunc {
-	return func(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+func spawnWSL(distro string) (spawnFunc, connDescriptor) {
+	spawn := func(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
 		args := []string{}
 		if distro != "" {
 			args = append(args, "-d", distro)
@@ -28,6 +42,7 @@ func spawnWSL(distro string) spawnFunc {
 		args = append(args, "--", "aishwnd")
 		return startPiped(exec.CommandContext(ctx, "wsl.exe", args...))
 	}
+	return spawn, connDescriptor{mode: connModeWSL, target: distro}
 }
 
 // spawnSSH launches the Linux half via `ssh [user@]hostname aishwnd` —
@@ -46,25 +61,27 @@ func spawnWSL(distro string) spawnFunc {
 // otherwise still prefer a tty prompt when one looks reachable; older
 // versions simply ignore the unknown variable and use askpass anyway,
 // since our stdin already isn't a tty.
-func spawnSSH(target string) spawnFunc {
-	return sshSpawn([]string{target, "aishwnd"})
+func spawnSSH(target string) (spawnFunc, connDescriptor) {
+	return sshSpawn([]string{target, "aishwnd"}), connDescriptor{mode: connModeSSH, target: target}
 }
 
 // spawnSSHConfig is spawnSSH built from discrete host/port/user settings
 // (Settings > Connection) instead of a single pre-formatted
 // "[user@]hostname" string -- the shape the GUI collects, so a user who
 // has never touched their ssh_config can still set a non-default port.
-func spawnSSHConfig(host string, port int, user string) spawnFunc {
+func spawnSSHConfig(host string, port int, user string) (spawnFunc, connDescriptor) {
 	target := host
 	if user != "" {
 		target = user + "@" + host
 	}
+	display := target
 	args := []string{}
 	if port > 0 {
 		args = append(args, "-p", strconv.Itoa(port))
+		display = fmt.Sprintf("%s:%d", target, port)
 	}
 	args = append(args, target, "aishwnd")
-	return sshSpawn(args)
+	return sshSpawn(args), connDescriptor{mode: connModeSSH, target: display}
 }
 
 // sshSpawn is the shared ssh-child setup both spawnSSH and spawnSSHConfig

@@ -282,13 +282,21 @@ var settingsTabHwnd syscall.Handle
 var envListHwnd syscall.Handle
 var currentSettingsDlgHwnd syscall.Handle // target for the deferred wmEnvKeyEditDone/wmEnvValueEditDone messages below
 
-// ShowSettingsDialog displays the modal Settings window. Must be called
-// from the GUI's own thread (a menu click handler, which mainWndProc
-// already runs there).
+// ShowSettingsDialog displays the modal Settings window on the General
+// page. Must be called from the GUI's own thread (a menu click handler,
+// which mainWndProc already runs there).
 func ShowSettingsDialog() {
+	ShowSettingsDialogPage(0)
+}
+
+// ShowSettingsDialogPage is ShowSettingsDialog, opening directly to page (0
+// = General, 1 = Connection, 2 = Environment) -- used by the status bar's
+// connected LED (gui_statusbar.go), whose click should land on the
+// Connection page rather than wherever the dialog happens to default.
+func ShowSettingsDialogPage(page int) {
 	ensureCommonControlsInit()
 	currentSettingsFields = buildSettingsFields()
-	currentSettingsPage = 0
+	currentSettingsPage = page
 	tmpl := buildSettingsDialogTemplate("Settings", currentSettingsFields)
 	inst := getModuleHandle()
 	procDialogBoxIndirectParamW.Call(
@@ -328,7 +336,7 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 		populateConnectionFields(hwndDlg)
 		createEnvList(hwndDlg)
 		refreshEnvList()
-		showSettingsPage(hwndDlg, 0)
+		showSettingsPage(hwndDlg, currentSettingsPage)
 		procSetForegroundWin.Call(uintptr(hwndDlg))
 		onSettingsDialogOpen(hwndDlg)
 		return 1
@@ -504,6 +512,12 @@ func createSettingsTab(hwndDlg syscall.Handle) {
 	insertTabItem(settingsTabHwnd, 0, "General")
 	insertTabItem(settingsTabHwnd, 1, "Connection")
 	insertTabItem(settingsTabHwnd, 2, "Environment")
+	// Sync the tab strip's own visual selection to whatever page
+	// ShowSettingsDialogPage requested -- without this, opening directly
+	// to a non-General page (e.g. the status bar LED's click) would show
+	// that page's controls while the tab strip still visually highlighted
+	// "General".
+	procSendMessageW.Call(uintptr(settingsTabHwnd), tcmSetCurSel, uintptr(currentSettingsPage), 0)
 }
 
 // createEnvList builds the Environment page's SysListView32 as a runtime

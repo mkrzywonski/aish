@@ -64,7 +64,7 @@ func CurrentSessionName() string {
 // it follows the Connection settings saved in the registry (Settings >
 // Connection), so a plain `aishwin.exe` with no flags reconnects the same
 // way it was last configured.
-func resolveSpawn(sshTargetFlag string, forceWSL bool) spawnFunc {
+func resolveSpawn(sshTargetFlag string, forceWSL bool) (spawnFunc, connDescriptor) {
 	if sshTargetFlag != "" {
 		return spawnSSH(sshTargetFlag)
 	}
@@ -79,7 +79,7 @@ func resolveSpawn(sshTargetFlag string, forceWSL bool) spawnFunc {
 // dialog's Connect button, an explicit "connect using what I just
 // configured" action that shouldn't be second-guessed by a flag from
 // process startup.
-func resolveSpawnFromSettings() spawnFunc {
+func resolveSpawnFromSettings() (spawnFunc, connDescriptor) {
 	if settings.ConnectionMode() == connModeSSH && settings.SSHHost() != "" {
 		return spawnSSHConfig(settings.SSHHost(), settings.SSHPort(), settings.SSHUser())
 	}
@@ -101,7 +101,14 @@ func InitConnectionContext(ctx context.Context) {
 // (see CurrentSessionName) so every caller -- main.go's first connection,
 // this function's own reconnects, and run()'s automatic retries -- agrees
 // on the same live value.
-func StartConnection(spawn spawnFunc) {
+//
+// desc is recorded on rt immediately, before the connection attempt even
+// starts: it describes what this call is ABOUT to connect to, captured
+// once here rather than re-read from settings later (which could have
+// changed since, or never matched at all for a --ssh/--wsl CLI-overridden
+// first connection) -- see connDescriptor's own doc comment.
+func StartConnection(spawn spawnFunc, desc connDescriptor) {
+	rt.setConnDescriptor(desc)
 	connMu.Lock()
 	if connCancel != nil {
 		connCancel()

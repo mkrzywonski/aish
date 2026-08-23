@@ -1,8 +1,6 @@
 ﻿package main
 
 import (
-	"fmt"
-	"os"
 	"sync"
 
 	"ai-ssh/internal/aishwinwire"
@@ -19,9 +17,23 @@ type runtimeState struct {
 	sessionID      string
 	name           string
 	aishwndVersion string
+	connMode       string // connModeWSL or connModeSSH -- see connDescriptor (spawn.go)
+	connTarget     string
 }
 
 var rt = &runtimeState{}
+
+// setConnDescriptor records what StartConnection (connection.go) is about
+// to connect to -- called immediately, before the connection attempt
+// itself, so the status bar's tooltip (gui_statusbar.go) can describe a
+// reconnect-in-progress the same way it describes an already-connected
+// link.
+func (r *runtimeState) setConnDescriptor(desc connDescriptor) {
+	r.mu.Lock()
+	r.connMode = desc.mode
+	r.connTarget = desc.target
+	r.mu.Unlock()
+}
 
 func (r *runtimeState) setConnected(wc *aishwinwire.Conn, ack aishwinwire.HelloAckData) {
 	r.mu.Lock()
@@ -48,35 +60,12 @@ func (r *runtimeState) setName(name string) {
 	refreshStatus()
 }
 
-// refreshStatus renders the current connection state into the GUI status
-// bar. Safe to call before the window exists (SetStatus/AppendLog no-op
-// until hwndMain is set).
+// refreshStatus updates the graphical status bar's connected LED (see
+// gui_statusbar.go) to match the wire link's current state. Safe to call
+// before the window exists -- SetConnected queues its work and no-ops
+// safely until hwndMain is set.
 func refreshStatus() {
-	snap := rt.snapshot()
-	state := "disconnected"
-	label := "none"
-	if snap.connected {
-		state = "connected"
-		label = snap.sessionID
-		if snap.name != "" {
-			label = fmt.Sprintf("%s (%s)", snap.sessionID, snap.name)
-		}
-	}
-	// pid is shown so a screenshot alone identifies which running
-	// aishwin.exe instance it is -- otherwise indistinguishable when
-	// several are running at once (e.g. a production session alongside a
-	// throwaway test instance) other than by cross-referencing
-	// Get-CimInstance/tasklist by hand. buildTimeOnly() is what actually
-	// answers "is this the build I just made": the version string alone
-	// is identical for every build of the same commit. Shell kind used to
-	// live only in the now-removed Help>Status dialog -- folded in here
-	// instead, since it's state the user wants to glance at, not look up.
-	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  shell: %s  |  aishwin %s (%s)",
-		state, os.Getpid(), label, execD.kind, version, buildTimeOnly())
-	if snap.connected && snap.aishwndVersion != "" {
-		text += fmt.Sprintf("  |  aishwnd %s", snap.aishwndVersion)
-	}
-	SetStatus(text)
+	SetConnected(rt.snapshot().connected)
 }
 
 type runtimeSnapshot struct {
@@ -85,6 +74,8 @@ type runtimeSnapshot struct {
 	sessionID      string
 	name           string
 	aishwndVersion string
+	connMode       string
+	connTarget     string
 }
 
 func (r *runtimeState) snapshot() runtimeSnapshot {
@@ -93,5 +84,6 @@ func (r *runtimeState) snapshot() runtimeSnapshot {
 	return runtimeSnapshot{
 		wire: r.wire, connected: r.connected,
 		sessionID: r.sessionID, name: r.name, aishwndVersion: r.aishwndVersion,
+		connMode: r.connMode, connTarget: r.connTarget,
 	}
 }

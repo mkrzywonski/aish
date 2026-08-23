@@ -20,26 +20,23 @@ const (
 	wmAppRunUI  = wmApp + 2 // a func() was queued via RunOnUIThread; drain and run it
 	idEdit      = 1001
 	idStatus    = 1002
-	idJumpBtn   = 1003
 	idMenuFirst = 2000 // menu action IDs start here, assigned sequentially
 
 	statusBarHeight = 24 // fixed height in pixels for the bottom status strip
-	jumpBtnWidth    = 200
 
 	// mainScrollTimerID polls (via WM_TIMER on hwndMain) whether the user
-	// has scrolled back to the bottom on their own -- distinct from
-	// gui_dialog.go's dlgTimerID, which is scoped to a separate, temporary
-	// dialog HWND, so there's no collision even though both start at small
-	// integers.
+	// has scrolled the log away from the bottom on their own -- distinct
+	// from gui_dialog.go's dlgTimerID, which is scoped to a separate,
+	// temporary dialog HWND, so there's no collision even though both
+	// start at small integers. See pollAutoScrollState.
 	mainScrollTimerID    = 2
 	scrollPollIntervalMs = 400
 )
 
 var (
-	hwndMain    syscall.Handle
-	hwndEdit    syscall.Handle
-	hwndStatus  syscall.Handle
-	hwndJumpBtn syscall.Handle
+	hwndMain   syscall.Handle
+	hwndEdit   syscall.Handle
+	hwndStatus syscall.Handle
 
 	menuActionsMu sync.Mutex
 	menuActions   = map[uint16]func(){}
@@ -50,9 +47,6 @@ var (
 
 	uiFuncMu    sync.Mutex
 	uiFuncQueue []func()
-
-	jumpMu          sync.Mutex
-	pendingNewLines int
 
 	onClose func() // set by main; called once when the window is closing
 
@@ -166,10 +160,11 @@ func StartGUI(title string, buildMenu func() syscall.Handle, onCloseFn func()) e
 	procShowWindow.Call(uintptr(hwndMain), swShow)
 	procUpdateWindow.Call(uintptr(hwndMain))
 
-	// Polls whether the user has scrolled the log back to the bottom on
-	// their own (mouse wheel/scrollbar drag don't move the caret, so there's
-	// no cheap window message to hook instead) so the jump-to-bottom
-	// indicator can hide itself without waiting for the next appended line.
+	// Polls whether the user has scrolled the log away from the bottom on
+	// their own (mouse wheel/scrollbar drag don't move the caret, so
+	// there's no cheap window message to hook instead) so the Auto Scroll
+	// switch (gui_statusbar.go) can turn itself off without waiting for
+	// the next appended line to notice.
 	procSetTimer.Call(uintptr(hwndMain), mainScrollTimerID, scrollPollIntervalMs, 0)
 
 	return messageLoop()
@@ -199,47 +194,41 @@ func createChildWidgets(parent syscall.Handle, inst syscall.Handle) {
 	// modern EDIT/RichEdit controls when sent EM_SETLIMITTEXT).
 	procSendMessageW.Call(uintptr(hwndEdit), emSetLimitText, 0, 0)
 
-	// The status strip is a plain bordered STATIC control, not the native
-	// msctls_statuswindow32 common control: that class reproducibly failed
-	// CreateWindowExW ("Cannot find window class") on the real Windows host
-	// even after InitCommonControlsEx reported success and a manifest
-	// declaring Common Controls v6 was added -- while a different common
-	// control (msctls_progress32) created fine under identical conditions,
-	// ruling out a wholesale comctl32 registration failure. STATIC is a
-	// core user32 class with no comctl32 dependency at all, so it sidesteps
-	// the mystery entirely for what's functionally just a text strip.
+	// The status strip is a custom-drawn window (see gui_statusbar.go), not
+	// the native msctls_statuswindow32 common control: that class
+	// reproducibly failed CreateWindowExW ("Cannot find window class") on
+	// the real Windows host even after InitCommonControlsEx reported
+	// success and a manifest declaring Common Controls v6 was added --
+	// while a different common control (msctls_progress32) created fine
+	// under identical conditions, ruling out a wholesale comctl32
+	// registration failure. A plain RegisterClassExW window, like hwndMain
+	// itself, sidesteps that mystery entirely on top of being the only way
+	// to get a graphical, per-item hit-testable bar (an LED, a tooltip,
+	// click targets) rather than one flat string.
+	statusItems = buildStatusItems()
+	statusCls := utf16ptr(statusBarClassName)
+	var statusWc wndClassExW
+	statusWc.size = uint32(unsafe.Sizeof(statusWc))
+	statusWc.wndProc = statusBarWndProcPtr
+	statusWc.instance = inst
+	statusWc.cursor = loadCursorArrow()
+	statusWc.background = syscall.Handle(colorBtnFace + 1)
+	statusWc.className = statusCls
+	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&statusWc)))
+
 	statusHandle, _, statusErr := procCreateWindowExW.Call(
 		0,
-		uintptr(unsafe.Pointer(utf16ptr("STATIC"))),
-		uintptr(unsafe.Pointer(utf16ptr("starting..."))),
+		uintptr(unsafe.Pointer(statusCls)),
+		uintptr(unsafe.Pointer(utf16ptr(""))),
 		uintptr(wsChild|wsVisible|wsBorder),
 		0, 0, 0, 0,
 		uintptr(parent), uintptr(idStatus), uintptr(inst), 0,
 	)
 	hwndStatus = syscall.Handle(statusHandle)
 	if hwndStatus == 0 {
-		fmt.Fprintf(stderr, "aishwin: CreateWindowExW(STATIC status) failed: %v\n", statusErr)
+		fmt.Fprintf(stderr, "aishwin: CreateWindowExW(status bar) failed: %v\n", statusErr)
 	}
-
-	// Created without WS_VISIBLE: hidden until sticky auto-scroll actually
-	// has something to report (drainLogQueue's showJumpIndicator), and
-	// overlaps the right end of the status STATIC above it in z-order --
-	// harmless, since the two are never meaningfully informative at the
-	// same pixels at the same time (the indicator only appears while
-	// there's unseen output, which is exactly when knowing "N new lines"
-	// matters more than the connection-status text underneath it).
-	jumpHandle, _, jumpErr := procCreateWindowExW.Call(
-		0,
-		uintptr(unsafe.Pointer(utf16ptr("BUTTON"))),
-		uintptr(unsafe.Pointer(utf16ptr(""))),
-		uintptr(wsChild|wsTabStop),
-		0, 0, 0, 0,
-		uintptr(parent), uintptr(idJumpBtn), uintptr(inst), 0,
-	)
-	hwndJumpBtn = syscall.Handle(jumpHandle)
-	if hwndJumpBtn == 0 {
-		fmt.Fprintf(stderr, "aishwin: CreateWindowExW(BUTTON jump) failed: %v\n", jumpErr)
-	}
+	createTooltipWindow(inst)
 
 	layoutChildren(parent)
 }
@@ -255,12 +244,6 @@ func layoutChildren(parent syscall.Handle) {
 
 	procMoveWindow.Call(uintptr(hwndEdit), 0, 0, uintptr(width), uintptr(height-statusBarHeight), 1)
 	procMoveWindow.Call(uintptr(hwndStatus), 0, uintptr(height-statusBarHeight), uintptr(width), uintptr(statusBarHeight), 1)
-
-	btnWidth := int32(jumpBtnWidth)
-	if btnWidth > width {
-		btnWidth = width
-	}
-	procMoveWindow.Call(uintptr(hwndJumpBtn), uintptr(width-btnWidth), uintptr(height-statusBarHeight), uintptr(btnWidth), uintptr(statusBarHeight), 1)
 }
 
 func messageLoop() error {
@@ -303,17 +286,9 @@ func mainWndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) ui
 			}
 			return 0
 		}
-		// A child control notification instead: HIWORD(wParam) is the
-		// notification code, LOWORD(wParam) the control id.
-		id := uint16(wParam & 0xFFFF)
-		notify := uint16((wParam >> 16) & 0xFFFF)
-		if id == idJumpBtn && notify == bnClicked {
-			jumpToBottomClicked()
-			return 0
-		}
 	case wmTimer:
 		if wParam == mainScrollTimerID {
-			checkAutoHideJumpIndicator()
+			pollAutoScrollState()
 			return 0
 		}
 	case wmAppLog:
@@ -371,13 +346,12 @@ func appendLogEntry(e logEntry) {
 }
 
 // drainLogQueue appends every queued line, then follows the view to the
-// bottom ONLY if it was already there before this batch landed -- sticky
-// auto-scroll. Checked once per batch, before any insertion (inserting text
-// itself doesn't move the scroll position; only an explicit scroll command
-// does, so the pre-insertion check stays valid through the whole loop): a
-// user who has scrolled up to read earlier output should never have the
-// view yanked back down just because new output arrived, but the common
-// case (already following the tail) should keep working exactly as before.
+// bottom if and only if the Auto Scroll switch (gui_statusbar.go) is
+// currently on -- unlike this function's earlier design (which re-derived
+// "should we scroll" from the view's current scroll position on every
+// batch), that state now lives explicitly in autoScrollEnabled: turned off
+// by pollAutoScrollState the moment the user scrolls away, turned back on
+// only by clicking the switch.
 func drainLogQueue() {
 	logMu.Lock()
 	pending := logQueue
@@ -386,17 +360,13 @@ func drainLogQueue() {
 	if len(pending) == 0 || hwndEdit == 0 {
 		return
 	}
-	wasAtBottom := isScrolledToBottom()
 	for _, e := range pending {
 		setCaretTextColor(hwndEdit, !e.useColor, e.color)
 		appendEditText(e.text + "\r\n")
 	}
 	trimScrollback()
-	if wasAtBottom {
+	if autoScrollEnabled {
 		scrollToBottom()
-		hideJumpIndicator()
-	} else {
-		showJumpIndicator(len(pending))
 	}
 }
 
@@ -447,51 +417,19 @@ func scrollToBottom() {
 	}
 }
 
-// showJumpIndicator reveals the "N new lines below" button, accumulating
-// the count across multiple batches that land while the user stays
-// scrolled away.
-func showJumpIndicator(newLines int) {
-	jumpMu.Lock()
-	pendingNewLines += newLines
-	count := pendingNewLines
-	jumpMu.Unlock()
-	label := fmt.Sprintf("%d new ↓ click to jump down", count)
-	procSetWindowTextW.Call(uintptr(hwndJumpBtn), uintptr(unsafe.Pointer(utf16ptr(label))))
-	procShowWindow.Call(uintptr(hwndJumpBtn), swShow)
-}
-
-func hideJumpIndicator() {
-	jumpMu.Lock()
-	pendingNewLines = 0
-	jumpMu.Unlock()
-	procShowWindow.Call(uintptr(hwndJumpBtn), swHide)
-}
-
-// jumpToBottomClicked handles the button itself being clicked.
-func jumpToBottomClicked() {
-	scrollToBottom()
-	hideJumpIndicator()
-}
-
-// checkAutoHideJumpIndicator runs off mainScrollTimerID: it's the only way
-// to notice the user scrolled back to the bottom by hand (mouse wheel and
-// scrollbar dragging are handled entirely inside the RichEdit control's own
-// window procedure, never reaching ours as a message) without waiting for
-// the next appended line to trigger the same check in drainLogQueue.
-func checkAutoHideJumpIndicator() {
-	jumpMu.Lock()
-	showing := pendingNewLines > 0
-	jumpMu.Unlock()
-	if showing && isScrolledToBottom() {
-		hideJumpIndicator()
+// pollAutoScrollState runs off mainScrollTimerID: it's the only way to
+// notice the user scrolled the log away from the bottom by hand (mouse
+// wheel and scrollbar dragging are handled entirely inside the RichEdit
+// control's own window procedure, never reaching ours as a message)
+// without waiting for the next appended line to trigger the same check in
+// drainLogQueue. Only checks while currently on -- once the switch is off,
+// it stays off until the user explicitly clicks it (setAutoScroll(true)),
+// never re-enabling itself just because the view happens to be at the
+// bottom again.
+func pollAutoScrollState() {
+	if autoScrollEnabled && !isScrolledToBottom() {
+		setAutoScroll(false)
 	}
-}
-
-// SetStatus sets the status bar's text. Safe to call from any goroutine.
-func SetStatus(text string) {
-	RunOnUIThread(func() {
-		procSetWindowTextW.Call(uintptr(hwndStatus), uintptr(unsafe.Pointer(utf16ptr(text))))
-	})
 }
 
 // RunOnUIThread queues fn to run on the GUI's owning thread and wakes it.

@@ -68,12 +68,34 @@ var (
 	procMapDialogRect     = user32.NewProc("MapDialogRect")
 	procCallWindowProcW   = user32.NewProc("CallWindowProcW")
 
+	// ---- graphical status bar (gui_statusbar.go): custom-drawn items and
+	// their hand-rolled hover popup, both plain user32/gdi32 -- see that
+	// file's header comment for why the popup isn't the real Windows
+	// tooltip common control.
+	procBeginPaint      = user32.NewProc("BeginPaint")
+	procEndPaint        = user32.NewProc("EndPaint")
+	procInvalidateRect  = user32.NewProc("InvalidateRect")
+	procClientToScreen  = user32.NewProc("ClientToScreen")
+	procSetWindowPos    = user32.NewProc("SetWindowPos")
+	procGetSysColor     = user32.NewProc("GetSysColor")
+	procTrackMouseEvent = user32.NewProc("TrackMouseEvent")
+	procSetCursor       = user32.NewProc("SetCursor")
+	procIsWindowVisible = user32.NewProc("IsWindowVisible")
+
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procOpenProcess         = kernel32.NewProc("OpenProcess")
 	procGetExitCodeProcess  = kernel32.NewProc("GetExitCodeProcess")
 	procCloseHandle         = kernel32.NewProc("CloseHandle")
 
-	procGetStockObject = gdi32.NewProc("GetStockObject")
+	procGetStockObject        = gdi32.NewProc("GetStockObject")
+	procCreateSolidBrush      = gdi32.NewProc("CreateSolidBrush")
+	procEllipse               = gdi32.NewProc("Ellipse")
+	procTextOutW              = gdi32.NewProc("TextOutW")
+	procGetTextExtentPoint32W = gdi32.NewProc("GetTextExtentPoint32W")
+	procSetBkColor            = gdi32.NewProc("SetBkColor")
+	procSetTextColor          = gdi32.NewProc("SetTextColor")
+	procSetBkMode             = gdi32.NewProc("SetBkMode")
+	procRoundRect             = gdi32.NewProc("RoundRect")
 )
 
 // ---- structs (field layout must exactly match the real Win32 structs) ----
@@ -151,6 +173,39 @@ type charFormat2W struct {
 	bAnimation      byte
 	bRevAuthor      byte
 	bReserved1      byte
+}
+
+// paintStruct mirrors PAINTSTRUCT (winuser.h) field-for-field for
+// BeginPaint/EndPaint. Only hdc is actually used by this app's WM_PAINT
+// handlers (gui_statusbar.go always redraws its whole small client area
+// rather than clipping to rcPaint) -- the rest of the fields still have to
+// be present and correctly sized so BeginPaint has valid memory to write
+// its other output fields into.
+type paintStruct struct {
+	hdc         syscall.Handle
+	fErase      int32
+	rcPaint     rect
+	fRestore    int32
+	fIncUpdate  int32
+	rgbReserved [32]byte
+}
+
+// trackMouseEvent mirrors TRACKMOUSEEVENT (winuser.h) field-for-field, used
+// with TME_LEAVE to arm a one-shot WM_MOUSELEAVE for the status bar's hover
+// tooltip (gui_statusbar.go) -- WM_MOUSEMOVE alone never fires once the
+// cursor leaves the window entirely, so without this a tooltip shown while
+// hovering an item could get stuck onscreen after a fast mouse-out.
+type trackMouseEvent struct {
+	cbSize      uint32
+	dwFlags     uint32
+	hwndTrack   syscall.Handle
+	dwHoverTime uint32
+}
+
+// sizeT mirrors SIZE (windef.h), the output parameter GetTextExtentPoint32W
+// fills in to size the hover tooltip popup to its text.
+type sizeT struct {
+	cx, cy int32
 }
 
 // ---- constants ----
@@ -284,6 +339,30 @@ const (
 	// documented Win32 API quirk, not a typo) to mean "automatic/default
 	// color" instead of crTextColor.
 	cfeAutoColor = 0x40000000
+
+	// ---- graphical status bar (gui_statusbar.go) ----
+	wmPaint       = 0x000F
+	wmMouseMove   = 0x0200
+	wmLButtonUp   = 0x0202
+	wmSetCursor   = 0x0020
+	wmMouseLeave  = 0x02A3
+
+	idcHand = 32649 // IDC_HAND
+
+	nullPen        = 8  // GetStockObject index, NULL_PEN
+	defaultGuiFont = 17 // GetStockObject index, DEFAULT_GUI_FONT
+
+	colorInfoText = 23 // GetSysColor index, COLOR_INFOTEXT
+	colorInfoBk   = 24 // GetSysColor index, COLOR_INFOBK
+
+	tmeLeave = 0x00000002 // TRACKMOUSEEVENT.dwFlags, TME_LEAVE
+
+	wsExTopmost    = 0x00000008
+	wsExToolWindow = 0x00000080
+
+	swpShowWindow = 0x0040
+
+	bkModeTransparent = 1 // SetBkMode mode, so text drawn directly on the status bar doesn't paint an opaque box behind each character
 )
 
 // cwUseDefault is CW_USEDEFAULT (0x80000000 as a 32-bit signed int, i.e.
@@ -318,6 +397,11 @@ func utf16ptr(s string) *uint16 {
 
 func loadCursorArrow() syscall.Handle {
 	h, _, _ := procLoadCursorW.Call(0, uintptr(idcArrow))
+	return syscall.Handle(h)
+}
+
+func loadCursorHand() syscall.Handle {
+	h, _, _ := procLoadCursorW.Call(0, uintptr(idcHand))
 	return syscall.Handle(h)
 }
 

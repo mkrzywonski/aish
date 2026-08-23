@@ -81,12 +81,12 @@ func main() {
 	distroFlagValue = *distro
 	SetSessionName(*name)
 
-	spawn := resolveSpawn(*sshTarget, *wslFlag)
+	spawn, connDesc := resolveSpawn(*sshTarget, *wslFlag)
 
 	runtime.LockOSThread() // the window-owning thread must pump its own messages
 
 	InitConnectionContext(ctx)
-	StartConnection(spawn)
+	StartConnection(spawn, connDesc)
 
 	refreshStatus()
 

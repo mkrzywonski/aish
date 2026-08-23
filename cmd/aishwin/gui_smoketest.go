@@ -14,7 +14,7 @@ func runGUISmokeTest() {
 		AppendLog("aishwin: smoke test window")
 		AppendLog("line two")
 		AppendLog("line three -- checking auto-scroll works")
-		SetStatus("smoke test  |  session: none  |  v0.0.0-smoketest")
+		SetConnected(false)
 	}()
 
 	buildMenu := func() syscall.Handle {
