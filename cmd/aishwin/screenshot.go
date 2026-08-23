@@ -303,7 +303,42 @@ func CaptureFullScreen() ([]byte, error) {
 // captureScreenStrip BitBlts one vertical strip of the real screen
 // (stripW wide, full height, source top-left at screen coordinates
 // (srcX, srcY)) and copies it into img at destination x=dstX, y=0.
+//
+// Retries the whole BitBlt-to-GetDIBits sequence, with a fresh bitmap each
+// attempt, exactly like CaptureWindow/captureWindowOnce: found live that a
+// real Windows host can fail GetDIBits on this path even across several
+// whole-sequence retries, not just within one bitmap's inner retry window
+// -- worse than the PrintWindow/DWM race that motivated the same pattern
+// for CaptureWindow, which fully resolved at 4 attempts. Measured live at
+// 4 attempts: roughly 1 real full-screen capture in 4 still failed
+// outright (most reproducibly on the first strip captured right after the
+// one-time full-screen consent dialog closes, suggesting the dialog's own
+// teardown disrupts DWM timing worse than an ordinary PrintWindow call).
+// 16 attempts (this capture_screen call has a 130-second wire-round-trip
+// budget to spend, aishwnd's captureScreenTimeout) cleared that live test
+// with zero failures across repeated full captures; kept well under the
+// budget even at 3 strips x 16 attempts worst case.
 func captureScreenStrip(hdcScreen uintptr, img *image.RGBA, srcX, srcY, dstX, stripW, height int) error {
+	const maxAttempts = 16
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		buf, err := captureScreenStripOnce(hdcScreen, srcX, srcY, stripW, height)
+		if err == nil {
+			bgraToRGBA(img, buf, dstX, 0, stripW, height)
+			return nil
+		}
+		lastErr = err
+		if attempt < maxAttempts {
+			time.Sleep(75 * time.Millisecond)
+		}
+	}
+	return lastErr
+}
+
+// captureScreenStripOnce is one BitBlt + GetDIBits attempt for a single
+// strip, given a fresh DC and bitmap -- captureScreenStrip retries this as
+// a whole unit.
+func captureScreenStripOnce(hdcScreen uintptr, srcX, srcY, stripW, height int) ([]byte, error) {
 	hdcMem, _, _ := procCreateCompatibleDC.Call(hdcScreen)
 	defer procDeleteDC.Call(hdcMem)
 	hBitmap, _, _ := procCreateCompatibleBmp.Call(hdcScreen, uintptr(stripW), uintptr(height))
@@ -313,12 +348,7 @@ func captureScreenStrip(hdcScreen uintptr, img *image.RGBA, srcX, srcY, dstX, st
 	procBitBlt.Call(hdcMem, 0, 0, uintptr(stripW), uintptr(height), hdcScreen, uintptr(srcX), uintptr(srcY), srcCopy)
 	procSelectObject.Call(hdcMem, oldObj) // must deselect before GetDIBits, see CaptureWindow's comment
 
-	buf, err := captureDIBits(hdcMem, hBitmap, stripW, height)
-	if err != nil {
-		return err
-	}
-	bgraToRGBA(img, buf, dstX, 0, stripW, height)
-	return nil
+	return captureDIBits(hdcMem, hBitmap, stripW, height)
 }
 
 // captureDIBits extracts hBitmap's raw top-down BGRA pixel bytes
