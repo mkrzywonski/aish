@@ -47,7 +47,7 @@ func main() {
 	wslFlag := fs.Bool("wsl", false, "force WSL mode for this run, overriding a persisted SSH connection setting (Settings > Connection)")
 	distro := fs.String("distro", "", "WSL distro to use with wsl.exe -d (default distro if empty)")
 	name := fs.String("name", "", "session name to present to the aish proxy")
-	shell := fs.String("shell", "cmd", "persistent shell to drive: cmd or powershell")
+	shell := fs.String("shell", "cmd", "default persistent shell when exec doesn't specify one: cmd, powershell, or bash")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	guiSmokeTest := fs.Bool("gui-smoke-test", false, "TEMPORARY: show the GUI with fake data and exit, no wire connection")
 	_ = fs.Parse(os.Args[1:])
@@ -66,11 +66,14 @@ func main() {
 	}
 
 	kind := shellCmd
-	if *shell == "powershell" {
+	switch *shell {
+	case "powershell":
 		kind = shellPowerShell
+	case "bash":
+		kind = shellBash
 	}
 
-	execD = newExecDispatcher(kind)
+	execD = newExecDispatcher(kind, detectAvailableShells())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

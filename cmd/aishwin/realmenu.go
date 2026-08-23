@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 // realmenu.go: the native Win32 menu bar for the real (non-smoke-test)
 // window, replacing console.go/menu.go's typed text commands. Ported
@@ -19,13 +19,7 @@ func buildRealMenu() syscall.Handle {
 	bar := NewMenuBar()
 
 	session := NewSubmenu(bar, "Session")
-	AddMenuItem(session, "Rename...", func() {
-		current := rt.snapshot().name
-		name, ok := AskText("Rename Session", "New session name:", current)
-		if ok && name != "" {
-			menuRename(name)
-		}
-	})
+	AddMenuItem(session, "Rename...", promptRenameSession)
 	AddMenuItem(session, "Clients...", func() { ShowClientsDialog() })
 	AddMenuSeparator(session)
 	AddMenuItem(session, "Quit", func() { Quit() })
@@ -44,6 +38,18 @@ func buildRealMenu() syscall.Handle {
 	})
 
 	return bar
+}
+
+// promptRenameSession asks for a new session name and applies it via
+// menuRename -- the shared implementation behind both the Session menu's
+// "Rename..." item and the status bar's session-name item (gui_statusbar.go),
+// so the two entry points can't drift out of sync.
+func promptRenameSession() {
+	current := rt.snapshot().name
+	name, ok := AskText("Rename Session", "New session name:", current)
+	if ok && name != "" {
+		menuRename(name)
+	}
 }
 
 func menuRename(name string) {
@@ -83,21 +89,28 @@ func menuRename(name string) {
 	}
 }
 
-// pushLiveEnv applies a newly-set var to the currently-running persistent
-// shell immediately, if there is one -- otherwise it only takes effect the
-// next time the shell (re)starts. Best-effort: output isn't captured or
-// checked, matching a human just typing `set X=Y` themselves.
+// pushLiveEnv applies a newly-set var to every currently-running persistent
+// shell immediately, if any -- otherwise it only takes effect the next
+// time each shell (re)starts. More than one kind can be live at once now
+// (cmd, powershell, and bash each keep their own independent persistent
+// process -- see execDispatcher, exec.go), so this pushes into all of
+// them, each with its own correct set-var syntax, rather than a single
+// fixed shell. Best-effort: output isn't captured or checked, matching a
+// human just typing the equivalent command themselves.
 func pushLiveEnv(key, value string) {
-	shell := execD.liveShell()
-	if shell == nil {
-		return
+	for _, shell := range execD.liveShells() {
+		setCmd := envSetCommand(shell.kind, key, value)
+		go func(s *shellSession, cmd string) { _, _, _, _ = s.Run(cmd, 10*time.Second) }(shell, setCmd)
 	}
-	var setCmd string
-	switch shell.kind {
+}
+
+func envSetCommand(kind shellKind, key, value string) string {
+	switch kind {
 	case shellPowerShell:
-		setCmd = fmt.Sprintf(`$env:%s = "%s"`, key, strings.ReplaceAll(value, `"`, "`\""))
+		return fmt.Sprintf(`$env:%s = "%s"`, key, strings.ReplaceAll(value, `"`, "`\""))
+	case shellBash:
+		return fmt.Sprintf("export %s=%s", key, bashSingleQuote(value))
 	default:
-		setCmd = fmt.Sprintf("set %s=%s", key, value)
+		return fmt.Sprintf("set %s=%s", key, value)
 	}
-	go func() { _, _, _, _ = shell.Run(setCmd, 10*time.Second) }()
 }

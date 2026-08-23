@@ -2,15 +2,17 @@ package main
 
 // gui_statusbar.go: the graphical status bar, replacing the old plain-text
 // strip (gui.go's original STATIC control, one long SetWindowTextW string
-// of pid/session/shell/version). Three items so far: a connected/
+// of pid/session/shell/version). Four items so far: a connected/
 // not-connected LED on the left (hoverable for a tooltip, clickable to jump
-// straight to Settings' Connection page), a connected-client count right
-// after it (polled periodically from aishwnd, hoverable for a per-client
-// tooltip, clickable to open the Clients dialog), and an Auto Scroll switch
-// on the right (see gui.go's drainLogQueue/pollAutoScrollState for the
-// log-view side of that feature). More items can be appended to
-// statusItems later without changing the layout/hit-test/paint machinery
-// below.
+// straight to Settings' Connection page), a session-name item right after it
+// ("Session: <name>", hoverable for the name+ID, clickable to raise the
+// rename dialog -- the one item whose width changes at runtime, see its own
+// section below), a connected-client count after that (polled periodically
+// from aishwnd, hoverable for a per-client tooltip, clickable to open the
+// Clients dialog), and an Auto Scroll switch on the right (see gui.go's
+// drainLogQueue/pollAutoScrollState for the log-view side of that feature).
+// More items can be appended to statusItems later without changing the
+// layout/hit-test/paint machinery below.
 //
 // The hover tooltip (showTooltip/hideTooltip, tooltipWndProc) is a
 // hand-rolled popup window, not the real Windows tooltip common control
@@ -46,7 +48,39 @@ const (
 	statusItemSize = 22 // fixed item height in pixels, and the LED item's width
 	statusItemPad  = 6  // margin at each bar edge, and gap between items
 	ledDiameter    = 12
+
+	// boxInsetPad is the gap between a boxed text item's sunken border
+	// (drawInsetBox) and its own text, on each side -- applies only to the
+	// session-name and client-count items (the bar's two plain "text
+	// field" items), not the LED or the Auto Scroll switch.
+	boxInsetPad = 4
 )
+
+// drawInsetBox paints a 1px sunken border (dark top/left, light
+// bottom/right) around r, giving a boxed text item the same "separate
+// control" look a native status bar's parts have. Built from plain
+// FillRect calls rather than DrawEdge/EDGE_SUNKEN so it stays independent
+// of any comctl32 theming quirk -- consistent with this file's general
+// avoidance of common controls (see the file header).
+func drawInsetBox(hdc syscall.Handle, r rect) {
+	shadow, _, _ := procGetSysColor.Call(colorBtnShadow)
+	highlight, _, _ := procGetSysColor.Call(colorBtnHighlight)
+	shadowBrush, _, _ := procCreateSolidBrush.Call(shadow)
+	highlightBrush, _, _ := procCreateSolidBrush.Call(highlight)
+
+	top := rect{left: r.left, top: r.top, right: r.right, bottom: r.top + 1}
+	left := rect{left: r.left, top: r.top, right: r.left + 1, bottom: r.bottom}
+	bottom := rect{left: r.left, top: r.bottom - 1, right: r.right, bottom: r.bottom}
+	right := rect{left: r.right - 1, top: r.top, right: r.right, bottom: r.bottom}
+
+	procFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&top)), shadowBrush)
+	procFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&left)), shadowBrush)
+	procFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&bottom)), highlightBrush)
+	procFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&right)), highlightBrush)
+
+	procDeleteObject.Call(shadowBrush)
+	procDeleteObject.Call(highlightBrush)
+}
 
 // Alignment for one statusItem: left-aligned items are laid out left to
 // right from the bar's left edge (the connected LED); right-aligned items
@@ -67,6 +101,22 @@ type statusItem struct {
 	draw    func(hdc syscall.Handle, r rect)
 	tooltip func() string
 	onClick func() // nil means the item isn't clickable
+
+	// widthFunc, if non-nil, overrides width -- for an item whose footprint
+	// can change after construction (currently only the session-name item,
+	// whose label grows/shrinks with the name itself). Reads a cached value
+	// rather than remeasuring text on every layout pass; see
+	// updateSessionNameDisplay. Every other item leaves this nil and uses
+	// its fixed width, unchanged from before this field existed.
+	widthFunc func() int32
+}
+
+// itemWidth returns item's current width, preferring widthFunc when set.
+func itemWidth(item statusItem) int32 {
+	if item.widthFunc != nil {
+		return item.widthFunc()
+	}
+	return item.width
 }
 
 var statusItems []statusItem
@@ -93,6 +143,7 @@ func buildStatusItems() []statusItem {
 				ShowSettingsDialogPage(1) // Connection page
 			},
 		},
+		buildSessionItem(),
 		buildClientsItem(),
 		buildAutoScrollItem(),
 	}
@@ -159,21 +210,21 @@ func statusItemRect(i int, clientWidth, clientHeight int32) rect {
 			if statusItems[j].align != alignRight {
 				continue
 			}
-			x -= statusItems[j].width
+			x -= itemWidth(statusItems[j])
 			if j > i {
 				x -= statusItemPad
 			}
 		}
-		return rect{left: x, top: y, right: x + item.width, bottom: y + statusItemSize}
+		return rect{left: x, top: y, right: x + itemWidth(item), bottom: y + statusItemSize}
 	}
 	x := int32(statusItemPad)
 	for j := 0; j < i; j++ {
 		if statusItems[j].align != alignLeft {
 			continue
 		}
-		x += statusItems[j].width + statusItemPad
+		x += itemWidth(statusItems[j]) + statusItemPad
 	}
-	return rect{left: x, top: y, right: x + item.width, bottom: y + statusItemSize}
+	return rect{left: x, top: y, right: x + itemWidth(item), bottom: y + statusItemSize}
 }
 
 // hitTestStatusItem returns the index of the item containing client point
@@ -212,6 +263,102 @@ func drawConnectedLED(hdc syscall.Handle, r rect) {
 	procDeleteObject.Call(brush)
 }
 
+// ---- session name ----
+
+// sessionItemMu guards the session-name item's cached label/width, updated
+// by updateSessionNameDisplay whenever runtimeState's name changes
+// (refreshStatus, runtime.go) rather than measured fresh on every layout
+// pass -- this item's width is the one that changes at runtime (see
+// statusItem.widthFunc), so the cached value is what itemWidth actually
+// reads. Named sessionItem*, not sessionName*, to stay clear of
+// connection.go's own sessionNameMu/sessionName (a different mutex guarding
+// the persisted --name-flag-or-rename value each reconnect's hello frame
+// carries -- an unrelated concern this file has no need to touch).
+var (
+	sessionItemMu    sync.Mutex
+	sessionItemText  = "Session: (unnamed)"
+	sessionItemWidth int32
+)
+
+// buildSessionItem seeds the cache from whatever runtimeState already knows
+// (usually nothing yet, this early) and returns an item whose width tracks
+// sessionNameWidth rather than a value fixed at construction, unlike every
+// other item here -- a session's name can be arbitrarily short or long,
+// so there's no sane fixed sizing template the way the 2-digit client
+// count has.
+func buildSessionItem() statusItem {
+	updateSessionNameDisplay(rt.snapshot().name)
+	return statusItem{
+		align: alignLeft,
+		draw:  drawSessionName,
+		widthFunc: func() int32 {
+			sessionItemMu.Lock()
+			defer sessionItemMu.Unlock()
+			return sessionItemWidth
+		},
+		tooltip: sessionNameTooltip,
+		onClick: promptRenameSession,
+	}
+}
+
+func drawSessionName(hdc syscall.Handle, r rect) {
+	drawInsetBox(hdc, r)
+	sessionItemMu.Lock()
+	text := sessionItemText
+	sessionItemMu.Unlock()
+	textPtr, textLen := utf16CountedString(text)
+	textY := r.top + (r.bottom-r.top-textHeight(hdc))/2
+	procTextOutW.Call(uintptr(hdc), uintptr(r.left+boxInsetPad), uintptr(textY), uintptr(unsafe.Pointer(textPtr)), uintptr(textLen))
+}
+
+// sessionNameTooltip shows both the name and the session ID -- the ID isn't
+// in the item's own label (it would make an already-variable-width item
+// unreasonably wide), but it's the one thing that's stable and unique
+// across a rename, so it belongs in the tooltip.
+func sessionNameTooltip() string {
+	snap := rt.snapshot()
+	name := snap.name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	id := snap.sessionID
+	if id == "" {
+		id = "not connected"
+	}
+	return fmt.Sprintf("Session: %s\nID: %s", name, id)
+}
+
+// updateSessionNameDisplay recomputes the session-name item's cached label
+// and width from name and repaints the status bar if either changed.
+// Called from refreshStatus (runtime.go) on every connect/disconnect/
+// rename, mirroring refreshClientCount's cache-then-repaint shape -- but
+// driven by an explicit call rather than a poll, since a name change is
+// always known synchronously the moment it happens, unlike the client
+// list. Safe to call before the window exists (buildSessionItem's own seed
+// call is one such case): RunOnUIThread and the hwndStatus nil check both
+// already handle that.
+func updateSessionNameDisplay(name string) {
+	text := "Session: (unnamed)"
+	if name != "" {
+		text = "Session: " + name
+	}
+	width := measureTextWidth(text) + 2*boxInsetPad
+
+	sessionItemMu.Lock()
+	changed := sessionItemText != text
+	sessionItemText = text
+	sessionItemWidth = width
+	sessionItemMu.Unlock()
+
+	if changed {
+		RunOnUIThread(func() {
+			if hwndStatus != 0 {
+				procInvalidateRect.Call(uintptr(hwndStatus), 0, 1)
+			}
+		})
+	}
+}
+
 // ---- connected client count ----
 
 const clientsSizingTemplate = "88 clients connected" // 2-digit template, sized once at construction (see buildClientsItem)
@@ -233,7 +380,7 @@ var (
 // item to its right (Auto Scroll included) each time, which is worse than
 // the rare case of a 100+ client count clipping slightly.
 func buildClientsItem() statusItem {
-	width := measureTextWidth(clientsSizingTemplate)
+	width := measureTextWidth(clientsSizingTemplate) + 2*boxInsetPad
 	return statusItem{
 		width: width,
 		align: alignLeft,
@@ -250,12 +397,13 @@ func buildClientsItem() statusItem {
 }
 
 func drawClientCount(hdc syscall.Handle, r rect) {
+	drawInsetBox(hdc, r)
 	clientCountMu.Lock()
 	text := clientCountText
 	clientCountMu.Unlock()
 	textPtr, textLen := utf16CountedString(text)
 	textY := r.top + (r.bottom-r.top-textHeight(hdc))/2
-	procTextOutW.Call(uintptr(hdc), uintptr(r.left), uintptr(textY), uintptr(unsafe.Pointer(textPtr)), uintptr(textLen))
+	procTextOutW.Call(uintptr(hdc), uintptr(r.left+boxInsetPad), uintptr(textY), uintptr(unsafe.Pointer(textPtr)), uintptr(textLen))
 }
 
 // startClientCountPoller periodically refreshes the client-count item from
@@ -366,7 +514,7 @@ func setAutoScroll(enabled bool) {
 // clip the text or leave awkward empty space.
 func buildAutoScrollItem() statusItem {
 	labelW := measureTextWidth(autoScrollLabelText)
-	itemWidth := labelW + switchLabelGap + switchTrackWidth
+	totalWidth := labelW + switchLabelGap + switchTrackWidth
 
 	draw := func(hdc syscall.Handle, r rect) {
 		textPtr, textLen := utf16CountedString(autoScrollLabelText)
@@ -379,7 +527,7 @@ func buildAutoScrollItem() statusItem {
 	}
 
 	return statusItem{
-		width: itemWidth,
+		width: totalWidth,
 		align: alignRight,
 		draw:  draw,
 		tooltip: func() string {

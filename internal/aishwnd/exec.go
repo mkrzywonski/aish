@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,6 +23,7 @@ type execArgs struct {
 	Cwd        string `json:"cwd,omitempty" jsonschema:"absolute working directory on the Windows host"`
 	Background bool   `json:"background,omitempty"`
 	TimeoutMs  int    `json:"timeout_ms,omitempty" jsonschema:"foreground only; default 30000"`
+	Shell      string `json:"shell,omitempty" jsonschema:"which persistent shell runs this command -- see the tool description for what's available on this host and the default when omitted"`
 }
 
 type execResult struct {
@@ -29,6 +31,7 @@ type execResult struct {
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
 	TimedOut bool   `json:"timed_out,omitempty"`
+	Shell    string `json:"shell"`
 	Via      string `json:"via"`
 	Host     string `json:"host"`
 }
@@ -45,7 +48,13 @@ type execStatusResult struct {
 	ExitCode   *int   `json:"exit_code,omitempty"`
 }
 
-func registerExecTools(s *mcp.Server, sess *aishwndSession) {
+func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []string, defaultShell string) {
+	if defaultShell == "" {
+		defaultShell = "cmd"
+	}
+	if len(availableShells) == 0 {
+		availableShells = []string{defaultShell}
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "exec",
 		Annotations: commandTool("Run command on Windows host"),
@@ -53,9 +62,14 @@ func registerExecTools(s *mcp.Server, sess *aishwndSession) {
 			"console in real time, the same way run_command works for a shared PTY session; there's no shared " +
 			"terminal here to be invisible relative to. Runs against a persistent shell that keeps its working " +
 			"directory and environment between calls; set cwd to change directory just for this one command. " +
+			"Available shells on this host: " + strings.Join(availableShells, ", ") + " (default " + defaultShell +
+			" when shell is omitted). Pick whichever fits the command: cmd or powershell for native Windows " +
+			"tooling, bash for POSIX-style tools/scripts, if it's available. Each shell kind keeps its OWN " +
+			"persistent process with its own working directory and environment, independent of the others — " +
+			"switching which one you use for one call never loses another kind's state. " +
 			"Use background=true for long-running commands, then poll exec_status. A foreground command that " +
-			"times out kills and replaces the persistent shell (state is lost) rather than risk its late output " +
-			"corrupting the next command's result.",
+			"times out kills and replaces that shell's persistent process (state is lost) rather than risk its " +
+			"late output corrupting the next command's result.",
 	}, sess.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -75,6 +89,7 @@ func (s *aishwndSession) execTool(ctx context.Context, req *mcp.CallToolRequest,
 		Cwd:        args.Cwd,
 		Background: args.Background,
 		TimeoutMs:  args.TimeoutMs,
+		Shell:      args.Shell,
 	})
 	if err != nil {
 		return nil, execResult{}, err
@@ -96,6 +111,7 @@ func (s *aishwndSession) execTool(ctx context.Context, req *mcp.CallToolRequest,
 		ExitCode: res.ExitCode,
 		TaskID:   res.TaskID,
 		TimedOut: res.TimedOut,
+		Shell:    res.Shell,
 		Via:      "aishwin",
 		Host:     s.displayHost(),
 	}, nil

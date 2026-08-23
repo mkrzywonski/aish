@@ -57,7 +57,12 @@ func runOnce(ctx context.Context, spawn spawnFunc) error {
 
 	wc := aishwinwire.NewConn(childOut, stdin)
 
-	hello, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: CurrentSessionName(), Shell: string(execD.kind)})
+	hello, err := json.Marshal(aishwinwire.HelloData{
+		Proto:           aishwinwire.ProtoVersion,
+		Name:            CurrentSessionName(),
+		AvailableShells: shellKindStrings(execD.available),
+		DefaultShell:    string(execD.defaultKind),
+	})
 	if err != nil {
 		return err
 	}

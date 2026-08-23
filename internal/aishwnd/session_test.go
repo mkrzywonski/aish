@@ -29,7 +29,7 @@ func TestRunRegistersDiscoverableSession(t *testing.T) {
 		done <- Run(context.Background(), inRead, out)
 	}()
 
-	helloPayload, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: "win-test", Shell: "cmd"})
+	helloPayload, err := json.Marshal(aishwinwire.HelloData{Proto: aishwinwire.ProtoVersion, Name: "win-test", AvailableShells: []string{"cmd", "powershell"}, DefaultShell: "cmd"})
 	if err != nil {
 		t.Fatal(err)
 	}

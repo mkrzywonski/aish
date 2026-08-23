@@ -44,6 +44,12 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 	switch kind {
 	case shellPowerShell:
 		cmd = exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-Command", command)
+	case shellBash:
+		path, ok := bashPath()
+		if !ok {
+			return "", fmt.Errorf("bash is not available on this host")
+		}
+		cmd = exec.Command(path, "--noprofile", "--norc", "-c", command)
 	default:
 		cmd = exec.Command("cmd.exe", "/c", command)
 	}

@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"sync"
@@ -61,11 +61,14 @@ func (r *runtimeState) setName(name string) {
 }
 
 // refreshStatus updates the graphical status bar's connected LED (see
-// gui_statusbar.go) to match the wire link's current state. Safe to call
-// before the window exists -- SetConnected queues its work and no-ops
-// safely until hwndMain is set.
+// gui_statusbar.go) and session-name item to match runtimeState's current
+// values. Safe to call before the window exists -- SetConnected/
+// updateSessionNameDisplay queue their work and no-op safely until
+// hwndStatus is set.
 func refreshStatus() {
-	SetConnected(rt.snapshot().connected)
+	snap := rt.snapshot()
+	SetConnected(snap.connected)
+	updateSessionNameDisplay(snap.name)
 }
 
 type runtimeSnapshot struct {

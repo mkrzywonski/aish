@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,13 +14,93 @@ import (
 	"time"
 )
 
-// shellKind selects which persistent Windows shell backs foreground exec.
+// shellKind selects which persistent Windows shell backs one exec call.
+// Unlike before per-call shell selection existed, this is no longer a
+// single process-lifetime choice -- see execDispatcher (exec.go), which
+// keeps one independent persistent shellSession per kind.
 type shellKind string
 
 const (
 	shellCmd        shellKind = "cmd"
 	shellPowerShell shellKind = "powershell"
+	shellBash       shellKind = "bash"
 )
+
+// shellKindStrings converts kinds to their wire-format string names, for
+// HelloData.AvailableShells and error messages that list them.
+func shellKindStrings(kinds []shellKind) []string {
+	strs := make([]string, len(kinds))
+	for i, k := range kinds {
+		strs[i] = string(k)
+	}
+	return strs
+}
+
+// detectAvailableShells reports which shellKinds this host can actually
+// run. cmd.exe and powershell.exe ship with every real Windows install --
+// this code has always assumed both, the same as before this feature
+// existed, so neither gets active detection. bash is genuinely optional
+// (varies host to host), so it alone is probed.
+func detectAvailableShells() []shellKind {
+	kinds := []shellKind{shellCmd, shellPowerShell}
+	if _, ok := bashPath(); ok {
+		kinds = append(kinds, shellBash)
+	}
+	return kinds
+}
+
+// bashPath locates a real, usable bash.exe: first via PATH, then via Git
+// for Windows' well-known install location -- its bash.exe is frequently
+// NOT added to PATH by the installer (unlike git.exe itself), confirmed
+// live on the dev VM this feature was built against: Git Bash present at
+// the default path, absent from PATH entirely. Explicitly rejects the
+// legacy WSL interop launcher (%SystemRoot%\System32\bash.exe): that stub
+// drops into a full WSL instance with POSIX path semantics and no real
+// persistent-process piped-stdin support -- the wrong shape for this
+// feature entirely, not just an inconvenience.
+func bashPath() (string, bool) {
+	if p, err := exec.LookPath("bash.exe"); err == nil && !isWSLBashStub(p) {
+		return p, true
+	}
+	for _, envVar := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
+		if root := os.Getenv(envVar); root != "" {
+			p := filepath.Join(root, "Git", "bin", "bash.exe")
+			if _, err := os.Stat(p); err == nil {
+				return p, true
+			}
+		}
+	}
+	return "", false
+}
+
+func isWSLBashStub(path string) bool {
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Dir(path), filepath.Join(sysRoot, "System32"))
+}
+
+// bashSingleQuote wraps s in single quotes for a bash command line, escaping
+// any embedded single quote with the standard '"'"' technique -- bash
+// performs no expansion at all inside single quotes, so that's the only
+// character needing special handling.
+func bashSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// shellEchoesInput reports whether kind's non-interactive process echoes
+// each line it reads from its piped stdin back on its own stdout -- true
+// for cmd.exe and powershell.exe (verified live against a real Windows
+// host, see the plan doc), false for bash, which prints nothing for input
+// read from a non-tty pipe: there's no terminal driver here doing local
+// echo, and bash itself doesn't duplicate it either outside a genuinely
+// interactive tty session. Run uses this to decide whether it must wait
+// for that echo before treating subsequent lines as real output, or can
+// start capturing immediately.
+func shellEchoesInput(kind shellKind) bool {
+	return kind != shellBash
+}
 
 // shellSession owns one persistent Windows shell process fed via piped
 // stdin/stdout. Its output is mirrored byte-for-byte to this process's own
@@ -54,6 +135,12 @@ func startShell(kind shellKind) (*shellSession, error) {
 	switch kind {
 	case shellPowerShell:
 		cmd = exec.Command("powershell.exe", "-NoLogo", "-NoProfile")
+	case shellBash:
+		path, ok := bashPath()
+		if !ok {
+			return nil, fmt.Errorf("bash is not available on this host")
+		}
+		cmd = exec.Command(path, "--noprofile", "--norc")
 	default:
 		kind = shellCmd
 		cmd = exec.Command("cmd.exe")
@@ -140,6 +227,7 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 	// background exec calls that don't specify their own -- Windows paths
 	// don't contain '@', so parseMarker's split is unambiguous.
 	var script, markerCmd, resetCmd string
+	lineEnd := "\r\n"
 	switch s.kind {
 	case shellPowerShell:
 		// $LASTEXITCODE only reflects the last NATIVE process's exit code and
@@ -149,10 +237,22 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 		// set it, falling back to $? (cmdlet success/failure) otherwise.
 		resetCmd = "$global:LASTEXITCODE = $null"
 		markerCmd = fmt.Sprintf(`Write-Host "%s$(if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })@$($pwd.Path)@"`, marker)
-		script = resetCmd + "\r\n" + command + "\r\n" + markerCmd + "\r\n"
+		script = resetCmd + lineEnd + command + lineEnd + markerCmd + lineEnd
+	case shellBash:
+		// Bash reads piped stdin as plain LF-terminated lines -- a
+		// trailing \r (as cmd.exe/PowerShell both expect) would attach to
+		// the last token of whatever line it terminates, which can corrupt
+		// the marker's own command substitution rather than cleanly
+		// failing. `pwd -W` (a Git-for-Windows/MSYS extension) prints the
+		// Windows-style drive-letter form instead of bash's native
+		// /c/Users/... one, since cmd.Dir (used to seed a background exec
+		// call's default cwd) needs a real Windows path.
+		lineEnd = "\n"
+		markerCmd = fmt.Sprintf("echo %s$?@$(pwd -W)@", marker)
+		script = command + lineEnd + markerCmd + lineEnd
 	default:
 		markerCmd = "echo " + marker + "%errorlevel%@%cd%@"
-		script = command + "\r\n" + markerCmd + "\r\n"
+		script = command + lineEnd + markerCmd + lineEnd
 	}
 
 	if _, err := s.stdin.Write([]byte(script)); err != nil {
@@ -164,7 +264,11 @@ func (s *shellSession) Run(command string, timeout time.Duration) (output string
 	defer deadline.Stop()
 
 	var out []string
-	started := false
+	// Bash never echoes what it reads from a non-tty pipe (see
+	// shellEchoesInput), so there's no echoed command line to wait for --
+	// its very first output line is real output (or the marker itself, for
+	// a command that produces none).
+	started := !shellEchoesInput(s.kind)
 	for {
 		select {
 		case line, ok := <-s.lines:

@@ -39,10 +39,19 @@ type Frame struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
+// AvailableShells/DefaultShell tell aishwnd, before it ever registers the
+// exec tool, which persistent shells this Windows host can actually run
+// (cmd and powershell always; bash only if a real bash.exe was found --
+// see cmd/aishwin/shell.go's detectAvailableShells) and which one a call
+// gets when it doesn't name one explicitly. This replaces the old single
+// Shell field (aishwnd never actually read it -- the whole session was
+// locked to one fixed kind for its entire lifetime, chosen once at aishwin
+// startup) now that exec lets the AI pick per call.
 type HelloData struct {
-	Proto int    `json:"proto"`
-	Name  string `json:"name,omitempty"`
-	Shell string `json:"shell,omitempty"`
+	Proto           int      `json:"proto"`
+	Name            string   `json:"name,omitempty"`
+	AvailableShells []string `json:"available_shells,omitempty"`
+	DefaultShell    string   `json:"default_shell,omitempty"`
 }
 
 // HelloAckData is aishwnd's one reply to the hello frame, sent once the
@@ -151,16 +160,23 @@ type ExecData struct {
 	Cwd        string `json:"cwd,omitempty"`
 	Background bool   `json:"background,omitempty"`
 	TimeoutMs  int    `json:"timeout_ms,omitempty"`
+	// Shell picks which persistent shell kind (cmd/powershell/bash) runs
+	// this command; empty means aishwin's own configured default. See
+	// HelloData.AvailableShells for what a given host actually supports.
+	Shell string `json:"shell,omitempty"`
 }
 
 // ExecResultData answers an ExecData request, mirroring aish's execResult
 // shape (minus Via/Host, which aishwnd fills in itself since they're
-// constant for this transport).
+// constant for this transport). Shell reports which kind actually ran the
+// command (the resolved default when the request left it empty), so the AI
+// can tell what happened even when it didn't specify one.
 type ExecResultData struct {
 	Output   string `json:"output,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
 	TimedOut bool   `json:"timed_out,omitempty"`
+	Shell    string `json:"shell,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 

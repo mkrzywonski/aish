@@ -81,6 +81,7 @@ var (
 	procTrackMouseEvent = user32.NewProc("TrackMouseEvent")
 	procSetCursor       = user32.NewProc("SetCursor")
 	procIsWindowVisible = user32.NewProc("IsWindowVisible")
+	procFillRect        = user32.NewProc("FillRect")
 
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procOpenProcess         = kernel32.NewProc("OpenProcess")
@@ -354,6 +355,12 @@ const (
 
 	colorInfoText = 23 // GetSysColor index, COLOR_INFOTEXT
 	colorInfoBk   = 24 // GetSysColor index, COLOR_INFOBK
+
+	// Sunken-border pair for a boxed status bar text item (gui_statusbar.go's
+	// drawInsetBox): dark on the top/left edge, light on the bottom/right --
+	// the classic two-tone "inset" look, e.g. WS_EX_CLIENTEDGE's own border.
+	colorBtnShadow    = 16 // GetSysColor index, COLOR_BTNSHADOW
+	colorBtnHighlight = 20 // GetSysColor index, COLOR_BTNHIGHLIGHT
 
 	tmeLeave = 0x00000002 // TRACKMOUSEEVENT.dwFlags, TME_LEAVE
 
