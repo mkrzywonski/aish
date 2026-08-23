@@ -15,10 +15,6 @@ func handleFileRead(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
-	if reason := access.checkOther(); reason != "" {
-		send(wc, "file_read_result", f.ID, aishwinwire.FileReadResultData{Error: reason})
-		return
-	}
 	max := req.MaxBytes
 	if max <= 0 {
 		max = defaultMaxFileRead
@@ -38,10 +34,6 @@ func handleFileRead(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 func handleFileWrite(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	var req aishwinwire.FileWriteData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
-		return
-	}
-	if reason := access.checkOther(); reason != "" {
-		send(wc, "file_write_result", f.ID, aishwinwire.FileWriteResultData{Error: reason})
 		return
 	}
 	data, err := base64.StdEncoding.DecodeString(req.Content)
@@ -76,10 +68,6 @@ func handleFileStat(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
-	if reason := access.checkOther(); reason != "" {
-		send(wc, "file_stat_result", f.ID, aishwinwire.FileStatResultData{Error: reason})
-		return
-	}
 	AppendLogColor("Checking "+req.Path, colorFileOp)
 	kind, mode, size, modifiedUnix, err := statFile(req.Path)
 	if err != nil {
@@ -94,10 +82,6 @@ func handleFileStat(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 func handleDirectoryList(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	var req aishwinwire.DirectoryListData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
-		return
-	}
-	if reason := access.checkOther(); reason != "" {
-		send(wc, "directory_list_result", f.ID, aishwinwire.DirectoryListResultData{Error: reason})
 		return
 	}
 	max := req.MaxEntries

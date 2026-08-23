@@ -3,18 +3,16 @@ package main
 import (
 	"sort"
 	"sync"
-	"sync/atomic"
 )
 
-// accessState holds the console-menu-toggled switches that gate new AI
-// work locally, without touching the wire protocol or aishwnd: pausing AI
-// access entirely, or just blocking new exec starts (a panic button that
-// doesn't interrupt already-running commands), plus a persistent set of
-// env vars applied to commands this process spawns.
+// accessState holds a persistent set of env vars applied to commands this
+// process spawns. Access control now happens at the connection level (the
+// Session > Clients... dialog's Disconnect button, gui_clients.go) rather
+// than a global switch here -- an aiEnabled toggle lived here briefly, but
+// nothing could turn it off (the Access menu that once did was removed) and
+// disconnecting a client's connection is the finer-grained, actually-usable
+// equivalent.
 type accessState struct {
-	aiEnabled      atomic.Bool
-	newExecBlocked atomic.Bool
-
 	mu  sync.Mutex
 	env map[string]string
 }
@@ -22,31 +20,7 @@ type accessState struct {
 var access = newAccessState()
 
 func newAccessState() *accessState {
-	a := &accessState{env: map[string]string{}}
-	a.aiEnabled.Store(true)
-	return a
-}
-
-// checkExec returns a non-empty reason if a new exec/file_* request should
-// be refused right now.
-func (a *accessState) checkExec() string {
-	if !a.aiEnabled.Load() {
-		return "AI access is currently disabled from this console (menu: access on)"
-	}
-	if a.newExecBlocked.Load() {
-		return "new commands are currently blocked from this console (menu: block off)"
-	}
-	return ""
-}
-
-// checkOther is checkExec without the new-exec block, for file_* requests
-// (the block-new-exec panic button is specifically about commands, not
-// file operations) -- only the AI-access-enabled toggle applies to those.
-func (a *accessState) checkOther() string {
-	if !a.aiEnabled.Load() {
-		return "AI access is currently disabled from this console (menu: access on)"
-	}
-	return ""
+	return &accessState{env: map[string]string{}}
 }
 
 // setEnv records a persistent env var, applied to future spawned processes

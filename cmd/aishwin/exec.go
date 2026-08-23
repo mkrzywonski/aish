@@ -91,13 +91,6 @@ func (d *execDispatcher) handleExec(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		return
 	}
 
-	// exec_poll (checking on an already-started task) is exempt: only
-	// starting new work is gated, not observing what's already running.
-	if reason := access.checkExec(); reason != "" {
-		send(wc, "exec_result", f.ID, aishwinwire.ExecResultData{Error: reason})
-		return
-	}
-
 	if req.Background {
 		// Each background command gets its own fresh process (background.go),
 		// which os/exec can point at a working directory natively via

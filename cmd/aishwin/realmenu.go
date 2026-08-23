@@ -26,33 +26,9 @@ func buildRealMenu() syscall.Handle {
 			menuRename(name)
 		}
 	})
+	AddMenuItem(session, "Clients...", func() { ShowClientsDialog() })
 	AddMenuSeparator(session)
 	AddMenuItem(session, "Quit", func() { Quit() })
-
-	accessMenu := NewSubmenu(bar, "Access")
-	var accessID, blockID uint16
-	accessID = AddCheckableMenuItem(accessMenu, "AI access enabled", access.aiEnabled.Load(), func() {
-		enabled := !access.aiEnabled.Load()
-		access.aiEnabled.Store(enabled)
-		SetMenuChecked(accessMenu, accessID, enabled)
-		refreshStatus() // the status bar shows AI access directly now (Help>Status is gone)
-		if enabled {
-			AppendLog("aishwin: AI access enabled")
-		} else {
-			AppendLog("aishwin: AI access disabled — exec and file operations will be refused until turned back on")
-		}
-	})
-	blockID = AddCheckableMenuItem(accessMenu, "Block new commands", access.newExecBlocked.Load(), func() {
-		blocked := !access.newExecBlocked.Load()
-		access.newExecBlocked.Store(blocked)
-		SetMenuChecked(accessMenu, blockID, blocked)
-		refreshStatus() // the status bar shows blocked state directly now (Help>Status is gone)
-		if blocked {
-			AppendLog("aishwin: new commands blocked — already-running commands are unaffected")
-		} else {
-			AppendLog("aishwin: new commands allowed again")
-		}
-	})
 
 	settingsMenu := NewSubmenu(bar, "Settings")
 	AddMenuItem(settingsMenu, "Preferences...", func() { ShowSettingsDialog() })
@@ -64,20 +40,10 @@ func buildRealMenu() syscall.Handle {
 		if aishwndVersion == "" {
 			aishwndVersion = "not connected"
 		}
-		ShowInfo("About aishwin", fmt.Sprintf(
-			"aishwin %s\n%s\n\nLets an AI assistant run commands and manage files on this computer, with everything it does shown in this window so you can see what happened.\n\nCompanion service: aishwnd %s",
-			version, buildStampStr, aishwndVersion,
-		))
+		ShowInfo("About aishwin", fmt.Sprintf("aishwin %s\naishwnd %s", version, aishwndVersion))
 	})
 
 	return bar
-}
-
-func onOff(b bool) string {
-	if b {
-		return "on"
-	}
-	return "off"
 }
 
 func menuRename(name string) {

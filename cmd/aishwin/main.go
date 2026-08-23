@@ -142,27 +142,12 @@ func versionFromSettings(settings []debug.BuildSetting) string {
 	return result
 }
 
-// buildStamp identifies this specific compiled binary: hostname plus the
-// executable file's own modification time. The version string alone (the
-// git commit, from resolveVersion) is identical for every build of the
-// same commit, even across different machines or rebuilds minutes apart --
-// exactly what made two builds indistinguishable by version number alone.
-// Computed once at package init and reused, rather than re-stat'd on every
-// refreshStatus call.
-var buildStampStr = buildStamp()
-
-func buildStamp() string {
-	host, _ := os.Hostname()
-	built := executableModTime().Format("2006-01-02 15:04:05")
-	if host == "" {
-		return "built " + built
-	}
-	return fmt.Sprintf("%s, built %s", host, built)
-}
-
-// buildTimeOnly is buildStamp's timestamp alone (no hostname), compact
-// enough for the already-crowded status bar; Help>About shows the full
-// stamp including hostname.
+// buildTimeOnly identifies this specific compiled binary by its executable
+// file's own modification time, shown in the status bar: the version
+// string alone (the git commit, from resolveVersion) is identical for
+// every build of the same commit, even across different machines or
+// rebuilds minutes apart -- exactly what made two builds indistinguishable
+// by version number alone.
 func buildTimeOnly() string {
 	return executableModTime().Format("15:04:05")
 }

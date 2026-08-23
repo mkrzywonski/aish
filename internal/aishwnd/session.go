@@ -175,12 +175,17 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 	// Block until the stdio link closes (parent exited or closed the pipe)
 	// or sends a malformed stream. ReadLoop's own dispatch handles
-	// prompt_answer via the pending-request map; "rename" (from the Windows
-	// console's menu) is the only frame type this side needs to act on
-	// beyond that.
+	// prompt_answer via the pending-request map; "rename", "list_clients",
+	// and "disconnect_client" (all from the Windows console's menu) are
+	// the only frame types this side needs to act on beyond that.
 	return wc.ReadLoop(func(f aishwinwire.Frame) {
-		if f.Type == "rename" {
+		switch f.Type {
+		case "rename":
 			sess.handleRename(f)
+		case "list_clients":
+			sess.handleListClients(f)
+		case "disconnect_client":
+			sess.handleDisconnectClient(f)
 		}
 	})
 }
@@ -204,6 +209,45 @@ func (s *aishwndSession) handleRename(f aishwinwire.Frame) {
 		return
 	}
 	_ = s.wire.Send(aishwinwire.Frame{Type: "rename_result", ID: f.ID, Data: data})
+}
+
+// handleListClients answers a Clients-dialog refresh with the MCP clients
+// currently connected to this session's Unix socket.
+func (s *aishwndSession) handleListClients(f aishwinwire.Frame) {
+	clients := s.auth.listClients()
+	wireClients := make([]aishwinwire.ClientData, len(clients))
+	for i, c := range clients {
+		wireClients[i] = aishwinwire.ClientData{
+			ID:          c.ID,
+			Name:        c.Name,
+			Version:     c.Version,
+			Description: c.Description,
+			State:       c.State,
+			SinceUnix:   c.Since.Unix(),
+		}
+	}
+	data, err := json.Marshal(aishwinwire.ListClientsResultData{Clients: wireClients})
+	if err != nil {
+		return
+	}
+	_ = s.wire.Send(aishwinwire.Frame{Type: "list_clients_result", ID: f.ID, Data: data})
+}
+
+// handleDisconnectClient applies a disconnect requested from the Clients
+// dialog's per-client button and replies with the outcome.
+func (s *aishwndSession) handleDisconnectClient(f aishwinwire.Frame) {
+	var req aishwinwire.DisconnectClientData
+	result := aishwinwire.DisconnectClientResultData{}
+	if err := json.Unmarshal(f.Data, &req); err != nil {
+		result.Error = "malformed disconnect request"
+	} else if !s.auth.disconnectClient(req.ID) {
+		result.Error = "client not found (it may have already disconnected)"
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return
+	}
+	_ = s.wire.Send(aishwinwire.Frame{Type: "disconnect_client_result", ID: f.ID, Data: data})
 }
 
 // serveUnix accepts MCP client connections (normally the aish proxy) on the

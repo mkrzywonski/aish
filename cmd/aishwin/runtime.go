@@ -66,15 +66,13 @@ func refreshStatus() {
 	// aishwin.exe instance it is -- otherwise indistinguishable when
 	// several are running at once (e.g. a production session alongside a
 	// throwaway test instance) other than by cross-referencing
-	// Get-CimInstance/tasklist by hand. buildStampStr's time (hostname
-	// omitted here for space -- Help>About has the full stamp) is what
-	// actually answers "is this the build I just made": the version string
-	// alone is identical for every build of the same commit. Shell/AI
-	// access/blocked used to live only in the now-removed Help>Status
-	// dialog -- folded in here instead, since it's state the user wants to
-	// glance at, not look up.
-	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  shell: %s  |  AI access: %s  |  blocked: %s  |  aishwin %s (%s)",
-		state, os.Getpid(), label, execD.kind, onOff(access.aiEnabled.Load()), onOff(access.newExecBlocked.Load()), version, buildTimeOnly())
+	// Get-CimInstance/tasklist by hand. buildTimeOnly() is what actually
+	// answers "is this the build I just made": the version string alone
+	// is identical for every build of the same commit. Shell kind used to
+	// live only in the now-removed Help>Status dialog -- folded in here
+	// instead, since it's state the user wants to glance at, not look up.
+	text := fmt.Sprintf("%s  |  pid: %d  |  session: %s  |  shell: %s  |  aishwin %s (%s)",
+		state, os.Getpid(), label, execD.kind, version, buildTimeOnly())
 	if snap.connected && snap.aishwndVersion != "" {
 		text += fmt.Sprintf("  |  aishwnd %s", snap.aishwndVersion)
 	}

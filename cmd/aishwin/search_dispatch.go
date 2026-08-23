@@ -19,10 +19,6 @@ func handleGrep(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
-	if reason := access.checkOther(); reason != "" {
-		send(wc, "file_grep_result", f.ID, aishwinwire.GrepResultData{Error: reason})
-		return
-	}
 	max := clampResults(req.MaxResults, grepDefaultResults, grepMaxResults)
 	AppendLogColor(fmt.Sprintf("Grepping %s for %q", req.Path, req.Pattern), colorFileOp)
 	matches, truncated, err := grepLocal(req.Path, req.Pattern, req.Include, req.IgnoreCase, max)
@@ -40,10 +36,6 @@ func handleGrep(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 func handleSearch(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	var req aishwinwire.SearchData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
-		return
-	}
-	if reason := access.checkOther(); reason != "" {
-		send(wc, "file_search_result", f.ID, aishwinwire.SearchResultData{Error: reason})
 		return
 	}
 	max := clampResults(req.MaxResults, searchDefaultMax, searchMaxResults)

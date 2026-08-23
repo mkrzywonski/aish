@@ -39,30 +39,3 @@ func TestAccessStateEnviron(t *testing.T) {
 		t.Error("unsetEnv(\"FOO\") a second time = true, want false (already gone)")
 	}
 }
-
-func TestAccessStateCheckExecAndOther(t *testing.T) {
-	a := newAccessState()
-	if reason := a.checkExec(); reason != "" {
-		t.Errorf("checkExec on a fresh accessState = %q, want empty", reason)
-	}
-	if reason := a.checkOther(); reason != "" {
-		t.Errorf("checkOther on a fresh accessState = %q, want empty", reason)
-	}
-
-	a.newExecBlocked.Store(true)
-	if reason := a.checkExec(); reason == "" {
-		t.Error("checkExec with newExecBlocked = true returned no reason")
-	}
-	if reason := a.checkOther(); reason != "" {
-		t.Errorf("checkOther should be unaffected by newExecBlocked, got %q", reason)
-	}
-	a.newExecBlocked.Store(false)
-
-	a.aiEnabled.Store(false)
-	if reason := a.checkExec(); reason == "" {
-		t.Error("checkExec with aiEnabled = false returned no reason")
-	}
-	if reason := a.checkOther(); reason == "" {
-		t.Error("checkOther with aiEnabled = false returned no reason")
-	}
-}

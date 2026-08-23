@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,6 +35,15 @@ type connAuth struct {
 	denied   bool
 	grantID  string
 	declared string
+	// connID identifies this connection for the Windows console's Clients
+	// dialog (list_clients/disconnect_client) -- a *mcp.ServerSession
+	// pointer isn't something the wire protocol can name, so this is the
+	// stable handle sent instead. since is stamped once, the first time
+	// state() creates this entry (the connection-accepted moment, there
+	// being no separate kernel-verified-peer step to hang it off of the
+	// way internal/mcpserver/connauth.go's setPeer does).
+	connID string
+	since  time.Time
 }
 
 type clientGrant struct {
@@ -72,10 +82,118 @@ func (a *authManager) state(ss *mcp.ServerSession) *connAuth {
 	defer a.mu.Unlock()
 	st := a.conns[ss]
 	if st == nil {
-		st = &connAuth{}
+		connID, err := randomID(8)
+		if err != nil {
+			connID = "" // extremely unlikely; still a usable map entry, just not nameable by the Clients dialog
+		}
+		st = &connAuth{connID: connID, since: time.Now()}
 		a.conns[ss] = st
 	}
 	return st
+}
+
+// Connection states reported to the Windows console's Clients dialog,
+// mirroring internal/mcpserver/clients.go's constants (aishwnd can't
+// import that package, and has no NoAuth/AutoApprove equivalent to
+// account for -- cmd/aishwnd has no flags for either).
+const (
+	clientAuthorized = "authorized"
+	clientPending    = "awaiting approval"
+	clientDenied     = "denied"
+)
+
+// clientInfo is one connected MCP client as this session sees it, the
+// aishwnd-side counterpart to internal/mcpserver/clients.go's
+// ConnectedClient.
+type clientInfo struct {
+	ID          string
+	Name        string
+	Version     string
+	Description string
+	State       string
+	Since       time.Time
+}
+
+// listClients returns a snapshot of the live MCP connections to this
+// session's Unix socket, oldest first -- mirroring
+// internal/mcpserver/clients.go's ConnectedClients, adapted for the
+// simpler state this package tracks.
+func (a *authManager) listClients() []clientInfo {
+	a.mu.Lock()
+	sessions := make([]*mcp.ServerSession, 0, len(a.conns))
+	states := make([]*connAuth, 0, len(a.conns))
+	for ss, st := range a.conns {
+		sessions = append(sessions, ss)
+		states = append(states, st)
+	}
+	a.mu.Unlock()
+
+	out := make([]clientInfo, 0, len(states))
+	for i, st := range states {
+		st.mu.Lock()
+		info := clientInfo{ID: st.connID, Description: st.declared, Since: st.since}
+		switch {
+		case st.grantID != "":
+			info.State = clientAuthorized
+		case st.denied:
+			info.State = clientDenied
+		default:
+			info.State = clientPending
+		}
+		st.mu.Unlock()
+
+		if ss := sessions[i]; ss != nil {
+			if ip := ss.InitializeParams(); ip != nil && ip.ClientInfo != nil {
+				info.Name = ip.ClientInfo.Name
+				info.Version = ip.ClientInfo.Version
+			}
+		}
+		if info.Name == "" {
+			info.Name = "an MCP client"
+		}
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })
+	return out
+}
+
+// disconnectClient closes one specific connection (identified by the ID
+// listClients reported) and forgets its grant, so it can't silently
+// reconnect and keep using it without a fresh approval prompt. Reports
+// whether a matching connection was found; the caller (handleDisconnectClient)
+// turns that into a wire error.
+func (a *authManager) disconnectClient(id string) bool {
+	if id == "" {
+		return false
+	}
+	a.mu.Lock()
+	var target *mcp.ServerSession
+	var targetState *connAuth
+	for ss, st := range a.conns {
+		st.mu.Lock()
+		match := st.connID == id
+		st.mu.Unlock()
+		if match {
+			target = ss
+			targetState = st
+			break
+		}
+	}
+	if target == nil {
+		a.mu.Unlock()
+		return false
+	}
+	delete(a.conns, target)
+	targetState.mu.Lock()
+	grantID := targetState.grantID
+	targetState.mu.Unlock()
+	if grantID != "" {
+		delete(a.grants, grantID)
+	}
+	a.mu.Unlock()
+
+	_ = target.Close()
+	return true
 }
 
 // middleware rejects every tool call until the connection has obtained an

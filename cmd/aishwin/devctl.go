@@ -48,6 +48,9 @@ var (
 
 	devSettingsDialogMu   sync.Mutex
 	devSettingsDialogHwnd syscall.Handle
+
+	devClientsDialogMu   sync.Mutex
+	devClientsDialogHwnd syscall.Handle
 )
 
 func init() {
@@ -75,6 +78,16 @@ func init() {
 		devSettingsDialogMu.Lock()
 		devSettingsDialogHwnd = 0
 		devSettingsDialogMu.Unlock()
+	}
+	onClientsDialogOpen = func(hwnd syscall.Handle) {
+		devClientsDialogMu.Lock()
+		devClientsDialogHwnd = hwnd
+		devClientsDialogMu.Unlock()
+	}
+	onClientsDialogClose = func() {
+		devClientsDialogMu.Lock()
+		devClientsDialogHwnd = 0
+		devClientsDialogMu.Unlock()
 	}
 }
 
@@ -140,6 +153,10 @@ func startDevControlWatcher() {
 //	settingsclick:<id>      post a synthetic WM_COMMAND(id) to the open
 //	                        Settings dialog -- fine for plain pushbuttons
 //	                        (OK/Cancel/Connect), not for radio buttons
+//	clientsclick:<id>       post a synthetic WM_COMMAND(id) to the open
+//	                        Clients dialog (idCancelBtn=Close,
+//	                        idClientsRefreshBtn=Refresh,
+//	                        idClientsRowBtnBase+N=row N's Disconnect)
 // currentEnvEditControl returns whichever control the Environment tab's
 // in-place edit is currently focused on: the Value overlay if the value
 // step is active, else the list view's own built-in Key-cell label-edit
@@ -355,6 +372,21 @@ func runDevCommand(cmd string) string {
 		devSettingsDialogMu.Unlock()
 		if hwnd == 0 {
 			return "error: the Settings dialog is not currently open"
+		}
+		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(id), 0)
+		return "ok"
+
+	case strings.HasPrefix(cmd, "clientsclick:"):
+		idStr := strings.TrimPrefix(cmd, "clientsclick:")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return fmt.Sprintf("error: invalid control id %q", idStr)
+		}
+		devClientsDialogMu.Lock()
+		hwnd := devClientsDialogHwnd
+		devClientsDialogMu.Unlock()
+		if hwnd == 0 {
+			return "error: the Clients dialog is not currently open"
 		}
 		procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(id), 0)
 		return "ok"

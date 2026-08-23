@@ -68,6 +68,45 @@ type RenameResultData struct {
 	Error string `json:"error,omitempty"`
 }
 
+// ListClientsData requests the MCP clients currently connected to
+// aishwnd's Unix socket, sent by aishwin (from its Session > Clients...
+// dialog) to aishwnd -- the reverse direction from exec/file_*, same as
+// RenameData. No fields: the Windows side always wants the full current
+// list.
+type ListClientsData struct{}
+
+// ClientData is one connected MCP client, mirroring the shape of
+// internal/mcpserver's ConnectedClient (aishwnd can't import that package
+// -- see internal/aishwnd/auth.go's own connAuth) minus the kernel-verified
+// peer, which has no equivalent here (there's no local socket to check
+// SO_PEERCRED on; every "connection" is relayed through this same wire
+// link's single Unix socket listener).
+type ClientData struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Version     string `json:"version,omitempty"`
+	Description string `json:"description,omitempty"`
+	State       string `json:"state"`
+	SinceUnix   int64  `json:"since_unix,omitempty"`
+}
+
+type ListClientsResultData struct {
+	Clients []ClientData `json:"clients,omitempty"`
+}
+
+// DisconnectClientData requests that aishwnd close one specific client
+// connection (identified by ClientData.ID) and forget its grant, so a
+// pooled client can't silently keep reusing it -- mirroring the intent of
+// internal/mcpserver/connauth.go's Revoke, but for a single connection
+// rather than every one at once.
+type DisconnectClientData struct {
+	ID string `json:"id"`
+}
+
+type DisconnectClientResultData struct {
+	Error string `json:"error,omitempty"`
+}
+
 type PromptData struct {
 	Question       string `json:"question"`
 	Kind           string `json:"kind"`
