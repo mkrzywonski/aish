@@ -57,7 +57,6 @@ func main() {
 		return
 	}
 
-	startScreenshotWatcher()
 	startDevControlWatcher()
 
 	if *guiSmokeTest {

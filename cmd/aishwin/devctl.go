@@ -2,10 +2,11 @@
 
 package main
 
-// devctl.go: a dev-build-only remote control channel, mirroring
-// screenshot.go's file-trigger pattern, that lets the AI drive the real
-// GUI unattended instead of needing a human to click through every
-// verification. Two capabilities: invoke a menu action by its (leaf)
+// devctl.go: a dev-build-only remote control channel, using a
+// cross-account-readable file-trigger path (C:\Users\Public) that lets the
+// AI drive the real GUI unattended instead of needing a human to click
+// through every verification. Two capabilities: invoke a menu action by
+// its (leaf)
 // label, and answer a currently-open text-input dialog (set its text,
 // click OK or Cancel). The Yes/No approval dialog itself is never driven
 // this way -- AskYesNo auto-approves outright in dev builds (see
@@ -30,10 +31,12 @@ import (
 
 // Scoped by this process's own PID, not a fixed shared path: with more
 // than one dev instance running, a shared path means whichever instance's
-// watcher goroutine notices the trigger first "wins" -- the same race
-// screenshot.go had (see its own doc comment) and fixed the same way,
-// found here live when an older-build "master" instance kept intercepting
-// commands meant for a freshly built test instance.
+// watcher goroutine notices the trigger first "wins" -- found here live
+// when an older-build "master" instance kept intercepting commands meant
+// for a freshly built test instance. (An earlier version of
+// screenshot.go's own capture mechanism had this exact race and fixed it
+// the same way; that mechanism is now wire-based instead, with no shared
+// file or PID-matching concern at all.)
 var (
 	devctlTriggerPath = fmt.Sprintf(`C:\Users\Public\aishwin-devctl-request-%d`, os.Getpid())
 	devctlResultPath  = fmt.Sprintf(`C:\Users\Public\aishwin-devctl-result-%d`, os.Getpid())
@@ -92,8 +95,7 @@ func init() {
 }
 
 // startDevControlWatcher polls for a trigger file every 300ms for the life
-// of the process, mirroring screenshot.go's startScreenshotWatcher. Only
-// called (from main.go) in an aishwindev build.
+// of the process. Only called (from main.go) in an aishwindev build.
 func startDevControlWatcher() {
 	AppendLog("aishwin [dev build]: dev control channel active (unattended AI-driven testing mode)")
 	go func() {

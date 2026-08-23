@@ -107,6 +107,26 @@ type DisconnectClientResultData struct {
 	Error string `json:"error,omitempty"`
 }
 
+// CaptureScreenData requests a screenshot from the Windows peer, sent by
+// aishwnd (from the AI's capture_screen tool call) to aishwin -- the same
+// direction as exec/file_*. Mode is "" or "window" (the aishwin window
+// itself, via PrintWindow) or "full"/"screen" (the whole desktop,
+// including the taskbar, via a screen-DC capture) -- the latter requires
+// a one-time human consent prompt on the Windows console the first time
+// it's used each session (aishwin's own fullScreenCaptureAllowed).
+type CaptureScreenData struct {
+	Mode string `json:"mode,omitempty"`
+}
+
+// CaptureScreenResultData answers a CaptureScreenData request. PNG is
+// base64-encoded image bytes on success; the aishwnd side decodes it back
+// to raw bytes for the MCP tool result's ImageContent, since JSON has no
+// native binary type.
+type CaptureScreenResultData struct {
+	PNG   string `json:"png,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
 type PromptData struct {
 	Question       string `json:"question"`
 	Kind           string `json:"kind"`

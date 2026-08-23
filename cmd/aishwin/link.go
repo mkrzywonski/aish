@@ -128,6 +128,8 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		go handleGrep(wc, f)
 	case "file_search":
 		go handleSearch(wc, f)
+	case "capture_screen":
+		go handleCaptureScreen(wc, f)
 	}
 }
 
