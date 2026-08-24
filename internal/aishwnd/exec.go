@@ -56,11 +56,13 @@ func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []st
 		availableShells = []string{defaultShell}
 	}
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "exec",
+		Name:        "run_command",
 		Annotations: commandTool("Run command on Windows host"),
 		Description: "Run a command on the Windows host, visibly — it and its output are mirrored to the human's " +
-			"console in real time, the same way run_command works for a shared PTY session; there's no shared " +
-			"terminal here to be invisible relative to. Runs against a persistent shell that keeps its working " +
+			"console in real time. This tool is named run_command, not exec, because it is the VISIBLE one: " +
+			"across aish, exec means the invisible out-of-band route, and this session kind has no such route " +
+			"for exec to name — there is no shared terminal here to be invisible relative to, so everything you " +
+			"run is seen. Runs against a persistent shell that keeps its working " +
 			"directory and environment between calls; set cwd to change directory just for this one command. " +
 			"Available shells on this host: " + strings.Join(availableShells, ", ") + " (default " + defaultShell +
 			" when shell is omitted; powershell is the more capable option for most tasks, cmd for simpler " +
@@ -74,7 +76,10 @@ func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []st
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "exec_status",
-		Description: "Poll a background task started by exec: incremental output (pass next_cursor back), running state, exit code.",
+		Description: "Poll a background task by the task_id returned when a command was started with " +
+			"background=true (run_command on this Windows session; exec on a shared-terminal session): " +
+			"incremental output since next_cursor, whether it is still running, and the exit code once it " +
+			"finishes. Errors if the task_id is unrecognized.",
 		Annotations: readOnlyTool("Poll background command"),
 	}, sess.execStatus)
 }
