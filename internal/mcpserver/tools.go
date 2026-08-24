@@ -34,8 +34,12 @@ func registerTools(s *mcp.Server, c *Core) {
 		Name:        "send_input",
 		Annotations: commandTool("Type terminal input"),
 		Description: "Type raw text into the shared terminal exactly as if the user typed it. " +
-			"No newline is added; include \\r to submit a command line. " +
-			"Prefer run_command for running commands and capturing their output.",
+			"No newline is added; include \\r to submit a command line -- use \\r, not \\n: a cooked-mode " +
+			"shell often accepts either, but only \\r is the Enter key and the difference bites once a " +
+			"program sets its own terminal modes. " +
+			"Prefer run_command for running commands and capturing their output; send_input is for feeding " +
+			"a program that is ALREADY running and waiting on input. Pointing run_command at a program that " +
+			"never exits on its own will block until it times out.",
 	}, c.sendInput)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -48,8 +52,11 @@ func registerTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "read_screen",
 		Annotations: readOnlyTool("Read terminal screen"),
-		Description: "Read the currently visible terminal screen as rendered plain text, " +
-			"with cursor position and whether a full-screen app (alternate screen) is active.",
+		Description: "Read the currently visible terminal screen as rendered plain text (or, with raw=true, the " +
+			"underlying escape sequences), with cursor position and whether a full-screen app (alternate " +
+			"screen) is active. Always returns the whole current viewport, freshly rendered -- there is no " +
+			"cursor and no incremental mode. Prefer this over read_output for a clean view: the raw stream " +
+			"includes every echoed keystroke, so a typed line appears there character by character.",
 	}, c.readScreen)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -339,7 +346,7 @@ type sessionStatusResult struct {
 	Rows                 int               `json:"rows"`
 	Cols                 int               `json:"cols"`
 	AltScreen            bool              `json:"alt_screen"`
-	LastOutputMs         int64             `json:"last_output_ms_ago"`
+	LastOutputMs         int64             `json:"last_output_ms_ago"` // milliseconds since the session last wrote any byte to the terminal
 	Ended                bool              `json:"ended"`
 }
 

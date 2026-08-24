@@ -29,7 +29,9 @@ func registerScreenshotTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "capture_screen",
 		Annotations: readOnlyTool("Capture a screenshot of the Windows session"),
-		Description: "Capture a screenshot of the aishwin window (default) or, with mode=\"full\", the whole " +
+		Description: "Capture a screenshot of the aishwin control window (default) -- that is aishwin's own " +
+			"application window and its activity log, NOT some other application running on the desktop -- " +
+			"or, with mode=\"full\", the whole " +
 			"Windows desktop including the taskbar. Returned directly as an image. Full-screen capture " +
 			"requires the human to approve a one-time consent prompt on the Windows console the first time " +
 			"it's used each session; declining fails this call with an error rather than blocking silently.",
