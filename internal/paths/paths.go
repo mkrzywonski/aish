@@ -70,6 +70,39 @@ func WriteName(id, name string) error {
 	return os.WriteFile(NameFile(id), []byte(name+"\n"), 0o600)
 }
 
+// Session kinds. A kind is a durable property of how a session is backed, and
+// it decides which tools that session can possibly implement: KindPTY is the
+// shared terminal on a local pty (optionally SSH'd elsewhere), KindAishwin a
+// native Windows peer reached through aishwnd, which has no terminal to share
+// and therefore no terminal tools at all.
+const (
+	KindPTY     = "pty"
+	KindAishwin = "aishwin"
+)
+
+// KindFile returns the path of the file recording a session's kind. It is
+// written once at startup and never changes, so readers can learn what a
+// session is without connecting to it — no socket, no authorization prompt,
+// and on an SSH session no risk of triggering an MFA push.
+func KindFile(id string) string { return filepath.Join(SessionDir(id), "kind") }
+
+// ReadKind returns the session's kind, or "" for a session that predates the
+// kind file. Callers must treat "" as unknown rather than assuming a default:
+// guessing wrong is what the file exists to prevent.
+func ReadKind(id string) string {
+	b, err := os.ReadFile(KindFile(id))
+	if err != nil {
+		return ""
+	}
+	kind, _, _ := strings.Cut(string(b), "\n")
+	return strings.TrimSpace(kind)
+}
+
+// WriteKind records the session's kind at startup.
+func WriteKind(id, kind string) error {
+	return os.WriteFile(KindFile(id), []byte(kind+"\n"), 0o600)
+}
+
 // OOBFile marks that out-of-band operations are authorized for the session.
 // Its presence is read by the ssh shim (deciding whether to inject
 // ControlMaster) and by the MCP server (deciding whether to act invisibly).

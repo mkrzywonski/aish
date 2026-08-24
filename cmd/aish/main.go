@@ -183,6 +183,13 @@ func runMain(args []string) int {
 		return 1
 	}
 	defer os.RemoveAll(dir)
+	// Record what kind of session this is before anything can look at it, so
+	// a reader learns what tools it could possibly implement without opening
+	// its socket.
+	if err := paths.WriteKind(id, paths.KindPTY); err != nil {
+		fmt.Fprintln(os.Stderr, "aish:", err)
+		return 1
+	}
 	sock := paths.Socket(id)
 	if name != "" {
 		if err := paths.WriteName(id, name); err != nil {
