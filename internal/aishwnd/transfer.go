@@ -38,16 +38,18 @@ func registerTransferTools(s *mcp.Server, sess *aishwndSession) {
 		Name:        "file_upload",
 		Annotations: mutatingTool("Upload file to Windows host", true, false),
 		Description: fmt.Sprintf("Copy a file from the Linux/WSL machine (where this MCP server runs) to the "+
-			"Windows host. Whole-file, one operation — not for files larger than %d bytes; chunk larger transfers "+
-			"with file_read/file_write instead.", maxTransferBytes),
+			"Windows host — the direction of `scp local_path remote:remote_path`, so local_path is always the "+
+			"Linux side and remote_path always the Windows side. Whole-file, one operation — not for files "+
+			"larger than %d bytes; chunk larger transfers with file_read/file_write instead.", maxTransferBytes),
 	}, sess.fileUpload)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_download",
 		Annotations: mutatingTool("Download file from Windows host", true, false),
 		Description: fmt.Sprintf("Copy a file from the Windows host to the Linux/WSL machine (where this MCP "+
-			"server runs). Whole-file, one operation — not for files larger than %d bytes; chunk larger transfers "+
-			"with file_read/file_write instead.", maxTransferBytes),
+			"server runs) — the direction of `scp remote:remote_path local_path`, so remote_path is always the "+
+			"Windows side and local_path always the Linux side. Whole-file, one operation — not for files larger "+
+			"than %d bytes; chunk larger transfers with file_read/file_write instead.", maxTransferBytes),
 	}, sess.fileDownload)
 }
 

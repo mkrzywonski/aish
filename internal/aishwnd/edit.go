@@ -55,7 +55,9 @@ func registerEditTools(s *mcp.Server, sess *aishwndSession) {
 		Annotations: mutatingTool("Edit file on Windows host", true, false),
 		Description: "Edit a UTF-8 text file on the Windows host by replacing exact text. Fails when old_text " +
 			"is absent or occurs more than once unless replace_all=true. Automatically guards against a " +
-			"read-modify-write race: the write only applies if the file is still exactly what was just read.",
+			"read-modify-write race: the write only applies if the file is still exactly what was just read. " +
+			"That guard is unconditional here; on a shared-terminal session it holds only when the route can " +
+			"verify SHA-256, so do not carry this guarantee across to a session of the other kind.",
 	}, sess.fileEdit)
 
 	mcp.AddTool(s, &mcp.Tool{

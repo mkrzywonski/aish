@@ -59,7 +59,9 @@ func registerSearchTools(s *mcp.Server, sess *aishwndSession) {
 		Annotations: readOnlyTool("Search file contents on Windows host"),
 		Description: "Search file contents for a regular expression on the Windows host — the Windows equivalent " +
 			"of your Grep tool. Pure Go walk + regexp (not shelling out to rg/grep/findstr), so results are " +
-			"consistent regardless of what's installed. Returns path/line/text matches, capped.",
+			"consistent regardless of what's installed and no path is skipped: unlike a shared-terminal " +
+			"session's file_grep, which may be ripgrep-backed and silently omit .gitignore'd files, an empty " +
+			"result here means the pattern really is absent. Returns path/line/text matches, capped.",
 	}, sess.fileGrep)
 
 	mcp.AddTool(s, &mcp.Tool{

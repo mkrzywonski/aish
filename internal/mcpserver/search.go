@@ -42,7 +42,9 @@ func registerSearchTools(s *mcp.Server, c *Core) {
 		Annotations: readOnlyTool("Search file contents on session host"),
 		Description: "Search file contents for a regular expression on the host the shared session is currently on — the " +
 			"remote-host equivalent of your Grep tool. Uses ripgrep when present, else grep; best-effort and backend-" +
-			"dependent (ripgrep honors .gitignore). Returns path/line/text matches, capped. Requires an authorized local " +
+			"dependent (ripgrep honors .gitignore). An empty result therefore does NOT prove the pattern is absent: " +
+			"ignored paths may have been skipped, which matters when sweeping for something that must not be there, " +
+			"such as a leaked credential. Returns path/line/text matches, capped. Requires an authorized local " +
 			"or remote OOB route.",
 	}, c.fileGrep)
 

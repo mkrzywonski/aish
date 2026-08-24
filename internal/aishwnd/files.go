@@ -120,8 +120,9 @@ func registerFileTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "directory_list",
 		Annotations: readOnlyTool("List directory on Windows host"),
-		Description: "List direct children of an absolute directory on the Windows host, sorted by name, with " +
-			"type, size, and modification time.",
+		Description: "List direct children of an absolute directory on the Windows host — the Windows " +
+			"equivalent of your Bash `ls -la`. Sorted by name, with type, size, and modification time. " +
+			"Symlinks are reported as symlinks and are not followed; hidden files are included.",
 	}, sess.directoryList)
 }
 
