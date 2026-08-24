@@ -20,7 +20,7 @@ import (
 type SessionInfo struct {
 	ID    string
 	Name  string // "" when unnamed
-	Kind  string // paths.KindPTY / paths.KindAishwin; "" on a session that predates the kind file
+	Backend string // paths.BackendSharedTerminal / paths.BackendWindowsPeer; "" on a session that predates the backend file
 	Sock  string
 	MTime int64 // session dir mtime, unix nanos
 }
@@ -60,7 +60,7 @@ func List() []SessionInfo {
 			Name: paths.ReadName(e.Name()),
 			// Read from the session dir, never by connecting: discovery must
 			// stay free of sockets, approval prompts and MFA pushes.
-			Kind:  paths.ReadKind(e.Name()),
+			Backend: paths.ReadBackend(e.Name()),
 			Sock:  sock,
 			MTime: mt,
 		})

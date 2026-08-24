@@ -12,7 +12,7 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-// read_output on this session kind returns the console feed: the scrolling
+// read_output on this backend returns the console feed: the scrolling
 // account of operations that the human watching this Windows machine sees.
 //
 // It carries the same NAME as the shared-terminal tool because it answers the
@@ -56,7 +56,7 @@ func registerConsoleTools(s *mcp.Server, sess *aishwndSession) {
 			"retained. `dropped` counts entries evicted before you read them. Read this when another " +
 			"client may share this session, or when the user asks what has been happening -- it is the " +
 			"only tool that reports activity from before you connected. Note this is the visible feed, " +
-			"not an out-of-band log: this session kind has no invisible route, so there is no hidden " +
+			"not an out-of-band log: this backend has no invisible route, so there is no hidden " +
 			"activity for a log to recover.",
 	}, sess.readOutput)
 }

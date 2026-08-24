@@ -70,37 +70,43 @@ func WriteName(id, name string) error {
 	return os.WriteFile(NameFile(id), []byte(name+"\n"), 0o600)
 }
 
-// Session kinds. A kind is a durable property of how a session is backed, and
-// it decides which tools that session can possibly implement: KindPTY is the
-// shared terminal on a local pty (optionally SSH'd elsewhere), KindAishwin a
-// native Windows peer reached through aishwnd, which has no terminal to share
-// and therefore no terminal tools at all.
+// Session backends. The backend is which implementation serves a session, and
+// it decides what that session can possibly do: BackendSharedTerminal is a
+// terminal on a local pty that a human watches and types into, optionally
+// SSH'd elsewhere; BackendWindowsPeer is a native Windows machine reached
+// through aishwnd, with no terminal to share.
+//
+// This is NOT the platform and NOT the shell, both of which are separate axes
+// reported elsewhere. A shared-terminal session SSH'd to a Windows host IS
+// running Windows and behaves nothing like a Windows peer. What the backend
+// decides is whether terminal tools exist at all, and whether there is an
+// out-of-band route for anything to be invisible on.
 const (
-	KindPTY     = "pty"
-	KindAishwin = "aishwin"
+	BackendSharedTerminal = "shared_terminal"
+	BackendWindowsPeer    = "windows_peer"
 )
 
-// KindFile returns the path of the file recording a session's kind. It is
+// BackendFile returns the path of the file recording a session's backend. It is
 // written once at startup and never changes, so readers can learn what a
 // session is without connecting to it — no socket, no authorization prompt,
 // and on an SSH session no risk of triggering an MFA push.
-func KindFile(id string) string { return filepath.Join(SessionDir(id), "kind") }
+func BackendFile(id string) string { return filepath.Join(SessionDir(id), "backend") }
 
-// ReadKind returns the session's kind, or "" for a session that predates the
-// kind file. Callers must treat "" as unknown rather than assuming a default:
+// ReadBackend returns the session's backend, or "" for a session that predates
+// the backend file. Callers must treat "" as unknown rather than assuming a default:
 // guessing wrong is what the file exists to prevent.
-func ReadKind(id string) string {
-	b, err := os.ReadFile(KindFile(id))
+func ReadBackend(id string) string {
+	b, err := os.ReadFile(BackendFile(id))
 	if err != nil {
 		return ""
 	}
-	kind, _, _ := strings.Cut(string(b), "\n")
-	return strings.TrimSpace(kind)
+	backend, _, _ := strings.Cut(string(b), "\n")
+	return strings.TrimSpace(backend)
 }
 
-// WriteKind records the session's kind at startup.
-func WriteKind(id, kind string) error {
-	return os.WriteFile(KindFile(id), []byte(kind+"\n"), 0o600)
+// WriteBackend records the session's backend at startup.
+func WriteBackend(id, backend string) error {
+	return os.WriteFile(BackendFile(id), []byte(backend+"\n"), 0o600)
 }
 
 // OOBFile marks that out-of-band operations are authorized for the session.

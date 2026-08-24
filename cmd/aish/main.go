@@ -186,7 +186,7 @@ func runMain(args []string) int {
 	// Record what kind of session this is before anything can look at it, so
 	// a reader learns what tools it could possibly implement without opening
 	// its socket.
-	if err := paths.WriteKind(id, paths.KindPTY); err != nil {
+	if err := paths.WriteBackend(id, paths.BackendSharedTerminal); err != nil {
 		fmt.Fprintln(os.Stderr, "aish:", err)
 		return 1
 	}

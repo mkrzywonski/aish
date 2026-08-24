@@ -26,7 +26,7 @@ func TestBaseFallsBackToRunUser(t *testing.T) {
 	}
 }
 
-// The kind file is how a reader learns what a session is without connecting to
+// The backend file is how a reader learns what a session is without connecting to
 // it — no socket, no approval prompt, no MFA push.
 func TestKindRoundTrip(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -34,13 +34,13 @@ func TestKindRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(SessionDir(id), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got := ReadKind(id); got != "" {
-		t.Errorf("a session with no kind file should read as unknown, got %q", got)
+	if got := ReadBackend(id); got != "" {
+		t.Errorf("a session with no backend file should read as unknown, got %q", got)
 	}
-	if err := WriteKind(id, KindAishwin); err != nil {
+	if err := WriteBackend(id, BackendWindowsPeer); err != nil {
 		t.Fatal(err)
 	}
-	if got := ReadKind(id); got != KindAishwin {
-		t.Errorf("ReadKind = %q, want %q", got, KindAishwin)
+	if got := ReadBackend(id); got != BackendWindowsPeer {
+		t.Errorf("ReadBackend = %q, want %q", got, BackendWindowsPeer)
 	}
 }

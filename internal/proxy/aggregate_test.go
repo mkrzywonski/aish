@@ -44,7 +44,7 @@ func find(t *testing.T, tools []*mcp.Tool, name string) *mcp.Tool {
 	return nil
 }
 
-// The whole point of merging: a tool only one kind of session implements must
+// The whole point of merging: a tool only one backend implements must
 // still be advertised, or it has no handler registered and is unroutable even
 // though its session serves it.
 func TestMergeToolSpecsUnionsAcrossSessions(t *testing.T) {
@@ -97,7 +97,7 @@ func TestEnsureSessionArgLeavesAnExistingOneAlone(t *testing.T) {
 }
 
 // Same name, different contract: the advertised description must say so rather
-// than presenting one kind's variant as universal.
+// than presenting one backend's variant as universal.
 func TestMergeToolSpecsFlagsDivergentVariants(t *testing.T) {
 	merged := mergeToolSpecs([]labeledTools{
 		{label: "aaa (nixos)", tools: []*mcp.Tool{
@@ -165,12 +165,12 @@ func TestUnsupportedToolErrorIsActionable(t *testing.T) {
 			"88f98135": {"directory_list", "file_read", "run_command"},
 		},
 	}
-	info := SessionInfo{ID: "88f98135", Name: "Windows", Kind: "aishwin"}
+	info := SessionInfo{ID: "88f98135", Name: "Windows", Backend: "windows_peer"}
 	msg := p.unsupportedToolError(context.Background(), info, "session_status")
 	if msg == "" {
 		t.Fatal("calling a tool the session does not implement was allowed through")
 	}
-	for _, want := range []string{"session_status", "Windows", "aishwin", "not a typo", "run_command"} {
+	for _, want := range []string{"session_status", "Windows", "windows_peer", "not a typo", "run_command"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal should mention %q; got: %s", want, msg)
 		}
@@ -183,7 +183,7 @@ func TestUnsupportedToolErrorAllowsImplementedTools(t *testing.T) {
 		lastNames: map[string]string{},
 		toolNames: map[string][]string{"88f98135": {"file_read", "run_command"}},
 	}
-	info := SessionInfo{ID: "88f98135", Name: "Windows", Kind: "aishwin"}
+	info := SessionInfo{ID: "88f98135", Name: "Windows", Backend: "windows_peer"}
 	if msg := p.unsupportedToolError(context.Background(), info, "file_read"); msg != "" {
 		t.Errorf("implemented tool was refused: %s", msg)
 	}

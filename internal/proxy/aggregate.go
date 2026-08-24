@@ -63,7 +63,7 @@ const serverInstructions = "" +
 	"session, including a remote host reached by SSH. Your native shell and filesystem tools remain " +
 	"local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
 	"SSH'd into there, use aish tools instead. Start with list_sessions, then session_status; recheck " +
-	"after SSH transitions. Sessions differ in kind and tools; plan against list_sessions' tool list. New" +
+	"after SSH transitions. Sessions differ by backend and tools; plan against list_sessions' tool list. New" +
 	" SSH hosts have `unknown` OOB tools; call probe_host once, then always plan against oob_tools. " +
 	"`screen` remote_dialect_source is advisory, never implies POSIX, and never disables a tool. If probe" +
 	" evidence makes oob_tools unavailable, do not re-probe; use run_command instead. Deep identity " +
@@ -118,14 +118,14 @@ func Serve(version string, psk []byte) int {
 	// list_sessions: answered locally, never gated.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_sessions",
-		Description: "List the live aish sessions on this machine: id, name, kind, and the tools each one actually implements. Use a session's id or name as the `session` argument to other tools. Sessions differ by kind and DO NOT all implement the same tools -- plan against the per-session `tools` list rather than assuming your loaded tool schema applies everywhere. Safe to call anytime; reads only session directories and tool listings, so it never prompts the user, opens an SSH channel, or triggers MFA.",
+		Description: "List the live aish sessions on this machine: id, name, backend, and the tools each one actually implements. Use a session's id or name as the `session` argument to other tools. Sessions differ by backend and DO NOT all implement the same tools -- plan against the per-session `tools` list rather than assuming your loaded tool schema applies everywhere. Safe to call anytime; reads only session directories and tool listings, so it never prompts the user, opens an SSH channel, or triggers MFA.",
 		Annotations: &mcp.ToolAnnotations{Title: "List aish sessions", ReadOnlyHint: true},
 	}, p.listSessions)
 
 	// version_info: answered locally, reports proxy + session versions.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "version_info",
-		Description: "Report version information for every component in the aish chain: the MCP proxy, and each live session server with its id, name and kind. Useful for diagnosing version mismatches. Never prompts: it completes only the MCP handshake with each session.",
+		Description: "Report version information for every component in the aish chain: the MCP proxy, and each live session server with its id, name and backend. Useful for diagnosing version mismatches. Never prompts: it completes only the MCP handshake with each session.",
 		Annotations: &mcp.ToolAnnotations{Title: "Version info", ReadOnlyHint: true},
 	}, p.versionInfo)
 
@@ -411,10 +411,10 @@ func (p *aggProxy) closeAll() {
 type listSessionsArgs struct{}
 
 type sessionEntry struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name,omitempty"`
-	Kind  string   `json:"kind,omitempty"`
-	Tools []string `json:"tools,omitempty"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Backend string   `json:"backend,omitempty"`
+	Tools   []string `json:"tools,omitempty"`
 }
 
 type listSessionsResult struct {
@@ -428,7 +428,7 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 		out.Sessions = append(out.Sessions, sessionEntry{
 			ID:    s.ID,
 			Name:  s.Name,
-			Kind:  s.Kind,
+			Backend: s.Backend,
 			Tools: p.sessionToolNames(ctx, s),
 		})
 	}
@@ -458,7 +458,7 @@ type sessionInfo struct {
 	Server  string `json:"server,omitempty"` // MCP server implementation name
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
-	Kind    string `json:"kind,omitempty"`
+	Backend string `json:"backend,omitempty"`
 }
 
 func (p *aggProxy) versionInfo(ctx context.Context, req *mcp.CallToolRequest, args versionInfoArgs) (*mcp.CallToolResult, versionInfoResult, error) {
@@ -484,7 +484,7 @@ func (p *aggProxy) versionInfo(ctx context.Context, req *mcp.CallToolRequest, ar
 			Server:  name,
 			ID:      info.ID,
 			Name:    info.Name,
-			Kind:    info.Kind,
+			Backend: info.Backend,
 		})
 	}
 	return nil, result, nil
@@ -529,11 +529,11 @@ func (p *aggProxy) sessionServerInfo(ctx context.Context, info SessionInfo) (nam
 // starting a session to advertise the mirrored session tools.
 //
 // It unions EVERY live session's tools rather than mirroring one. Sessions
-// come in kinds — a PTY-backed shared terminal and a native Windows peer —
+// come in backends — a pty-backed shared terminal and a native Windows peer —
 // that implement genuinely different tools, so sampling a single session
-// advertised one kind's surface as if it were universal: whichever session id
+// advertised one backend's surface as if it were universal: whichever session id
 // happened to sort first decided what the client could do. A tool only the
-// other kind implements then had no handler registered at all (see the
+// other backend implements then had no handler registered at all (see the
 // registration loop in Run), leaving it unroutable even though the target
 // served it perfectly well.
 func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
@@ -605,7 +605,7 @@ type labeledTool struct {
 // mergeToolSpecs unions tool sets by name. Only one variant of a shared name
 // can be advertised, so the routing-aware one (already declaring `session`)
 // wins and the advertised description says plainly that other sessions
-// implement it differently. Silently presenting one kind's variant as
+// implement it differently. Silently presenting one backend's variant as
 // universal is exactly what lets a client read one implementation's
 // documentation while calling another's — the same tool name can mean
 // "invisible, authorization-gated" on one session and "mirrored to a human in
@@ -695,20 +695,20 @@ func (p *aggProxy) unsupportedToolError(ctx context.Context, info SessionInfo, t
 			return ""
 		}
 	}
-	kind := info.Kind
-	if kind == "" {
-		kind = "unknown"
+	backend := info.Backend
+	if backend == "" {
+		backend = "unknown"
 	}
-	return fmt.Sprintf("session %s does not implement %q. This is a capability difference, not a typo: the session is kind %q%s. Tools available there: %s.",
-		info.Label(), tool, kind, kindHint(info.Kind), strings.Join(names, ", "))
+	return fmt.Sprintf("session %s does not implement %q. This is a capability difference, not a typo: the session's backend is %q%s. Tools available there: %s.",
+		info.Label(), tool, backend, backendHint(info.Backend), strings.Join(names, ", "))
 }
 
-// kindHint explains, in one clause, why a kind has the tools it has.
-func kindHint(kind string) string {
-	switch kind {
-	case paths.KindAishwin:
+// backendHint explains, in one clause, why a backend has the tools it has.
+func backendHint(backend string) string {
+	switch backend {
+	case paths.BackendWindowsPeer:
 		return " — a native Windows peer with no shared terminal, so it has no terminal tools and no out-of-band/visibility distinction"
-	case paths.KindPTY:
+	case paths.BackendSharedTerminal:
 		return " — a shared terminal a human can watch and type into"
 	}
 	return ""

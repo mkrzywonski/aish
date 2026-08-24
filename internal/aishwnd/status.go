@@ -20,7 +20,7 @@ type sessionStatusArgs struct{}
 type sessionStatusResult struct {
 	SessionID   string `json:"session_id"`
 	SessionName string `json:"session_name,omitempty"`
-	Kind        string `json:"kind"`
+	Backend     string `json:"backend"`
 	Host        string `json:"host"`
 	Platform    string `json:"platform"`
 	Proto       int    `json:"wire_proto"`
@@ -28,7 +28,7 @@ type sessionStatusResult struct {
 	AvailableShells []string `json:"available_shells,omitempty"`
 	DefaultShell    string   `json:"default_shell,omitempty"`
 
-	// OperationsVisible is true for every tool on this session kind. There is
+	// OperationsVisible is true for every tool on this backend. There is
 	// no out-of-band route here, so nothing you do is hidden from the human.
 	OperationsVisible bool `json:"operations_visible"`
 
@@ -50,12 +50,12 @@ func registerStatusTool(s *mcp.Server, sess *aishwndSession, availableShells []s
 			"run_command can use, and whether operations are visible to the human. Answered entirely from the " +
 			"connection handshake — it never reaches the Windows host, so it cannot block or execute anything. " +
 			"Terminal fields reported by a shared-terminal session (mode, cwd, screen, echo_off, oob_user) do " +
-			"not exist on this kind of session.",
+			"do not exist on this backend.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
 		return nil, sessionStatusResult{
 			SessionID:         sess.id,
 			SessionName:       sess.name,
-			Kind:              paths.KindAishwin,
+			Backend:           paths.BackendWindowsPeer,
 			Host:              sess.displayHost(),
 			Platform:          "windows",
 			Proto:             proto,
