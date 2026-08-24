@@ -1,3 +1,5 @@
+//go:build windows
+
 // aishwin is the Windows half of the aish-driven Windows shell feature: it
 // spawns the Linux half (cmd/aishwnd)
 // as a child process — by default via `wsl.exe -- aishwnd`, or via

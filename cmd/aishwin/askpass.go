@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // askpass.go: aishwin.exe's hidden SSH_ASKPASS helper mode.

@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // registry.go: thin HKEY_CURRENT_USER DWORD read/write helpers backing

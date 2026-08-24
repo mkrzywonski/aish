@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui_env_dialog.go: a modal two-field (Name/Value) dialog for adding or

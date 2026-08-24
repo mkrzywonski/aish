@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui_statusbar.go: the graphical status bar, replacing the old plain-text

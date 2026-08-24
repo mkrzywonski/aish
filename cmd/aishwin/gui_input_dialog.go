@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui_input_dialog.go: a modal single-line text-input dialog (OK/Cancel),

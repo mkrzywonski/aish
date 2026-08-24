@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // screenshot.go: lets the AI see the actual GUI window (or, with

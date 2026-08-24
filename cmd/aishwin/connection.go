@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // connection.go: lets something other than main() (the Settings dialog's

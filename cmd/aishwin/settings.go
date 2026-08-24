@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // settings.go: persistent user settings, backed by the registry

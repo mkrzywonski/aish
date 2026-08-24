@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui_clients.go: the Session > Clients... dialog. Lists the MCP clients

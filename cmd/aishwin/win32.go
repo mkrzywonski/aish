@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // Raw Win32 API bindings for the GUI (gui.go, gui_dialog.go). Hand-declared

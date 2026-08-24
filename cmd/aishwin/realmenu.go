@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // realmenu.go: the native Win32 menu bar for the real (non-smoke-test)

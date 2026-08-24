@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui_settings.go: the Settings dialog. General/Connection/Environment are

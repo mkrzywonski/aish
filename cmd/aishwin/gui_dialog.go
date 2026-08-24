@@ -1,4 +1,6 @@
-﻿package main
+﻿//go:build windows
+
+package main
 
 // gui_dialog.go: a modal Yes/No dialog with a timeout, replacing the
 // console's askYN. Built from an in-memory DLGTEMPLATE (DialogBoxIndirectParam)

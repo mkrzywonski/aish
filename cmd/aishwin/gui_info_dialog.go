@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui_info_dialog.go: a modal informational dialog (one OK button),

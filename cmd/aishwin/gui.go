@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // gui.go: the main window -- a menu bar, a large read-only log view, and a
