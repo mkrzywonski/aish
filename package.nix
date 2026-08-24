@@ -13,7 +13,7 @@ buildGoModule {
   # on mismatch.
   vendorHash = "sha256-bvPJsvMb2PCbruScI5QQ4YxV+4HZzx4+Qlr17YZgSjY=";
 
-  subPackages = [ "cmd/aish" ];
+  subPackages = [ "cmd/aish" "cmd/aishwnd" ];
 
   ldflags = [ "-s" "-w" "-X main.version=${rev}" ];
 
