@@ -41,6 +41,9 @@ type readOutputEntry struct {
 	Seq  int64  `json:"seq"`
 	At   string `json:"at"`
 	Text string `json:"text"`
+	// Kind groups an entry the way the window colours it: "command" for a
+	// command announcement, "file" for a file operation, "output" for
+	// everything else, which is most of the feed.
 	Kind string `json:"kind,omitempty"`
 }
 
@@ -63,7 +66,9 @@ func registerConsoleTools(s *mcp.Server, sess *aishwndSession) {
 			"client may share this session, or when the user asks what has been happening -- it is the " +
 			"only tool that reports activity from before you connected. Note this is the visible feed, " +
 			"not an out-of-band log: this backend has no invisible route, so there is no hidden " +
-			"activity for a log to recover. Named read_console, not read_output, because it returns discrete " +
+			"activity for a log to recover. Each entry's `kind` groups it the way the window colours it: " +
+			"\"command\" for a command announcement, \"file\" for a file operation, \"output\" for everything " +
+			"else. Named read_console, not read_output, because it returns discrete " +
 			"timestamped entries addressed by sequence number rather than a terminal's byte stream: the " +
 			"shared-terminal read_output is a different contract, not this tool on another host.",
 	}, sess.readOutput)

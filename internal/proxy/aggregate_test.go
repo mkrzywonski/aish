@@ -238,3 +238,46 @@ func TestMergeToolSpecsUnionsArguments(t *testing.T) {
 		t.Errorf("shared argument was labelled backend-specific: %q", cdesc)
 	}
 }
+
+// `session` is consumed by the proxy for routing and accepted for every
+// session. Labelling it backend-specific told callers there was no way to
+// address the other backend at all — an agent that trusted the annotation
+// would have hunted for a targeting mechanism that does not exist.
+func TestMergeToolSpecsNeverLabelsSessionBackendSpecific(t *testing.T) {
+	merged := mergeToolSpecs([]labeledTools{
+		{label: "aaa (nixos)", backend: "shared_terminal", tools: []*mcp.Tool{
+			{Name: "file_read", Description: "read", InputSchema: schema("path", "session")},
+		}},
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{
+			{Name: "file_read", Description: "read a file on Windows", InputSchema: schema("path")},
+		}},
+	})
+	props, _ := schemaProperties(find(t, merged, "file_read").InputSchema)
+	spec, _ := props["session"].(map[string]any)
+	desc, _ := spec["description"].(string)
+	if strings.Contains(desc, "accepted only by") {
+		t.Errorf("session was labelled backend-specific: %q", desc)
+	}
+}
+
+// "A difference may exist" raises doubt without resolving it. The note must
+// name which arguments actually differ.
+func TestDivergenceNoteNamesTheDifferingArguments(t *testing.T) {
+	merged := mergeToolSpecs([]labeledTools{
+		{label: "aaa (nixos)", backend: "shared_terminal", tools: []*mcp.Tool{
+			{Name: "run_command", Description: "types into the terminal", InputSchema: schema("command", "session")},
+		}},
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{
+			{Name: "run_command", Description: "mirrored to the console", InputSchema: schema("command", "background", "shell")},
+		}},
+	})
+	desc := find(t, merged, "run_command").Description
+	for _, want := range []string{"background", "shell", "direct_host"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("note does not name %q: %s", want, desc)
+		}
+	}
+	if strings.Contains(desc, "session (") {
+		t.Errorf("note lists session as backend-specific: %s", desc)
+	}
+}

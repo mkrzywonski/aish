@@ -138,8 +138,11 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	}, c.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "task_status",
-		Description: "Poll a background task started by exec: incremental output (pass next_cursor back), running state, exit code.",
+		Name: "task_status",
+		Description: "Poll a background task by the task_id returned when it was started: incremental output " +
+			"(pass next_cursor back), running state, and exit code once it finishes. Tasks are started by " +
+			"exec with background=true on a shared-terminal session, and by run_command with background=true " +
+			"on a direct-host session, which has no exec. Errors if the task_id is unrecognized.",
 		Annotations: readOnlyTool("Poll background command"),
 	}, c.taskStatus)
 

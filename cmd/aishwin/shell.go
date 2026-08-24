@@ -1,4 +1,4 @@
-﻿//go:build windows
+//go:build windows
 
 package main
 
@@ -150,7 +150,15 @@ func mirrorLine(line string) {
 // shell is killed and marked dead — see the dead field's doc.
 func (s *shellSession) Run(command string, timeout time.Duration) (output string, exitCode int, timedOut bool, err error) {
 	if !s.mu.TryLock() {
-		return "", 0, false, fmt.Errorf("a foreground command is already running on this shell")
+		// Name the shell and say what to do. The bare version of this message
+		// left a caller with no idea whether to wait, retry, or look
+		// somewhere else -- an evaluation agent recovered only by guessing.
+		// Concurrent calls are ordinary here: one client can issue parallel
+		// tool calls, and several clients can share a session.
+		return "", 0, false, fmt.Errorf(
+			"the %s shell is busy with another foreground command; each shell runs one at a time. "+
+				"Retry shortly, use a different shell, or start long-running work with background=true "+
+				"so it does not hold the shell", s.kind)
 	}
 	defer s.mu.Unlock()
 

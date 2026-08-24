@@ -709,12 +709,18 @@ func mergeToolSpecs(sets []labeledTools) []*mcp.Tool {
 		merged := *base.tool
 		merged.InputSchema = mergeSchemas(base, vs)
 		if others := divergentBackends(vs, base); len(others) > 0 {
-			merged.Description = strings.TrimRight(merged.Description, " ") +
-				" NOTE: backends on this machine implement different variants of this tool." +
+			note := " NOTE: backends implement different variants of this tool." +
 				" This text describes the " + describeBackend(base.backend) + " backend; the " +
-				strings.Join(others, " and ") + " backend implements a different variant" +
-				" (behaviour, visibility or accepted arguments may not match)." +
-				" Check the target session's backend in list_sessions before relying on the details above."
+				strings.Join(others, " and ") + " backend differs."
+			// Naming the differing arguments turns a warning into something
+			// actionable. "A difference may exist" raises doubt without
+			// resolving it, which two evaluation agents independently called
+			// out as worse than saying nothing.
+			if only := backendOnlyArgs(vs); len(only) > 0 {
+				note += " Arguments accepted by only some backends: " + strings.Join(only, ", ") + "."
+			}
+			note += " Check the target session's backend in list_sessions before relying on the details above."
+			merged.Description = strings.TrimRight(merged.Description, " ") + note
 		}
 		ensureSessionArg(&merged)
 		out = append(out, &merged)
@@ -838,6 +844,15 @@ func mergeSchemas(base labeledTool, vs []labeledTool) any {
 		}
 	}
 	for name, spec := range props {
+		if name == "session" {
+			// The proxy consumes `session` to route the call; it is accepted
+			// for every session regardless of which backend declares it in
+			// its own schema. Labelling it backend-specific said the opposite
+			// of the truth and left no documented way to address the other
+			// backend at all -- an agent that trusted the annotation would
+			// have gone looking for a targeting mechanism that does not exist.
+			continue
+		}
 		if len(owners[name]) == 0 || len(owners[name]) == len(backends) {
 			continue // accepted everywhere, or ours alone to describe
 		}
@@ -900,6 +915,39 @@ func intersectRequired(vs []labeledTool) []any {
 		anyOut[i] = name
 	}
 	return anyOut
+}
+
+// backendOnlyArgs names the arguments that some but not all backends accept,
+// each tagged with the backends that do. `session` is excluded: the proxy
+// accepts it everywhere.
+func backendOnlyArgs(vs []labeledTool) []string {
+	owners := map[string]map[string]bool{}
+	backends := map[string]bool{}
+	for _, v := range vs {
+		b := describeBackend(v.backend)
+		backends[b] = true
+		props, _ := schemaProperties(v.tool.InputSchema)
+		for name := range props {
+			if owners[name] == nil {
+				owners[name] = map[string]bool{}
+			}
+			owners[name][b] = true
+		}
+	}
+	var out []string
+	for name, who := range owners {
+		if name == "session" || len(who) == len(backends) {
+			continue
+		}
+		var only []string
+		for b := range who {
+			only = append(only, b)
+		}
+		sort.Strings(only)
+		out = append(out, name+" ("+strings.Join(only, "/")+" only)")
+	}
+	sort.Strings(out)
+	return out
 }
 
 // divergentBackends names the BACKENDS whose variant of a tool differs from
