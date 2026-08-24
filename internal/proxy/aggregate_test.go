@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -151,5 +152,49 @@ func TestIsTransportError(t *testing.T) {
 		if got := isTransportError(tc.err); got != tc.want {
 			t.Errorf("%s: isTransportError(%v) = %v, want %v", tc.name, tc.err, got, tc.want)
 		}
+	}
+}
+
+// A bare `unknown tool "x"` was worded identically to a typo and named neither
+// the reason nor the alternatives.
+func TestUnsupportedToolErrorIsActionable(t *testing.T) {
+	p := &aggProxy{
+		conns:     map[string]*pooledConn{},
+		lastNames: map[string]string{},
+		toolNames: map[string][]string{
+			"88f98135": {"directory_list", "file_read", "run_command"},
+		},
+	}
+	info := SessionInfo{ID: "88f98135", Name: "Windows", Kind: "aishwin"}
+	msg := p.unsupportedToolError(context.Background(), info, "session_status")
+	if msg == "" {
+		t.Fatal("calling a tool the session does not implement was allowed through")
+	}
+	for _, want := range []string{"session_status", "Windows", "aishwin", "not a typo", "run_command"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal should mention %q; got: %s", want, msg)
+		}
+	}
+}
+
+func TestUnsupportedToolErrorAllowsImplementedTools(t *testing.T) {
+	p := &aggProxy{
+		conns:     map[string]*pooledConn{},
+		lastNames: map[string]string{},
+		toolNames: map[string][]string{"88f98135": {"file_read", "run_command"}},
+	}
+	info := SessionInfo{ID: "88f98135", Name: "Windows", Kind: "aishwin"}
+	if msg := p.unsupportedToolError(context.Background(), info, "file_read"); msg != "" {
+		t.Errorf("implemented tool was refused: %s", msg)
+	}
+}
+
+// An unknown surface must not become a tollgate: if we could not learn what a
+// session implements, the session still gets to answer for itself.
+func TestUnsupportedToolErrorSilentWhenSurfaceUnknown(t *testing.T) {
+	p := &aggProxy{conns: map[string]*pooledConn{}, lastNames: map[string]string{}, toolNames: map[string][]string{}}
+	info := SessionInfo{ID: "nosuch", Sock: "/nonexistent/aish.sock"}
+	if msg := p.unsupportedToolError(context.Background(), info, "anything"); msg != "" {
+		t.Errorf("should defer to the session when its tools are unknown, got: %s", msg)
 	}
 }

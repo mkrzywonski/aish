@@ -35,6 +35,7 @@ import (
 
 	"ai-ssh/internal/authproto"
 	"ai-ssh/internal/clientauth"
+	"ai-ssh/internal/paths"
 	"ai-ssh/internal/procinfo"
 )
 
@@ -49,6 +50,7 @@ type aggProxy struct {
 	identified bool                   // downstream client renamed to match the upstream TUI
 	conns      map[string]*pooledConn // by session id
 	lastNames  map[string]string      // last-seen name per session id, for rename detection
+	toolNames  map[string][]string    // advertised tool names per session id
 }
 
 type pooledConn struct {
@@ -56,29 +58,28 @@ type pooledConn struct {
 	cs  *mcp.ClientSession
 }
 
-const serverInstructions = "Aish gives you access to human-owned shared terminal sessions and to the current host " +
-	"inside each session, including a remote host reached by SSH. Your native shell and filesystem tools " +
-	"remain local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
-	"SSH'd into there, use aish tools instead. Start with list_sessions, select the session, then " +
-	"call session_status; recheck after SSH transitions. New SSH hosts have `unknown` OOB tools; call probe_host once, " +
-	"then always plan against oob_tools. `screen` remote_dialect_source is advisory, never implies POSIX, and " +
-	"never disables a tool. " +
-	"If probe evidence makes oob_tools " +
-	"unavailable, do not re-probe; use run_command instead. Deep identity probing is diagnostic, " +
-	"explicit, and may trigger MFA; never use instead of oob_tools. Explicit SFTP may trigger MFA; a sticky shell " +
-	"failure permits merged SFTP-backed oob_tools. Every " +
-	"session tool accepts `session` (id or name). Use run_command for commands the human should see. Use " +
-	"exec, file_*, and directory_list for native-like work on the session's current host when OOB is " +
-	"authorized. Out-of-band work is invisible; oob_log records it — read it when another client shares " +
-	"the session or the user asks what happened off-screen. " +
-	"Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change " +
-	"when the human switches user via su or sudo -i; check oob_user before ownership- or privilege-sensitive " +
-	"work, and if their shell switched users say so and prefer run_command (it runs as the shared shell's " +
-	"current user). sudo, su and other escalation must go through run_command, never exec: escalating out of " +
-	"band is refused, because a privileged command has to be one the human saw, and they type their own " +
-	"password. Never send passwords or other " +
-	"secrets; if echo_off is true, wait for the human. Name the target session and host in chat before the " +
-	"first substantial or destructive op. The user approves each session on its own terminal."
+const serverInstructions = "" +
+	"Aish gives you access to human-owned shared terminal sessions and to the current host inside each " +
+	"session, including a remote host reached by SSH. Your native shell and filesystem tools remain " +
+	"local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
+	"SSH'd into there, use aish tools instead. Start with list_sessions, then session_status; recheck " +
+	"after SSH transitions. Sessions differ in kind and tools; plan against list_sessions' tool list. New" +
+	" SSH hosts have `unknown` OOB tools; call probe_host once, then always plan against oob_tools. " +
+	"`screen` remote_dialect_source is advisory, never implies POSIX, and never disables a tool. If probe" +
+	" evidence makes oob_tools unavailable, do not re-probe; use run_command instead. Deep identity " +
+	"probing is diagnostic, explicit, and may trigger MFA; never use instead of oob_tools. Explicit SFTP " +
+	"may trigger MFA; a sticky shell failure permits merged SFTP-backed oob_tools. Every session tool " +
+	"accepts `session` (id or name). Use run_command for commands the human should see. Use exec, file_*," +
+	" and directory_list for native-like work on the session's current host when OOB is authorized. Out-" +
+	"of-band work is invisible; oob_log records it — read it when another client shares the session or " +
+	"the user asks what happened off-screen. Out-of-band tools act as session_status.oob_user (the SSH " +
+	"login user), which does NOT change when the human switches user via su or sudo -i; check oob_user " +
+	"before ownership- or privilege-sensitive work, and if their shell switched users say so and prefer " +
+	"run_command (it runs as the shared shell's current user). sudo, su and other escalation must go " +
+	"through run_command, never exec: escalating out of band is refused, because a privileged command has" +
+	" to be one the human saw, and they type their own password. Never send passwords or other secrets; " +
+	"if echo_off is true, wait for the human. Name the target session and host in chat before the first " +
+	"substantial or destructive op."
 
 // Serve runs the aggregating proxy over stdio until the client disconnects.
 // If psk is non-nil, the proxy derives a deterministic identity from it so
@@ -106,6 +107,7 @@ func Serve(version string, psk []byte) int {
 		hasPSK:    len(psk) > 0,
 		conns:     map[string]*pooledConn{},
 		lastNames: map[string]string{},
+		toolNames: map[string][]string{},
 	}
 	ctx := context.Background()
 
@@ -116,14 +118,14 @@ func Serve(version string, psk []byte) int {
 	// list_sessions: answered locally, never gated.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_sessions",
-		Description: "List the live aish sessions on this machine (id and name). Use a session's id or name as the `session` argument to other tools. Safe to call anytime; never prompts the user.",
+		Description: "List the live aish sessions on this machine: id, name, kind, and the tools each one actually implements. Use a session's id or name as the `session` argument to other tools. Sessions differ by kind and DO NOT all implement the same tools -- plan against the per-session `tools` list rather than assuming your loaded tool schema applies everywhere. Safe to call anytime; reads only session directories and tool listings, so it never prompts the user, opens an SSH channel, or triggers MFA.",
 		Annotations: &mcp.ToolAnnotations{Title: "List aish sessions", ReadOnlyHint: true},
 	}, p.listSessions)
 
 	// version_info: answered locally, reports proxy + session versions.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "version_info",
-		Description: "Report version information for all components in the aish chain: the MCP proxy, the connected session server, and whether PSK authentication is active. Useful for diagnosing version mismatches.",
+		Description: "Report version information for every component in the aish chain: the MCP proxy, and each live session server with its id, name and kind. Useful for diagnosing version mismatches. Never prompts: it completes only the MCP handshake with each session.",
 		Annotations: &mcp.ToolAnnotations{Title: "Version info", ReadOnlyHint: true},
 	}, p.versionInfo)
 
@@ -176,6 +178,10 @@ func (p *aggProxy) forward(ctx context.Context, tool string, req *mcp.CallToolRe
 		// Annotate so a lookup that failed *because* of a rename carries the
 		// explanation, not just "no such session".
 		return p.annotate(ctx, toolError("%v", err), live), nil
+	}
+
+	if msg := p.unsupportedToolError(ctx, info, tool); msg != "" {
+		return p.annotate(ctx, toolError("%s", msg), live), nil
 	}
 
 	cs, err := p.conn(ctx, info)
@@ -405,8 +411,10 @@ func (p *aggProxy) closeAll() {
 type listSessionsArgs struct{}
 
 type sessionEntry struct {
-	ID   string `json:"id"`
-	Name string `json:"name,omitempty"`
+	ID    string   `json:"id"`
+	Name  string   `json:"name,omitempty"`
+	Kind  string   `json:"kind,omitempty"`
+	Tools []string `json:"tools,omitempty"`
 }
 
 type listSessionsResult struct {
@@ -417,7 +425,12 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	var out listSessionsResult
 	live := List()
 	for _, s := range live {
-		out.Sessions = append(out.Sessions, sessionEntry{ID: s.ID, Name: s.Name})
+		out.Sessions = append(out.Sessions, sessionEntry{
+			ID:    s.ID,
+			Name:  s.Name,
+			Kind:  s.Kind,
+			Tools: p.sessionToolNames(ctx, s),
+		})
 	}
 	// Refresh the rename baseline so list_sessions establishes ground truth
 	// without also flagging its own results (the AI is already looking here).
@@ -430,8 +443,8 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 type versionInfoArgs struct{}
 
 type versionInfoResult struct {
-	Proxy   proxyInfo    `json:"proxy"`
-	Session *sessionInfo `json:"session,omitempty"`
+	Proxy    proxyInfo     `json:"proxy"`
+	Sessions []sessionInfo `json:"sessions,omitempty"`
 }
 
 type proxyInfo struct {
@@ -442,8 +455,10 @@ type proxyInfo struct {
 
 type sessionInfo struct {
 	Version string `json:"version"`
+	Server  string `json:"server,omitempty"` // MCP server implementation name
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind,omitempty"`
 }
 
 func (p *aggProxy) versionInfo(ctx context.Context, req *mcp.CallToolRequest, args versionInfoArgs) (*mcp.CallToolResult, versionInfoResult, error) {
@@ -455,20 +470,54 @@ func (p *aggProxy) versionInfo(ctx context.Context, req *mcp.CallToolRequest, ar
 			Binary:  exe,
 		},
 	}
-	// Try to get the session version from a connected session.
-	if live := List(); len(live) > 0 {
-		info := live[0]
-		if cs, err := p.conn(ctx, info); err == nil {
-			if ir := cs.InitializeResult(); ir != nil && ir.ServerInfo != nil {
-				result.Session = &sessionInfo{
-					Version: ir.ServerInfo.Version,
-					ID:      info.ID,
-					Name:    info.Name,
-				}
-			}
+	// Report every live session, not just whichever one sorted first. The
+	// old single-session answer took no target argument, so it silently
+	// described a different session than the caller was working in — a wrong
+	// answer that looked exactly like a right one.
+	for _, info := range List() {
+		name, version := p.sessionServerInfo(ctx, info)
+		if version == "" {
+			continue
 		}
+		result.Sessions = append(result.Sessions, sessionInfo{
+			Version: version,
+			Server:  name,
+			ID:      info.ID,
+			Name:    info.Name,
+			Kind:    info.Kind,
+		})
 	}
 	return nil, result, nil
+}
+
+// sessionServerInfo reports a session server's implementation name and
+// version. It reuses a pooled connection when there is one and otherwise
+// completes only the MCP handshake: initialize is ungated, so asking a
+// session its version never provokes the approval prompt that authorizing
+// would.
+func (p *aggProxy) sessionServerInfo(ctx context.Context, info SessionInfo) (name, version string) {
+	p.mu.Lock()
+	pc := p.conns[info.ID]
+	p.mu.Unlock()
+	if pc != nil {
+		if ir := pc.cs.InitializeResult(); ir != nil && ir.ServerInfo != nil {
+			return ir.ServerInfo.Name, ir.ServerInfo.Version
+		}
+	}
+	raw, err := net.Dial("unix", info.Sock)
+	if err != nil {
+		return "", ""
+	}
+	defer raw.Close()
+	cs, err := p.client.Connect(ctx, &mcp.IOTransport{Reader: raw, Writer: raw}, nil)
+	if err != nil {
+		return "", ""
+	}
+	defer cs.Close()
+	if ir := cs.InitializeResult(); ir != nil && ir.ServerInfo != nil {
+		return ir.ServerInfo.Name, ir.ServerInfo.Version
+	}
+	return "", ""
 }
 
 // ---- tool-list mirroring (schema cache) ----
@@ -496,7 +545,9 @@ func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 			fmt.Fprintf(os.Stderr, "aish mcp-proxy: listing tools from session %s: %v\n", info.Label(), err)
 			continue
 		}
-		sets = append(sets, labeledTools{label: info.Label(), tools: filterTools(tools)})
+		public := filterTools(tools)
+		p.rememberToolNames(info.ID, public)
+		sets = append(sets, labeledTools{label: info.Label(), tools: public})
 	}
 	if len(sets) > 0 {
 		merged := mergeToolSpecs(sets)
@@ -592,6 +643,75 @@ func mergeToolSpecs(sets []labeledTools) []*mcp.Tool {
 		out = append(out, &merged)
 	}
 	return out
+}
+
+// rememberToolNames caches what a session advertises, so callers can ask what
+// a session can do without another round trip.
+func (p *aggProxy) rememberToolNames(id string, tools []*mcp.Tool) {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	sort.Strings(names)
+	p.mu.Lock()
+	p.toolNames[id] = names
+	p.mu.Unlock()
+}
+
+// sessionToolNames returns the tools a session implements, fetching them on
+// first sight. Listing tools is ungated, so this costs a local socket and
+// never prompts the user or reaches an SSH remote — the capability answer is
+// free, unlike probing what a remote host's shell can do.
+func (p *aggProxy) sessionToolNames(ctx context.Context, info SessionInfo) []string {
+	p.mu.Lock()
+	names, ok := p.toolNames[info.ID]
+	p.mu.Unlock()
+	if ok {
+		return names
+	}
+	tools, err := p.fetchTools(ctx, info)
+	if err != nil {
+		return nil
+	}
+	public := filterTools(tools)
+	p.rememberToolNames(info.ID, public)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.toolNames[info.ID]
+}
+
+// unsupportedToolError refuses a call the target session cannot serve, and
+// returns "" when it can (or when we could not find out). The session's own
+// answer was a bare `unknown tool "x"`, worded identically to a misspelling —
+// it named neither the reason nor the alternatives, and mapping one session's
+// capabilities by trial that way cost an agent 38 calls.
+func (p *aggProxy) unsupportedToolError(ctx context.Context, info SessionInfo, tool string) string {
+	names := p.sessionToolNames(ctx, info)
+	if len(names) == 0 {
+		return "" // unknown surface: let the session answer for itself
+	}
+	for _, n := range names {
+		if n == tool {
+			return ""
+		}
+	}
+	kind := info.Kind
+	if kind == "" {
+		kind = "unknown"
+	}
+	return fmt.Sprintf("session %s does not implement %q. This is a capability difference, not a typo: the session is kind %q%s. Tools available there: %s.",
+		info.Label(), tool, kind, kindHint(info.Kind), strings.Join(names, ", "))
+}
+
+// kindHint explains, in one clause, why a kind has the tools it has.
+func kindHint(kind string) string {
+	switch kind {
+	case paths.KindAishwin:
+		return " — a native Windows peer with no shared terminal, so it has no terminal tools and no out-of-band/visibility distinction"
+	case paths.KindPTY:
+		return " — a shared terminal a human can watch and type into"
+	}
+	return ""
 }
 
 // divergentLabels names the sessions whose variant of a tool differs from the
