@@ -51,6 +51,8 @@ type aggProxy struct {
 	conns      map[string]*pooledConn // by session id
 	lastNames  map[string]string      // last-seen name per session id, for rename detection
 	toolNames  map[string][]string    // advertised tool names per session id
+	server     *mcp.Server            // for refreshing the advertised set at runtime
+	advertised map[string]bool        // mirrored tool names currently registered
 }
 
 type pooledConn struct {
@@ -101,13 +103,14 @@ func Serve(version string, psk []byte) int {
 		}
 	}
 	p := &aggProxy{
-		client:    mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
-		identity:  identity,
-		version:   version,
-		hasPSK:    len(psk) > 0,
-		conns:     map[string]*pooledConn{},
-		lastNames: map[string]string{},
-		toolNames: map[string][]string{},
+		client:     mcp.NewClient(&mcp.Implementation{Name: "aish-proxy", Version: version}, nil),
+		identity:   identity,
+		version:    version,
+		hasPSK:     len(psk) > 0,
+		conns:      map[string]*pooledConn{},
+		lastNames:  map[string]string{},
+		toolNames:  map[string][]string{},
+		advertised: map[string]bool{},
 	}
 	ctx := context.Background()
 
@@ -135,11 +138,9 @@ func Serve(version string, psk []byte) int {
 		fmt.Fprintln(os.Stderr, "aish mcp-proxy:", err)
 		return 1
 	}
+	p.server = server
 	for _, t := range specs {
-		name := t.Name
-		server.AddTool(t, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return p.forward(ctx, name, req)
-		})
+		p.addMirroredTool(server, t)
 	}
 
 	ss, err := server.Connect(ctx, &mcp.IOTransport{Reader: os.Stdin, Writer: os.Stdout}, nil)
@@ -151,6 +152,73 @@ func Serve(version string, psk []byte) int {
 	ss.Wait()
 	p.closeAll()
 	return 0
+}
+
+// addMirroredTool registers one mirrored tool and records that it is live.
+func (p *aggProxy) addMirroredTool(server *mcp.Server, t *mcp.Tool) {
+	name := t.Name
+	server.AddTool(t, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return p.forward(ctx, name, req)
+	})
+	p.mu.Lock()
+	p.advertised[name] = true
+	p.mu.Unlock()
+}
+
+// refreshTools re-derives the advertised union and applies the difference to
+// the running server.
+//
+// The advertised set used to be a snapshot taken when the client connected, so
+// a session that started or was rebuilt afterwards contributed nothing until
+// the client reconnected: its tools had no handler and could not be called.
+// That is the same defect as advertising a single session's surface, one axis
+// over — frozen in time rather than chosen by luck. It became visible the
+// moment list_sessions began reporting each session's tools live, because the
+// entry point then named tools the client had no way to invoke.
+//
+// The SDK emits notifications/tools/list_changed on add and remove, so a
+// client that honours it sees the corrected surface without reconnecting.
+func (p *aggProxy) refreshTools(ctx context.Context) {
+	p.mu.Lock()
+	server := p.server
+	p.mu.Unlock()
+	if server == nil {
+		return
+	}
+	specs, err := p.toolSpecs(ctx)
+	if err != nil || len(specs) == 0 {
+		return // never tear the surface down over a transient failure
+	}
+	current := map[string]bool{}
+	for _, t := range specs {
+		current[t.Name] = true
+	}
+	p.mu.Lock()
+	var stale []string
+	for name := range p.advertised {
+		if !current[name] {
+			stale = append(stale, name)
+		}
+	}
+	known := make(map[string]bool, len(p.advertised))
+	for k, v := range p.advertised {
+		known[k] = v
+	}
+	p.mu.Unlock()
+
+	for _, t := range specs {
+		if !known[t.Name] {
+			p.addMirroredTool(server, t)
+		}
+	}
+	if len(stale) > 0 {
+		server.RemoveTools(stale...)
+		p.mu.Lock()
+		for _, name := range stale {
+			delete(p.advertised, name)
+		}
+		p.mu.Unlock()
+	}
 }
 
 // forward routes a tool call to the session named by its `session` argument
@@ -422,6 +490,11 @@ type listSessionsResult struct {
 }
 
 func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, args listSessionsArgs) (*mcp.CallToolResult, listSessionsResult, error) {
+	// Enumeration is where a caller learns what exists, so it is also where
+	// the advertised surface must catch up with reality: reporting a tool here
+	// that has no handler would be worse than not reporting it at all.
+	p.refreshTools(ctx)
+
 	var out listSessionsResult
 	live := List()
 	for _, s := range live {
@@ -547,7 +620,7 @@ func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 		}
 		public := filterTools(tools)
 		p.rememberToolNames(info.ID, public)
-		sets = append(sets, labeledTools{label: info.Label(), tools: public})
+		sets = append(sets, labeledTools{label: info.Label(), backend: info.Backend, tools: public})
 	}
 	if len(sets) > 0 {
 		merged := mergeToolSpecs(sets)
@@ -593,13 +666,15 @@ func filterTools(tools []*mcp.Tool) []*mcp.Tool {
 // labeledTools is one session's advertised tool set, tagged for divergence
 // reporting; labeledTool is a single tool from it.
 type labeledTools struct {
-	label string
-	tools []*mcp.Tool
+	label   string
+	backend string
+	tools   []*mcp.Tool
 }
 
 type labeledTool struct {
-	label string
-	tool  *mcp.Tool
+	label   string
+	backend string
+	tool    *mcp.Tool
 }
 
 // mergeToolSpecs unions tool sets by name. Only one variant of a shared name
@@ -618,7 +693,7 @@ func mergeToolSpecs(sets []labeledTools) []*mcp.Tool {
 			if _, seen := variants[t.Name]; !seen {
 				order = append(order, t.Name)
 			}
-			variants[t.Name] = append(variants[t.Name], labeledTool{label: s.label, tool: t})
+			variants[t.Name] = append(variants[t.Name], labeledTool{label: s.label, backend: s.backend, tool: t})
 		}
 	}
 	out := make([]*mcp.Tool, 0, len(order))
@@ -632,12 +707,13 @@ func mergeToolSpecs(sets []labeledTools) []*mcp.Tool {
 			}
 		}
 		merged := *base.tool
-		if others := divergentLabels(vs, base); len(others) > 0 {
+		if others := divergentBackends(vs, base); len(others) > 0 {
 			merged.Description = strings.TrimRight(merged.Description, " ") +
-				" NOTE: sessions on this machine implement different variants of this tool." +
-				" This text describes " + base.label + "; " + strings.Join(others, ", ") +
-				" differ (behaviour, visibility or accepted arguments may not match)." +
-				" Confirm the target session before relying on the details above."
+				" NOTE: backends on this machine implement different variants of this tool." +
+				" This text describes the " + describeBackend(base.backend) + " backend; the " +
+				strings.Join(others, " and ") + " backend implements a different variant" +
+				" (behaviour, visibility or accepted arguments may not match)." +
+				" Check the target session's backend in list_sessions before relying on the details above."
 		}
 		ensureSessionArg(&merged)
 		out = append(out, &merged)
@@ -714,16 +790,36 @@ func backendHint(backend string) string {
 	return ""
 }
 
-// divergentLabels names the sessions whose variant of a tool differs from the
-// one being advertised.
-func divergentLabels(vs []labeledTool, base labeledTool) []string {
+// divergentBackends names the BACKENDS whose variant of a tool differs from
+// the one advertised. Naming backends rather than sessions matters because the
+// note outlives the sessions it was built from: session ids change every time
+// a session restarts, and a warning pointing at an id that no longer exists
+// reads as stale noise rather than a live caveat.
+func divergentBackends(vs []labeledTool, base labeledTool) []string {
+	seen := map[string]bool{}
 	var out []string
 	for _, v := range vs {
-		if v.label != base.label && !sameToolShape(v.tool, base.tool) {
-			out = append(out, v.label)
+		if v.backend == base.backend || sameToolShape(v.tool, base.tool) {
+			continue
 		}
+		name := describeBackend(v.backend)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
 	}
+	sort.Strings(out)
 	return out
+}
+
+// describeBackend renders a backend for a caller, tolerating a session that
+// predates the backend file.
+func describeBackend(backend string) string {
+	if backend == "" {
+		return "unknown"
+	}
+	return backend
 }
 
 // sameToolShape reports whether two same-named tools are interchangeable from

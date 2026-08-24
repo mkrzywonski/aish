@@ -49,11 +49,11 @@ func find(t *testing.T, tools []*mcp.Tool, name string) *mcp.Tool {
 // though its session serves it.
 func TestMergeToolSpecsUnionsAcrossSessions(t *testing.T) {
 	merged := mergeToolSpecs([]labeledTools{
-		{label: "aaa (nixos)", tools: []*mcp.Tool{
+		{label: "aaa (nixos)", backend: "shared_terminal", tools: []*mcp.Tool{
 			{Name: "run_command", Description: "type into the shared terminal", InputSchema: schema("command", "session")},
 			{Name: "file_read", Description: "read a file", InputSchema: schema("path", "session")},
 		}},
-		{label: "bbb (Windows)", tools: []*mcp.Tool{
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{
 			{Name: "capture_screen", Description: "screenshot the host", InputSchema: schema("mode")},
 			{Name: "file_read", Description: "read a file", InputSchema: schema("path", "session")},
 		}},
@@ -71,7 +71,7 @@ func TestMergeToolSpecsUnionsAcrossSessions(t *testing.T) {
 // proxy needs to route the call.
 func TestMergeToolSpecsInjectsSessionArg(t *testing.T) {
 	merged := mergeToolSpecs([]labeledTools{
-		{label: "bbb (Windows)", tools: []*mcp.Tool{
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{
 			{Name: "capture_screen", Description: "screenshot the host", InputSchema: schema("mode")},
 		}},
 	})
@@ -100,10 +100,10 @@ func TestEnsureSessionArgLeavesAnExistingOneAlone(t *testing.T) {
 // than presenting one backend's variant as universal.
 func TestMergeToolSpecsFlagsDivergentVariants(t *testing.T) {
 	merged := mergeToolSpecs([]labeledTools{
-		{label: "aaa (nixos)", tools: []*mcp.Tool{
+		{label: "aaa (nixos)", backend: "shared_terminal", tools: []*mcp.Tool{
 			{Name: "exec", Description: "invisible out-of-band execution", InputSchema: schema("command", "session")},
 		}},
-		{label: "bbb (Windows)", tools: []*mcp.Tool{
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{
 			{Name: "exec", Description: "visible, mirrored to the human's console", InputSchema: schema("command", "shell")},
 		}},
 	})
@@ -111,8 +111,12 @@ func TestMergeToolSpecsFlagsDivergentVariants(t *testing.T) {
 	if !strings.Contains(desc, "different variants") {
 		t.Errorf("divergent tool advertised without a warning: %q", desc)
 	}
-	if !strings.Contains(desc, "bbb (Windows)") {
-		t.Errorf("warning does not name the diverging session: %q", desc)
+	if !strings.Contains(desc, "direct_host") {
+		t.Errorf("warning does not name the diverging backend: %q", desc)
+	}
+	// Session ids change on every restart; a note pointing at one goes stale.
+	if strings.Contains(desc, "bbb (Windows)") {
+		t.Errorf("warning names a session instead of a backend: %q", desc)
 	}
 	// The routing-aware variant is the one that can actually be addressed.
 	if !strings.Contains(desc, "invisible out-of-band") {
@@ -125,8 +129,8 @@ func TestMergeToolSpecsQuietWhenVariantsAgree(t *testing.T) {
 		return &mcp.Tool{Name: "file_stat", Description: "stat a path", InputSchema: schema("path", "session")}
 	}
 	merged := mergeToolSpecs([]labeledTools{
-		{label: "aaa (nixos)", tools: []*mcp.Tool{identical()}},
-		{label: "bbb (Windows)", tools: []*mcp.Tool{identical()}},
+		{label: "aaa (nixos)", backend: "shared_terminal", tools: []*mcp.Tool{identical()}},
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{identical()}},
 	})
 	if desc := find(t, merged, "file_stat").Description; desc != "stat a path" {
 		t.Errorf("identical variants should not be annotated, got %q", desc)
