@@ -163,7 +163,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	registerSearchTools(server, sess)
 	registerTransferTools(server, sess)
 	registerScreenshotTools(server, sess)
-	server.AddReceivingMiddleware(sess.auth.middleware())
+	server.AddReceivingMiddleware(sess.auth.middleware(), visibilityMiddleware())
 
 	unixCtx, cancelUnix := context.WithCancel(ctx)
 	defer cancelUnix()

@@ -197,7 +197,9 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	// identity, inside forwarding so a cross-session call is recorded once at
 	// the session that executes it, and last so it sees the final structured
 	// result the route's `via` is read from.
-	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core), oobLogMiddleware(core))
+	// visibility is stamped innermost of all, so it annotates the handler's
+	// own result before the log reads it and before anything forwards it.
+	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core), oobLogMiddleware(core), visibilityMiddleware())
 
 	go func() {
 		<-ctx.Done()
