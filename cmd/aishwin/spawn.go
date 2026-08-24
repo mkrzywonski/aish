@@ -132,7 +132,10 @@ func startPiped(cmd *exec.Cmd) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	cmd.Stderr = os.Stderr
+	// nil when this process has no console: as a GUI-subsystem binary launched
+	// from Explorer there is nothing to inherit, and passing an invalid handle
+	// to CreateProcess risks the spawn itself for diagnostics nobody can read.
+	cmd.Stderr = consoleStderr()
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
 	if err := cmd.Start(); err != nil {
 		return nil, nil, nil, err

@@ -47,8 +47,13 @@ aishwnd:
 # aishwin.exe is the Windows half — cross-compiled, copy it to the Windows
 # machine (there's no `make install` target for it; see README/plan doc for
 # the manual copy step).
+# -H=windowsgui makes this a GUI-subsystem binary so a shell that launches it
+# gets its prompt back immediately instead of being held until aishwin exits.
+# cmd.exe/PowerShell decide whether to wait from the PE header, so this is the
+# only lever; console output still works because main attaches the parent
+# console (console_windows.go).
 aishwin:
-	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o aishwin.exe ./cmd/aishwin
+	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS) -H=windowsgui" -o aishwin.exe ./cmd/aishwin
 
 # aishwin-dev is a DISTINCT build variant carrying the aishwindev tag: it
 # auto-approves the human approval dialog and activates a file-triggered
@@ -59,7 +64,7 @@ aishwin:
 # accidentally skip approval. Never install this as the real session's
 # aishwin.exe; its window title says "[DEV]" for exactly this reason.
 aishwin-dev:
-	GOOS=windows GOARCH=amd64 go build -tags aishwindev -ldflags "$(LDFLAGS)" -o aishwin-dev.exe ./cmd/aishwin
+	GOOS=windows GOARCH=amd64 go build -tags aishwindev -ldflags "$(LDFLAGS) -H=windowsgui" -o aishwin-dev.exe ./cmd/aishwin
 
 # Usage:  make build && sudo make install
 #

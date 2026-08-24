@@ -42,6 +42,10 @@ func main() {
 		os.Exit(runAskPass(strings.Join(os.Args[1:], " ")))
 	}
 
+	// Deliberately after the askpass branch above: that path talks to ssh over
+	// a pipe and must keep its stdout untouched.
+	attachParentConsole()
+
 	version = resolveVersion(version)
 
 	fs := flag.NewFlagSet("aishwin", flag.ExitOnError)
