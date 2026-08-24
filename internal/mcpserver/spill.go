@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-ssh/internal/outcap"
 	"ai-ssh/internal/sshmux"
 )
 
@@ -33,10 +34,9 @@ import (
 // hosts at teardown, exactly when the connection may be gone, and on an
 // MFA-protected host could cost a 2FA push to delete a temp file.
 
-// execOutputInline bounds what a single exec returns inline. It matches the
-// Windows side deliberately: an earlier 64 KiB produced results the MCP client
-// refused to deliver inline, which turned a large answer into a detour.
-const execOutputInline = 16 << 10
+// execOutputInline bounds what a single exec returns inline, shared with every
+// other path so output is not spilled at one threshold and trimmed at another.
+const execOutputInline = outcap.MaxInline
 
 type spillState struct {
 	mu   sync.Mutex

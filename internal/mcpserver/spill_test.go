@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"strings"
 	"testing"
+
+	"ai-ssh/internal/outcap"
 )
 
 // exec has no scrollback behind it, so a trimmed result must still say the
@@ -40,10 +42,16 @@ func TestCapExecOutputDoesNotSplitRunes(t *testing.T) {
 	}
 }
 
-// The Windows side and this one must trim at the same size, or output spills
-// to a file at one threshold and is trimmed at another.
-func TestInlineCapsAgreeAcrossBackends(t *testing.T) {
-	if execOutputInline != 16<<10 {
-		t.Errorf("exec inline cap is %d; the direct_host backend uses 16 KiB", execOutputInline)
+// Every path now trims at one shared constant, so agreement is structural
+// rather than something to keep checking. What still needs asserting is that
+// the value stays small enough to be returned inline: a cap above the client's
+// own limit means a capped result is refused and written to disk, which is the
+// detour the cap exists to prevent.
+func TestInlineCapIsReturnableInline(t *testing.T) {
+	if outcap.MaxInline > 32<<10 {
+		t.Errorf("inline cap is %d bytes; results that large are refused inline", outcap.MaxInline)
+	}
+	if execOutputInline != outcap.MaxInline {
+		t.Errorf("exec cap %d diverges from the shared constant %d", execOutputInline, outcap.MaxInline)
 	}
 }

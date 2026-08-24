@@ -8,6 +8,7 @@
 package aishwinwire
 
 import (
+	"ai-ssh/internal/outcap"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -87,7 +88,7 @@ type DirectoryCreateResultData struct {
 // and spilled to disk, which turned a large answer into a detour rather than
 // an answer. Output beyond this is written to a file on the host that ran the
 // command, whose path the result reports.
-const MaxInlineOutput = 16 * 1024
+const MaxInlineOutput = outcap.MaxInline
 
 // ConsoleReadData asks for the console feed -- the scrolling account of
 // operations the human watching this machine sees -- since a cursor.

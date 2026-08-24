@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"ai-ssh/internal/outcap"
 	"ai-ssh/internal/session"
 	"ai-ssh/internal/state"
 	"ai-ssh/internal/term"
@@ -40,7 +41,11 @@ type Result struct {
 	CursorEnd   int64  `json:"cursor_end"`
 }
 
-const maxReturn = 64 << 10 // cap on returned output; half head, half tail
+// maxReturn caps returned output: half head, half tail. Shared with the
+// out-of-band and aishwin paths so every tool trims at the same size. Nothing
+// is lost here — the full output is in the scrollback, and the truncation
+// notice tells the caller to fetch it with read_output.
+const maxReturn = outcap.MaxInline
 
 type Engine struct {
 	Sess    *session.Session
