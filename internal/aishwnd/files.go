@@ -17,7 +17,7 @@ import (
 
 // These four mirror aish's own file_read/file_write/file_stat/directory_list
 // schemas (internal/mcpserver/tools_remote.go) minus the SessionArg routing
-// field — same reasoning as execArgs in exec.go. file_edit/file_patch (which
+// field — same reasoning as runCommandArgs in run_command.go. file_edit/file_patch (which
 // build on readRemoteFile/writeRemoteFile below) live in edit.go.
 // file_grep/file_search/file_upload/file_download remain later-stage work
 // per the plan doc's tool matrix.

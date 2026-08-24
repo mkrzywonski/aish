@@ -113,7 +113,7 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Description: "Run a command on the host the shared session is currently on. Invisible out-of-band execution " +
 			"requires authorization and an OOB route; " +
 			"otherwise the command runs in-band, visibly, through the shared terminal. Use background=true for " +
-			"long-running commands, then poll exec_status (background requires an OOB route). Set cwd to an absolute " +
+			"long-running commands, then poll task_status (background requires an OOB route). Set cwd to an absolute " +
 			"directory when the command must run somewhere other than the OOB shell's default directory. " +
 			"Out-of-band, the command runs as session_status.oob_user (the SSH login user) regardless of any su/sudo -i " +
 			"in the shared shell; for commands the user should see, or that need the shell's current identity/privileges, " +
@@ -123,10 +123,10 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	}, c.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "exec_status",
+		Name:        "task_status",
 		Description: "Poll a background task started by exec: incremental output (pass next_cursor back), running state, exit code.",
 		Annotations: readOnlyTool("Poll background command"),
-	}, c.execStatus)
+	}, c.taskStatus)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "probe_host",
@@ -1470,7 +1470,7 @@ func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args 
 	return nil, transferResult{Bytes: int64(len(dec)), Via: resultVia(rt), Host: rt.host, Warning: warning}, nil
 }
 
-// ---- exec / exec_status ----
+// ---- exec / task_status ----
 
 type execArgs struct {
 	SessionArg
@@ -1607,23 +1607,23 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	return nil, res, nil
 }
 
-type execStatusArgs struct {
+type taskStatusArgs struct {
 	SessionArg
 	TaskID string `json:"task_id"`
 	Cursor *int64 `json:"cursor,omitempty" jsonschema:"pass next_cursor from the previous poll"`
 }
 
-type execStatusResult struct {
+type taskStatusResult struct {
 	Running    bool   `json:"running"`
 	Output     string `json:"output"`
 	NextCursor int64  `json:"next_cursor"`
 	ExitCode   *int   `json:"exit_code,omitempty"`
 }
 
-func (c *Core) execStatus(ctx context.Context, req *mcp.CallToolRequest, args execStatusArgs) (*mcp.CallToolResult, execStatusResult, error) {
+func (c *Core) taskStatus(ctx context.Context, req *mcp.CallToolRequest, args taskStatusArgs) (*mcp.CallToolResult, taskStatusResult, error) {
 	task := c.Tasks.Get(args.TaskID)
 	if task == nil {
-		return nil, execStatusResult{}, fmt.Errorf("no such task %q", args.TaskID)
+		return nil, taskStatusResult{}, fmt.Errorf("no such task %q", args.TaskID)
 	}
 	cursor := int64(0)
 	if args.Cursor != nil {
@@ -1631,7 +1631,7 @@ func (c *Core) execStatus(ctx context.Context, req *mcp.CallToolRequest, args ex
 	}
 	data, next, _ := task.Out.ReadFrom(cursor, execOutputCap)
 	running, exit := task.Status()
-	return nil, execStatusResult{Running: running, Output: string(data), NextCursor: next, ExitCode: exit}, nil
+	return nil, taskStatusResult{Running: running, Output: string(data), NextCursor: next, ExitCode: exit}, nil
 }
 
 // ---- helpers ----

@@ -11,7 +11,7 @@ import (
 )
 
 // newTestWirePair sets up a session wired to a fake Windows peer, with
-// ReadLoop already running (see the comment on TestExecToolRoundTrip for why
+// ReadLoop already running (see the comment on TestRunCommandRoundTrip for why
 // that's required). handle is invoked once per request the fake peer
 // receives, and must send exactly one reply frame with a matching ID.
 func newTestWirePair(t *testing.T, id string, handle func(t *testing.T, peer *aishwinwire.Conn, f aishwinwire.Frame)) *aishwndSession {

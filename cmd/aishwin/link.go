@@ -12,13 +12,13 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-// execD is the persistent shell/background-task dispatcher, constructed
+// cmdD is the persistent shell/background-task dispatcher, constructed
 // once by main and outliving individual reconnects — a transient WSL/ssh
 // hiccup shouldn't lose the shell's cwd state or a running background task.
 // Package-level (rather than threaded through run/runOnce as a parameter)
 // since menu.go also needs to reach it, to push a live env var into the
 // running shell and to report its kind in status output.
-var execD *execDispatcher
+var cmdD *commandDispatcher
 
 // run drives the connection to the Linux half for the lifetime of the
 // process: spawn, handshake, serve until the link drops, then relaunch with
@@ -62,8 +62,8 @@ func runOnce(ctx context.Context, spawn spawnFunc) error {
 	hello, err := json.Marshal(aishwinwire.HelloData{
 		Proto:           aishwinwire.ProtoVersion,
 		Name:            CurrentSessionName(),
-		AvailableShells: shellKindStrings(execD.available),
-		DefaultShell:    string(execD.defaultKind),
+		AvailableShells: shellKindStrings(cmdD.available),
+		DefaultShell:    string(cmdD.defaultKind),
 	})
 	if err != nil {
 		return err
@@ -118,11 +118,11 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		// Delivered to the pending Await() registered by menuRename; nothing
 		// to do here. Listed for clarity — ReadLoop already routes it there
 		// before this function ever sees it.
-	case "exec", "exec_poll":
+	case "run_command", "task_poll":
 		// Dispatched off the read loop: a foreground command can legitimately
 		// run for the caller's full timeout, and must not block prompt/notify
 		// frames (or other exec/exec_poll/file_* frames) arriving meanwhile.
-		go execD.handle(wc, f)
+		go cmdD.handle(wc, f)
 	case "file_read":
 		go handleFileRead(wc, f)
 	case "file_write":

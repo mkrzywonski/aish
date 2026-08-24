@@ -12,16 +12,16 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-const defaultExecTimeout = 30 * time.Second
+const defaultCommandTimeout = 30 * time.Second
 
-// execDispatcher wires incoming exec/exec_poll wire frames to a persistent
+// commandDispatcher wires incoming exec/exec_poll wire frames to a persistent
 // shell (foreground) or the background task table (background). It is not
 // locked to one fixed shellKind for its whole lifetime: each supported kind
 // (cmd, powershell) gets its own independently lazily-started,
 // independently-dying persistent shell, so the AI can pick whichever fits
 // a given command without losing another kind's cwd/env state by switching
 // to it.
-type execDispatcher struct {
+type commandDispatcher struct {
 	defaultKind shellKind   // used when a request doesn't specify shell
 	available   []shellKind // kinds this host can actually run
 
@@ -31,8 +31,8 @@ type execDispatcher struct {
 	tasks *backgroundTasks
 }
 
-func newExecDispatcher(defaultKind shellKind, available []shellKind) *execDispatcher {
-	return &execDispatcher{
+func newCommandDispatcher(defaultKind shellKind, available []shellKind) *commandDispatcher {
+	return &commandDispatcher{
 		defaultKind: defaultKind,
 		available:   available,
 		shells:      map[shellKind]*shellSession{},
@@ -40,7 +40,7 @@ func newExecDispatcher(defaultKind shellKind, available []shellKind) *execDispat
 	}
 }
 
-func (d *execDispatcher) isAvailable(kind shellKind) bool {
+func (d *commandDispatcher) isAvailable(kind shellKind) bool {
 	for _, k := range d.available {
 		if k == kind {
 			return true
@@ -52,7 +52,7 @@ func (d *execDispatcher) isAvailable(kind shellKind) bool {
 // resolveKind maps an exec call's (possibly empty) requested shell name to
 // a validated shellKind, applying d.defaultKind when unspecified. Rejects
 // an unknown name up front with an actionable message.
-func (d *execDispatcher) resolveKind(requested string) (shellKind, error) {
+func (d *commandDispatcher) resolveKind(requested string) (shellKind, error) {
 	kind := d.defaultKind
 	if requested != "" {
 		kind = shellKind(requested)
@@ -75,7 +75,7 @@ func (d *execDispatcher) resolveKind(requested string) (shellKind, error) {
 // channel — but never touches any OTHER kind's shell. Freshly-started
 // shells inherit the console menu's current custom env vars
 // (access.environ) at spawn time.
-func (d *execDispatcher) currentShell(kind shellKind) (*shellSession, error) {
+func (d *commandDispatcher) currentShell(kind shellKind) (*shellSession, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := d.shells[kind]
@@ -94,7 +94,7 @@ func (d *execDispatcher) currentShell(kind shellKind) (*shellSession, error) {
 // kinds — used by the console menu's env-var push (realmenu.go:
 // pushLiveEnv) to apply a newly-set var to whichever shells are actually
 // running right now, since more than one kind can be alive at once.
-func (d *execDispatcher) liveShells() []*shellSession {
+func (d *commandDispatcher) liveShells() []*shellSession {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []*shellSession
@@ -117,7 +117,7 @@ func (d *execDispatcher) liveShells() []*shellSession {
 // misleading "not a module" error instead of an obvious cwd-mismatch
 // signal). Keyed by kind: a background powershell call inherits
 // powershell's own last cwd, not cmd's, and vice versa.
-func (d *execDispatcher) liveCWD(kind shellKind) string {
+func (d *commandDispatcher) liveCWD(kind shellKind) string {
 	d.mu.Lock()
 	s := d.shells[kind]
 	d.mu.Unlock()
@@ -127,24 +127,24 @@ func (d *execDispatcher) liveCWD(kind shellKind) string {
 	return s.CWD()
 }
 
-func (d *execDispatcher) handle(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+func (d *commandDispatcher) handle(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	switch f.Type {
-	case "exec":
-		d.handleExec(wc, f)
-	case "exec_poll":
-		d.handleExecPoll(wc, f)
+	case "run_command":
+		d.handleRunCommand(wc, f)
+	case "task_poll":
+		d.handleTaskPoll(wc, f)
 	}
 }
 
-func (d *execDispatcher) handleExec(wc *aishwinwire.Conn, f aishwinwire.Frame) {
-	var req aishwinwire.ExecData
+func (d *commandDispatcher) handleRunCommand(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	var req aishwinwire.RunCommandData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
 
 	kind, err := d.resolveKind(req.Shell)
 	if err != nil {
-		send(wc, "exec_result", f.ID, aishwinwire.ExecResultData{Error: err.Error()})
+		send(wc, "run_command_result", f.ID, aishwinwire.RunCommandResultData{Error: err.Error()})
 		return
 	}
 
@@ -166,11 +166,11 @@ func (d *execDispatcher) handleExec(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 			cwd = d.liveCWD(kind)
 		}
 		id, err := d.tasks.Start(kind, req.Command, cwd)
-		result := aishwinwire.ExecResultData{TaskID: id, Shell: string(kind)}
+		result := aishwinwire.RunCommandResultData{TaskID: id, Shell: string(kind)}
 		if err != nil {
-			result = aishwinwire.ExecResultData{Error: err.Error(), Shell: string(kind)}
+			result = aishwinwire.RunCommandResultData{Error: err.Error(), Shell: string(kind)}
 		}
-		send(wc, "exec_result", f.ID, result)
+		send(wc, "run_command_result", f.ID, result)
 		return
 	}
 
@@ -183,36 +183,36 @@ func (d *execDispatcher) handleExec(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 
 	shell, err := d.currentShell(kind)
 	if err != nil {
-		send(wc, "exec_result", f.ID, aishwinwire.ExecResultData{Error: err.Error(), Shell: string(kind)})
+		send(wc, "run_command_result", f.ID, aishwinwire.RunCommandResultData{Error: err.Error(), Shell: string(kind)})
 		return
 	}
 
-	timeout := defaultExecTimeout
+	timeout := defaultCommandTimeout
 	if req.TimeoutMs > 0 {
 		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
 	}
 
 	output, exitCode, timedOut, err := shell.Run(command, timeout)
-	result := aishwinwire.ExecResultData{Output: output, TimedOut: timedOut, Shell: string(kind)}
+	result := aishwinwire.RunCommandResultData{Output: output, TimedOut: timedOut, Shell: string(kind)}
 	if err != nil {
 		result.Error = err.Error()
 	} else if !timedOut {
 		result.ExitCode = &exitCode
 	}
-	send(wc, "exec_result", f.ID, result)
+	send(wc, "run_command_result", f.ID, result)
 }
 
-func (d *execDispatcher) handleExecPoll(wc *aishwinwire.Conn, f aishwinwire.Frame) {
-	var req aishwinwire.ExecPollData
+func (d *commandDispatcher) handleTaskPoll(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	var req aishwinwire.TaskPollData
 	if err := json.Unmarshal(f.Data, &req); err != nil {
 		return
 	}
 	running, output, next, code, err := d.tasks.Poll(req.TaskID, req.Cursor)
-	result := aishwinwire.ExecPollResultData{Running: running, Output: output, NextCursor: next, ExitCode: code}
+	result := aishwinwire.TaskPollResultData{Running: running, Output: output, NextCursor: next, ExitCode: code}
 	if err != nil {
 		result.Error = err.Error()
 	}
-	send(wc, "exec_poll_result", f.ID, result)
+	send(wc, "task_poll_result", f.ID, result)
 }
 
 // withCwd folds a one-time working-directory change into command as a

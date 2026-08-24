@@ -469,7 +469,7 @@ func setCaretTextColor(hwnd syscall.Handle, auto bool, color uint32) {
 // worker processes, say) that inherits the handle and outlives its parent
 // can leave Wait() blocked indefinitely even though the command a caller
 // actually cares about is long gone (background.go's Poll uses this as a
-// fallback so exec_status doesn't report running:true forever in that
+// fallback so task_status doesn't report running:true forever in that
 // case). ok is false if the process handle couldn't be opened at all
 // (already exited and cleaned up, or never existed).
 func processExited(pid int) (exited bool, code int) {

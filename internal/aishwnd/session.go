@@ -156,7 +156,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "aishwnd", Version: Version}, nil)
 	registerAuthTools(server, sess.auth)
-	registerExecTools(server, sess, hello.AvailableShells, hello.DefaultShell)
+	registerCommandTools(server, sess, hello.AvailableShells, hello.DefaultShell)
 	registerStatusTool(server, sess, hello.AvailableShells, hello.DefaultShell, hello.Proto)
 	registerFileTools(server, sess)
 	registerEditTools(server, sess)

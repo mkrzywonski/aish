@@ -72,7 +72,7 @@ func main() {
 		kind = shellCmd
 	}
 
-	execD = newExecDispatcher(kind, detectAvailableShells())
+	cmdD = newCommandDispatcher(kind, detectAvailableShells())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

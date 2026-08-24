@@ -16,7 +16,7 @@ import (
 )
 
 // shellKind selects which persistent Windows shell backs one exec call --
-// see execDispatcher (exec.go), which keeps one independent persistent
+// see commandDispatcher (exec.go), which keeps one independent persistent
 // shellSession per kind, so switching which one a call uses never loses
 // another kind's cwd/env state.
 type shellKind string

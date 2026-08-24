@@ -95,12 +95,12 @@ func menuRename(name string) {
 // shell immediately, if any -- otherwise it only takes effect the next
 // time each shell (re)starts. More than one kind can be live at once (cmd
 // and powershell each keep their own independent persistent process -- see
-// execDispatcher, exec.go), so this pushes into all of them, each with its
+// commandDispatcher, exec.go), so this pushes into all of them, each with its
 // own correct set-var syntax, rather than a single fixed shell.
 // Best-effort: output isn't captured or checked, matching a human just
 // typing the equivalent command themselves.
 func pushLiveEnv(key, value string) {
-	for _, shell := range execD.liveShells() {
+	for _, shell := range cmdD.liveShells() {
 		setCmd := envSetCommand(shell.kind, key, value)
 		go func(s *shellSession, cmd string) { _, _, _, _ = s.Run(cmd, 10*time.Second) }(shell, setCmd)
 	}

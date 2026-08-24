@@ -17,7 +17,7 @@ import (
 
 // ProtoVersion guards the hello handshake. Bumping it lets either side
 // refuse a mismatched peer with a clear error instead of misparsing frames.
-const ProtoVersion = 1
+const ProtoVersion = 2
 
 // MaxFrameLine bounds a single wire frame. Sized for file_upload/
 // file_download (internal/aishwnd's maxTransferBytes, 32MiB), which -- like
@@ -150,11 +150,11 @@ type NotifyData struct {
 	Text string `json:"text"`
 }
 
-// ExecData requests a command run on the Windows peer, mirroring aish's own
-// exec tool args (internal/mcpserver/tools_remote.go's execArgs) minus the
+// RunCommandData requests a command run on the Windows peer, mirroring aish's own
+// exec tool args (internal/mcpserver/tools_remote.go's runCommandArgs) minus the
 // SessionArg routing field, which aishwnd doesn't implement cross-session
 // forwarding for.
-type ExecData struct {
+type RunCommandData struct {
 	Command    string `json:"command"`
 	Cwd        string `json:"cwd,omitempty"`
 	Background bool   `json:"background,omitempty"`
@@ -165,12 +165,12 @@ type ExecData struct {
 	Shell string `json:"shell,omitempty"`
 }
 
-// ExecResultData answers an ExecData request, mirroring aish's execResult
+// RunCommandResultData answers an RunCommandData request, mirroring aish's runCommandResult
 // shape (minus Via/Host, which aishwnd fills in itself since they're
 // constant for this transport). Shell reports which kind actually ran the
 // command (the resolved default when the request left it empty), so the AI
 // can tell what happened even when it didn't specify one.
-type ExecResultData struct {
+type RunCommandResultData struct {
 	Output   string `json:"output,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
@@ -179,16 +179,16 @@ type ExecResultData struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// ExecPollData polls a background task started by an ExecData with
-// Background: true, mirroring aish's execStatusArgs.
-type ExecPollData struct {
+// TaskPollData polls a background task started by an RunCommandData with
+// Background: true, mirroring aish's taskStatusArgs.
+type TaskPollData struct {
 	TaskID string `json:"task_id"`
 	Cursor int64  `json:"cursor,omitempty"`
 }
 
-// ExecPollResultData answers an ExecPollData poll, mirroring aish's
-// execStatusResult shape.
-type ExecPollResultData struct {
+// TaskPollResultData answers an TaskPollData poll, mirroring aish's
+// taskStatusResult shape.
+type TaskPollResultData struct {
 	Running    bool   `json:"running"`
 	Output     string `json:"output,omitempty"`
 	NextCursor int64  `json:"next_cursor"`

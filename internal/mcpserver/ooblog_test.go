@@ -145,7 +145,7 @@ func TestLogTargetIdentifiesTheOperation(t *testing.T) {
 		{"file_search", map[string]any{"pattern": "*.go"}, `"*.go"`},
 		{"file_upload", map[string]any{"local_path": "/a", "remote_path": "/b"}, "/a -> /b"},
 		{"file_download", map[string]any{"local_path": "/a", "remote_path": "/b"}, "/b -> /a"},
-		{"exec_status", map[string]any{"task_id": "t-1"}, "t-1"},
+		{"task_status", map[string]any{"task_id": "t-1"}, "t-1"},
 		{"read_screen", map[string]any{}, ""},
 	}
 	for _, tc := range cases {

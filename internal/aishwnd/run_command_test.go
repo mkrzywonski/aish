@@ -10,19 +10,19 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-// TestExecToolRoundTrip drives aishwndSession.execTool/execStatus directly
+// TestRunCommandRoundTrip drives aishwndSession.runCommandTool/taskStatus directly
 // against a fake Windows peer (an io.Pipe, not a real cmd/aishwin process) to
 // verify the wire round trip: the frame aishwnd sends, and how it maps a
-// synthetic response back into execResult/execStatusResult. Real cmd.exe/
+// synthetic response back into runCommandResult/taskStatusResult. Real cmd.exe/
 // PowerShell behavior is covered separately by
 // cmd/aishwin's TestShellAgainstRealWindowsHost.
-func TestExecToolRoundTrip(t *testing.T) {
+func TestRunCommandRoundTrip(t *testing.T) {
 	peerIn, ourOut := io.Pipe() // aishwnd -> fake peer
 	ourIn, peerOut := io.Pipe() // fake peer -> aishwnd
 	wire := aishwinwire.NewConn(ourIn, ourOut)
 	peer := aishwinwire.NewConn(peerIn, peerOut)
 	// ReadLoop is what delivers responses to Await-registered channels in
-	// production (it's Run's main blocking loop); without it here, execTool's
+	// production (it's Run's main blocking loop); without it here, runCommandTool's
 	// select on the Await channel would never see the peer's reply.
 	go wire.ReadLoop(func(aishwinwire.Frame) {})
 
@@ -34,7 +34,7 @@ func TestExecToolRoundTrip(t *testing.T) {
 		if err != nil {
 			return
 		}
-		var req aishwinwire.ExecData
+		var req aishwinwire.RunCommandData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			return
 		}
@@ -42,34 +42,34 @@ func TestExecToolRoundTrip(t *testing.T) {
 			t.Errorf("peer received command %q, want %q", req.Command, "echo hi")
 		}
 		code := 0
-		data, _ := json.Marshal(aishwinwire.ExecResultData{Output: "hi", ExitCode: &code})
-		_ = peer.Send(aishwinwire.Frame{Type: "exec_result", ID: f.ID, Data: data})
+		data, _ := json.Marshal(aishwinwire.RunCommandResultData{Output: "hi", ExitCode: &code})
+		_ = peer.Send(aishwinwire.Frame{Type: "run_command_result", ID: f.ID, Data: data})
 	}()
 
-	res, execResult, err := sess.execTool(context.Background(), nil, execArgs{Command: "echo hi"})
+	res, runCommandResult, err := sess.runCommandTool(context.Background(), nil, runCommandArgs{Command: "echo hi"})
 	if err != nil {
-		t.Fatalf("execTool: %v", err)
+		t.Fatalf("runCommandTool: %v", err)
 	}
 	if res != nil {
-		t.Errorf("execTool returned a non-nil *CallToolResult for a success case: %#v", res)
+		t.Errorf("runCommandTool returned a non-nil *CallToolResult for a success case: %#v", res)
 	}
-	if execResult.Output != "hi" {
-		t.Errorf("Output = %q, want %q", execResult.Output, "hi")
+	if runCommandResult.Output != "hi" {
+		t.Errorf("Output = %q, want %q", runCommandResult.Output, "hi")
 	}
-	if execResult.ExitCode == nil || *execResult.ExitCode != 0 {
-		t.Errorf("ExitCode = %v, want 0", execResult.ExitCode)
+	if runCommandResult.ExitCode == nil || *runCommandResult.ExitCode != 0 {
+		t.Errorf("ExitCode = %v, want 0", runCommandResult.ExitCode)
 	}
-	if execResult.Via != "aishwin" {
-		t.Errorf("Via = %q, want %q", execResult.Via, "aishwin")
+	if runCommandResult.Via != "aishwin" {
+		t.Errorf("Via = %q, want %q", runCommandResult.Via, "aishwin")
 	}
-	if execResult.Host != "win-test" {
-		t.Errorf("Host = %q, want %q (the declared session name)", execResult.Host, "win-test")
+	if runCommandResult.Host != "win-test" {
+		t.Errorf("Host = %q, want %q (the declared session name)", runCommandResult.Host, "win-test")
 	}
 }
 
-// TestExecStatusRoundTrip mirrors TestExecToolRoundTrip for the
-// exec_status/exec_poll pair.
-func TestExecStatusRoundTrip(t *testing.T) {
+// TestTaskStatusRoundTrip mirrors TestRunCommandRoundTrip for the
+// task_status/task_poll pair.
+func TestTaskStatusRoundTrip(t *testing.T) {
 	peerIn, ourOut := io.Pipe()
 	ourIn, peerOut := io.Pipe()
 	wire := aishwinwire.NewConn(ourIn, ourOut)
@@ -83,20 +83,20 @@ func TestExecStatusRoundTrip(t *testing.T) {
 		if err != nil {
 			return
 		}
-		var req aishwinwire.ExecPollData
+		var req aishwinwire.TaskPollData
 		if err := json.Unmarshal(f.Data, &req); err != nil {
 			return
 		}
 		if req.TaskID != "task-abc" {
 			t.Errorf("peer received task_id %q, want %q", req.TaskID, "task-abc")
 		}
-		data, _ := json.Marshal(aishwinwire.ExecPollResultData{Running: true, Output: "partial", NextCursor: 7})
-		_ = peer.Send(aishwinwire.Frame{Type: "exec_poll_result", ID: f.ID, Data: data})
+		data, _ := json.Marshal(aishwinwire.TaskPollResultData{Running: true, Output: "partial", NextCursor: 7})
+		_ = peer.Send(aishwinwire.Frame{Type: "task_poll_result", ID: f.ID, Data: data})
 	}()
 
-	_, statusResult, err := sess.execStatus(context.Background(), nil, execStatusArgs{TaskID: "task-abc"})
+	_, statusResult, err := sess.taskStatus(context.Background(), nil, taskStatusArgs{TaskID: "task-abc"})
 	if err != nil {
-		t.Fatalf("execStatus: %v", err)
+		t.Fatalf("taskStatus: %v", err)
 	}
 	if !statusResult.Running {
 		t.Error("Running = false, want true")
@@ -109,12 +109,12 @@ func TestExecStatusRoundTrip(t *testing.T) {
 	}
 }
 
-// TestExecToolTimesOutCleanly confirms a peer that receives the request but
+// TestRunCommandTimesOutCleanly confirms a peer that receives the request but
 // never answers surfaces as an error once the wait budget elapses, rather
 // than hanging indefinitely. Uses Background: true so it exercises the
-// shorter 15s wait budget (see execWaitTimeout) instead of the ~40s
+// shorter 15s wait budget (see runCommandWaitTimeout) instead of the ~40s
 // foreground default.
-func TestExecToolTimesOutCleanly(t *testing.T) {
+func TestRunCommandTimesOutCleanly(t *testing.T) {
 	peerIn, ourOut := io.Pipe()
 	ourIn, _ := io.Pipe() // never written to: the peer never sends a reply
 	wire := aishwinwire.NewConn(ourIn, ourOut)
@@ -129,7 +129,7 @@ func TestExecToolTimesOutCleanly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := sess.execTool(context.Background(), nil, execArgs{Command: "echo hi", Background: true})
+		_, _, err := sess.runCommandTool(context.Background(), nil, runCommandArgs{Command: "echo hi", Background: true})
 		done <- err
 	}()
 
@@ -139,6 +139,6 @@ func TestExecToolTimesOutCleanly(t *testing.T) {
 			t.Error("expected an error when the Windows peer never responds")
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("execTool did not return within the background wait budget")
+		t.Fatal("runCommandTool did not return within the background wait budget")
 	}
 }

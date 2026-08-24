@@ -13,12 +13,12 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-// execArgs/execResult and execStatusArgs/execStatusResult mirror aish's own
-// exec/exec_status schemas (internal/mcpserver/tools_remote.go's execArgs
+// runCommandArgs/runCommandResult and taskStatusArgs/taskStatusResult mirror aish's own
+// run_command/task_status schemas (internal/mcpserver/tools_remote.go's runCommandArgs
 // etc.) minus the SessionArg routing field — aishwnd doesn't implement
 // cross-session forwarding, so declaring a field for it would advertise a
 // capability that doesn't exist.
-type execArgs struct {
+type runCommandArgs struct {
 	Command    string `json:"command"`
 	Cwd        string `json:"cwd,omitempty" jsonschema:"absolute working directory on the Windows host"`
 	Background bool   `json:"background,omitempty"`
@@ -26,7 +26,7 @@ type execArgs struct {
 	Shell      string `json:"shell,omitempty" jsonschema:"which persistent shell runs this command -- see the tool description for what's available on this host and the default when omitted"`
 }
 
-type execResult struct {
+type runCommandResult struct {
 	Output   string `json:"output,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
@@ -36,19 +36,19 @@ type execResult struct {
 	Host     string `json:"host"`
 }
 
-type execStatusArgs struct {
+type taskStatusArgs struct {
 	TaskID string `json:"task_id"`
 	Cursor *int64 `json:"cursor,omitempty" jsonschema:"pass next_cursor from the previous poll"`
 }
 
-type execStatusResult struct {
+type taskStatusResult struct {
 	Running    bool   `json:"running"`
 	Output     string `json:"output"`
 	NextCursor int64  `json:"next_cursor"`
 	ExitCode   *int   `json:"exit_code,omitempty"`
 }
 
-func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []string, defaultShell string) {
+func registerCommandTools(s *mcp.Server, sess *aishwndSession, availableShells []string, defaultShell string) {
 	if defaultShell == "" {
 		defaultShell = "powershell"
 	}
@@ -69,27 +69,27 @@ func registerExecTools(s *mcp.Server, sess *aishwndSession, availableShells []st
 			"cases). Each shell kind keeps its OWN persistent process with its own working directory and " +
 			"environment, independent of the others — " +
 			"switching which one you use for one call never loses another kind's state. " +
-			"Use background=true for long-running commands, then poll exec_status. A foreground command that " +
+			"Use background=true for long-running commands, then poll task_status. A foreground command that " +
 			"times out kills and replaces that shell's persistent process (state is lost) rather than risk its " +
 			"late output corrupting the next command's result.",
-	}, sess.execTool)
+	}, sess.runCommandTool)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "exec_status",
+		Name:        "task_status",
 		Description: "Poll a background task by the task_id returned when a command was started with " +
 			"background=true (run_command on this Windows session; exec on a shared-terminal session): " +
 			"incremental output since next_cursor, whether it is still running, and the exit code once it " +
 			"finishes. Errors if the task_id is unrecognized.",
 		Annotations: readOnlyTool("Poll background command"),
-	}, sess.execStatus)
+	}, sess.taskStatus)
 }
 
-func (s *aishwndSession) execTool(ctx context.Context, req *mcp.CallToolRequest, args execArgs) (*mcp.CallToolResult, execResult, error) {
+func (s *aishwndSession) runCommandTool(ctx context.Context, req *mcp.CallToolRequest, args runCommandArgs) (*mcp.CallToolResult, runCommandResult, error) {
 	if args.Command == "" {
-		return nil, execResult{}, errors.New("command must not be empty")
+		return nil, runCommandResult{}, errors.New("command must not be empty")
 	}
 
-	data, err := json.Marshal(aishwinwire.ExecData{
+	data, err := json.Marshal(aishwinwire.RunCommandData{
 		Command:    args.Command,
 		Cwd:        args.Cwd,
 		Background: args.Background,
@@ -97,21 +97,21 @@ func (s *aishwndSession) execTool(ctx context.Context, req *mcp.CallToolRequest,
 		Shell:      args.Shell,
 	})
 	if err != nil {
-		return nil, execResult{}, err
+		return nil, runCommandResult{}, err
 	}
 
-	raw, err := s.roundTrip("exec", data, execWaitTimeout(args))
+	raw, err := s.roundTrip("run_command", data, runCommandWaitTimeout(args))
 	if err != nil {
-		return nil, execResult{}, err
+		return nil, runCommandResult{}, err
 	}
-	var res aishwinwire.ExecResultData
+	var res aishwinwire.RunCommandResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, execResult{}, fmt.Errorf("malformed exec result from the Windows peer: %w", err)
+		return nil, runCommandResult{}, fmt.Errorf("malformed run_command result from the Windows peer: %w", err)
 	}
 	if res.Error != "" {
-		return nil, execResult{}, errors.New(res.Error)
+		return nil, runCommandResult{}, errors.New(res.Error)
 	}
-	return nil, execResult{
+	return nil, runCommandResult{
 		Output:   res.Output,
 		ExitCode: res.ExitCode,
 		TaskID:   res.TaskID,
@@ -122,31 +122,31 @@ func (s *aishwndSession) execTool(ctx context.Context, req *mcp.CallToolRequest,
 	}, nil
 }
 
-func (s *aishwndSession) execStatus(ctx context.Context, req *mcp.CallToolRequest, args execStatusArgs) (*mcp.CallToolResult, execStatusResult, error) {
+func (s *aishwndSession) taskStatus(ctx context.Context, req *mcp.CallToolRequest, args taskStatusArgs) (*mcp.CallToolResult, taskStatusResult, error) {
 	if args.TaskID == "" {
-		return nil, execStatusResult{}, errors.New("task_id must not be empty")
+		return nil, taskStatusResult{}, errors.New("task_id must not be empty")
 	}
 	cursor := int64(0)
 	if args.Cursor != nil {
 		cursor = *args.Cursor
 	}
-	data, err := json.Marshal(aishwinwire.ExecPollData{TaskID: args.TaskID, Cursor: cursor})
+	data, err := json.Marshal(aishwinwire.TaskPollData{TaskID: args.TaskID, Cursor: cursor})
 	if err != nil {
-		return nil, execStatusResult{}, err
+		return nil, taskStatusResult{}, err
 	}
 
-	raw, err := s.roundTrip("exec_poll", data, 10*time.Second)
+	raw, err := s.roundTrip("task_poll", data, 10*time.Second)
 	if err != nil {
-		return nil, execStatusResult{}, err
+		return nil, taskStatusResult{}, err
 	}
-	var res aishwinwire.ExecPollResultData
+	var res aishwinwire.TaskPollResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, execStatusResult{}, fmt.Errorf("malformed exec_poll result from the Windows peer: %w", err)
+		return nil, taskStatusResult{}, fmt.Errorf("malformed exec_poll result from the Windows peer: %w", err)
 	}
 	if res.Error != "" {
-		return nil, execStatusResult{}, errors.New(res.Error)
+		return nil, taskStatusResult{}, errors.New(res.Error)
 	}
-	return nil, execStatusResult{
+	return nil, taskStatusResult{
 		Running:    res.Running,
 		Output:     res.Output,
 		NextCursor: res.NextCursor,
@@ -154,13 +154,13 @@ func (s *aishwndSession) execStatus(ctx context.Context, req *mcp.CallToolReques
 	}, nil
 }
 
-// execWaitTimeout bounds how long aishwnd waits for aishwin's exec_result
+// runCommandWaitTimeout bounds how long aishwnd waits for aishwin's exec_result
 // before giving up on the wire round trip. Background requests reply almost
 // immediately (spawning, not completion) so get a short fixed bound;
 // foreground requests are bounded by the command's own timeout (which aishwin
 // enforces itself and replies promptly after) plus a buffer for wire
 // latency — this should essentially never fire in practice.
-func execWaitTimeout(args execArgs) time.Duration {
+func runCommandWaitTimeout(args runCommandArgs) time.Duration {
 	if args.Background {
 		return 15 * time.Second
 	}

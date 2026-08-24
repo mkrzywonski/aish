@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// backgroundTask tracks one detached command spawned by exec{background:
+// backgroundTask tracks one detached command spawned by run_command{background:
 // true}. Unlike the persistent foreground shell, each background command
 // gets its own one-shot process (`cmd.exe /c <command>` or
 // `powershell.exe -Command <command>`) — Go's exec.Cmd reports the real
@@ -59,7 +59,7 @@ func (b *backgroundTasks) Start(kind shellKind, command, cwd string) (string, er
 	// line-by-line into the shared log view could interleave two commands'
 	// output into one unreadable stream. Instead: announce the command in
 	// red the moment it starts, capture its output silently (taskWriter,
-	// already needed for exec_status polling), and log the command plus
+	// already needed for task_status polling), and log the command plus
 	// its complete output as ONE atomic block in black once it finishes --
 	// drainLogQueue (gui.go) processes queued entries one at a time on a
 	// single thread, so a whole multi-line block queued as a single
