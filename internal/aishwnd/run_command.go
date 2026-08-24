@@ -33,10 +33,14 @@ type runCommandResult struct {
 	TimedOut bool   `json:"timed_out,omitempty"`
 	// Truncated says the output was shortened from the middle; both ends are
 	// present, so the command's conclusion is never the part that is cut.
-	Truncated bool   `json:"truncated,omitempty"`
-	Shell     string `json:"shell"`
-	Via       string `json:"via"`
-	Host      string `json:"host"`
+	Truncated bool `json:"truncated,omitempty"`
+	// OutputPath names a file on the Windows host holding the FULL output, and
+	// OutputBytes its size. Deleted when the next command starts.
+	OutputPath  string `json:"output_path,omitempty"`
+	OutputBytes int64  `json:"output_bytes,omitempty"`
+	Shell       string `json:"shell"`
+	Via         string `json:"via"`
+	Host        string `json:"host"`
 }
 
 type taskStatusArgs struct {
@@ -77,7 +81,10 @@ func registerCommandTools(s *mcp.Server, sess *aishwndSession, availableShells [
 			"times out kills and replaces that shell's persistent process (state is lost) rather than risk its " +
 			"late output corrupting the next command's result. Very large output is shortened from the MIDDLE, " +
 			"keeping both ends and setting truncated: a command's conclusion is usually its last line, so the " +
-			"end is never the part that gets cut.",
+			"end is never the part that gets cut. The FULL output is written to the file named by output_path " +
+			"on the Windows host, so nothing is lost -- read it with file_read, or search it with file_grep " +
+			"without reading it, which is usually what you want when a few useful lines are buried in noise. " +
+			"That file is deleted when the next command starts, so retrieve it BEFORE running anything else.",
 	}, sess.runCommandTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -119,14 +126,16 @@ func (s *aishwndSession) runCommandTool(ctx context.Context, req *mcp.CallToolRe
 	}
 	output, truncated := capOutput(res.Output)
 	return nil, runCommandResult{
-		Output:    output,
-		Truncated: truncated,
-		ExitCode:  res.ExitCode,
-		TaskID:    res.TaskID,
-		TimedOut:  res.TimedOut,
-		Shell:     res.Shell,
-		Via:       "aishwin",
-		Host:      s.displayHost(),
+		Output:      output,
+		Truncated:   truncated,
+		OutputPath:  res.OutputPath,
+		OutputBytes: res.OutputBytes,
+		ExitCode:    res.ExitCode,
+		TaskID:      res.TaskID,
+		TimedOut:    res.TimedOut,
+		Shell:       res.Shell,
+		Via:         "aishwin",
+		Host:        s.displayHost(),
 	}, nil
 }
 
@@ -149,17 +158,28 @@ func (s *aishwndSession) taskStatus(ctx context.Context, req *mcp.CallToolReques
 	}
 	var res aishwinwire.TaskPollResultData
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, taskStatusResult{}, fmt.Errorf("malformed exec_poll result from the Windows peer: %w", err)
+		return nil, taskStatusResult{}, fmt.Errorf("malformed task_poll result from the Windows peer: %w", err)
 	}
 	if res.Error != "" {
 		return nil, taskStatusResult{}, errors.New(res.Error)
 	}
-	output, truncated := capOutput(res.Output)
+	// A paged stream is trimmed from the front, and the cursor reports only
+	// what was actually handed over, so the remainder arrives on the next poll
+	// instead of being skipped past.
+	output, consumed, truncated := capOutputPrefix(res.Output)
+	next := res.NextCursor
+	if truncated {
+		var from int64
+		if args.Cursor != nil && *args.Cursor > 0 {
+			from = *args.Cursor
+		}
+		next = from + int64(consumed)
+	}
 	return nil, taskStatusResult{
 		Running:    res.Running,
 		Output:     output,
 		Truncated:  truncated,
-		NextCursor: res.NextCursor,
+		NextCursor: next,
 		ExitCode:   res.ExitCode,
 	}, nil
 }

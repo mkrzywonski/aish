@@ -1,4 +1,4 @@
-﻿//go:build windows
+//go:build windows
 
 package main
 
@@ -192,8 +192,22 @@ func (d *commandDispatcher) handleRunCommand(wc *aishwinwire.Conn, f aishwinwire
 		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
 	}
 
+	// Drop the previous command's spill before running: at most one exists at
+	// a time, and it always belongs to the most recent command or to nothing.
+	clearPreviousSpill()
+
 	output, exitCode, timedOut, err := shell.Run(command, timeout)
 	result := aishwinwire.RunCommandResultData{Output: output, TimedOut: timedOut, Shell: string(kind)}
+	if len(output) > aishwinwire.MaxInlineOutput {
+		result.OutputBytes = int64(len(output))
+		if path, werr := writeSpill(runtimeSessionID(), output); werr == nil {
+			result.OutputPath = path
+		} else {
+			// Say the full output could not be kept rather than implying the
+			// truncated text is all there ever was.
+			AppendLogColor("could not save full output: "+werr.Error(), colorFileOp)
+		}
+	}
 	if err != nil {
 		result.Error = err.Error()
 	} else if !timedOut {

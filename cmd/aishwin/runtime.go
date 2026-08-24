@@ -92,3 +92,11 @@ func (r *runtimeState) snapshot() runtimeSnapshot {
 		connMode: r.connMode, connTarget: r.connTarget,
 	}
 }
+
+// runtimeSessionID names a spill file after the session rather than a pid: the
+// file lands on whichever host ran the command, and two machines can easily
+// share a pid, while session ids are unique by construction and are what a
+// person sees in list_sessions if they find a stray file.
+func runtimeSessionID() string {
+	return rt.snapshot().sessionID
+}

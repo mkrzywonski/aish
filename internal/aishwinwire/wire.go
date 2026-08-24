@@ -78,6 +78,17 @@ type DirectoryCreateResultData struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// MaxInlineOutput bounds the command output carried inline in a result.
+//
+// The cap exists so one noisy command cannot flood the caller: a single
+// Get-Process can emit ninety near-identical error traces around five useful
+// rows. It is deliberately well under what an MCP client will accept in one
+// result -- an earlier 64 KiB cap still produced a result the client refused
+// and spilled to disk, which turned a large answer into a detour rather than
+// an answer. Output beyond this is written to a file on the host that ran the
+// command, whose path the result reports.
+const MaxInlineOutput = 16 * 1024
+
 // ConsoleReadData asks for the console feed -- the scrolling account of
 // operations the human watching this machine sees -- since a cursor.
 type ConsoleReadData struct {
@@ -209,6 +220,12 @@ type RunCommandResultData struct {
 	TimedOut bool   `json:"timed_out,omitempty"`
 	Shell    string `json:"shell,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// OutputPath names a file on this host holding the FULL output when it
+	// exceeded MaxInlineOutput; OutputBytes is that full size. The file is
+	// deleted at the start of the next command, so retrieve it before running
+	// anything else.
+	OutputPath  string `json:"output_path,omitempty"`
+	OutputBytes int64  `json:"output_bytes,omitempty"`
 }
 
 // TaskPollData polls a background task started by an RunCommandData with

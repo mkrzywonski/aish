@@ -1,6 +1,10 @@
 package aishwnd
 
-import "fmt"
+import (
+	"fmt"
+
+	"ai-ssh/internal/aishwinwire"
+)
 
 // A single command can bury its answer. One `Get-Process` in an evaluation run
 // returned roughly ninety near-identical access-denied traces around five
@@ -13,11 +17,18 @@ import "fmt"
 // two parts most likely to matter and says exactly how much went missing,
 // rather than silently returning a prefix that stops before the answer.
 
-// maxOutputBytes bounds a single result's output. Generous enough for ordinary
-// command output, small enough that one noisy call cannot flood a caller.
-const maxOutputBytes = 64 * 1024
+// maxOutputBytes bounds a single result's output, shared with the Windows side
+// so the point at which output is spilled to a file and the point at which it
+// is trimmed inline cannot drift apart.
+//
+// It was 64 KiB, which proved too generous: a capped 64 KiB result still
+// exceeded what the MCP client would accept inline, so it was written to disk
+// and had to be read back in pieces. A cap that lands just above the client's
+// limit turns a large answer into a detour instead of an answer.
+const maxOutputBytes = aishwinwire.MaxInlineOutput
 
-// capOutput returns the output to report and whether it was shortened.
+// capOutput trims a ONE-SHOT result from the middle, keeping both ends. Use
+// capOutputPrefix instead for anything a caller pages by cursor.
 func capOutput(s string) (string, bool) {
 	if len(s) <= maxOutputBytes {
 		return s, false
@@ -70,4 +81,21 @@ func isRuneStartComplete(s string) bool {
 		return len(s) >= 4
 	}
 	return true
+}
+
+// capOutputPrefix trims a CURSOR-PAGED stream, returning a leading slice and
+// how many bytes it consumed.
+//
+// Middle-out trimming is right for a one-shot result and wrong here: task
+// output is addressed by byte offset, so cutting the middle while advancing
+// the cursor past the whole chunk destroyed the omitted bytes permanently --
+// the caller could never page back to them. A prefix plus an honest cursor
+// bounds each response and loses nothing, because the rest is still there on
+// the next poll.
+func capOutputPrefix(s string) (string, int, bool) {
+	if len(s) <= maxOutputBytes {
+		return s, len(s), false
+	}
+	cut := trimToRuneBoundary(s[:maxOutputBytes])
+	return cut, len(cut), true
 }
