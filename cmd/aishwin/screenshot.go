@@ -60,8 +60,11 @@ const (
 	// or total buffer size -- GetDeviceCaps' HORZRES/VERTRES meanwhile
 	// correctly reported the full 1600x1200 desktop, ruling out a
 	// simple resolution mismatch. A same-process PrintWindow-based
-	// capture (CaptureWindow) hit no such limit at any size tested; only
-	// capturing from the real screen DC (CaptureFullScreen) did. 640
+	// capture (CaptureWindow) was thought immune, but that was only
+	// because it had been tested at narrow widths -- the same limit
+	// applies to its GetDIBits read-back too (a 1616px-wide window
+	// returned 0 from a single GetDIBits), so CaptureWindow now mosaics
+	// through captureDCMosaic identically. 640
 	// keeps a safety margin below the observed 681 edge rather than
 	// hugging it exactly. Full-screen capture mosaics the desktop into
 	// vertical strips this width or narrower, each captured with its own
@@ -198,13 +201,17 @@ func targetWindow() syscall.Handle {
 // -- either hwndMain or a currently open modal dialog, including
 // non-client chrome via PrintWindow) and returns it PNG-encoded.
 //
-// Retries the whole PrintWindow-to-GetDIBits sequence, with a fresh bitmap
-// each attempt, not just the GetDIBits call on one bitmap (captureDIBits'
-// own smaller retry): found live that GetDIBits can still fail after that
-// inner retry window elapses, meaning the render itself sometimes doesn't
-// land within it, not just needs a few extra milliseconds -- a fresh
-// PrintWindow call gets a genuinely new attempt rather than continuing to
-// poll a render that may never complete on this particular bitmap.
+// PrintWindow renders the whole window into one memory bitmap; the pixels
+// are then read back in vertical strips at most maxStripWidth wide, exactly
+// the way CaptureFullScreen mosaics the desktop. This host's GetDIBits
+// width limit (see maxStripWidth) applies to THIS path too, not just
+// screen-DC BitBlt: a single GetDIBits across the full width of a wide
+// window (e.g. 1616px) returns 0 on this host's display adapter, which
+// manifested as window capture failing outright at large window sizes
+// while still succeeding when the window was narrow. PrintWindow itself has
+// no such width limit, so the render happens once at full size and only the
+// GetDIBits read-back is striped -- deterministic memory-to-memory work
+// with neither the width limit nor the DWM race.
 func CaptureWindow() ([]byte, error) {
 	hwnd := targetWindow()
 
@@ -219,44 +226,41 @@ func CaptureWindow() ([]byte, error) {
 	hdcScreen, _, _ := procGetDC.Call(0)
 	defer procReleaseDC.Call(0, hdcScreen)
 
-	const maxAttempts = 4
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		buf, err := captureWindowOnce(hdcScreen, hwnd, width, height)
-		if err == nil {
-			img := image.NewRGBA(image.Rect(0, 0, width, height))
-			bgraToRGBA(img, buf, 0, 0, width, height)
-			return encodePNG(img)
-		}
-		lastErr = err
-		if attempt < maxAttempts {
-			time.Sleep(75 * time.Millisecond)
-		}
-	}
-	return nil, lastErr
-}
-
-// captureWindowOnce is one PrintWindow + GetDIBits attempt, given a fresh
-// bitmap -- CaptureWindow retries this as a whole unit.
-func captureWindowOnce(hdcScreen uintptr, hwnd syscall.Handle, width, height int) ([]byte, error) {
 	hdcMem, _, _ := procCreateCompatibleDC.Call(hdcScreen)
 	defer procDeleteDC.Call(hdcMem)
 	hBitmap, _, _ := procCreateCompatibleBmp.Call(hdcScreen, uintptr(width), uintptr(height))
 	defer procDeleteObject.Call(hBitmap)
 
+	// hBitmap stays selected into hdcMem for the whole read-back: it is
+	// PrintWindow's render target AND the BitBlt source for every strip in
+	// captureDCMosaic (a BitBlt source DC must have its bitmap selected).
+	// Only each per-strip DESTINATION bitmap needs deselecting before its
+	// own GetDIBits, which captureScreenStripOnce already handles. Defers
+	// run LIFO, so this deselect runs before the bitmap/DC are deleted.
 	oldObj, _, _ := procSelectObject.Call(hdcMem, hBitmap)
-	procPrintWindow.Call(uintptr(hwnd), hdcMem, pwRenderFullContent)
-	// GetDIBits requires hBitmap to not be currently selected into any DC
-	// -- an easy-to-miss, documented requirement ("The bitmap identified
-	// by hbmp must not be selected into a device context"). Deselecting
-	// via defer (an earlier version of this function) runs too LATE,
-	// after captureDIBits' own GetDIBits call -- found live via a
-	// dev-build-only diagnostic: PrintWindow reported success but
-	// GetDIBits returned 0, leaving every pixel black. Deselecting here,
-	// before extracting pixels, is what actually matters.
-	procSelectObject.Call(hdcMem, oldObj)
+	defer procSelectObject.Call(hdcMem, oldObj)
 
-	return captureDIBits(hdcMem, hBitmap, width, height)
+	// Retry the render itself: PrintWindow with PW_RENDERFULLCONTENT can
+	// involve DWM composition that isn't synchronously complete when
+	// PrintWindow returns. A fresh call into the same bitmap gets a new
+	// attempt; the strip read-back below is deterministic and never hits
+	// the DWM race or the width limit.
+	const maxRenderAttempts = 4
+	rendered := false
+	for attempt := 1; attempt <= maxRenderAttempts; attempt++ {
+		if r, _, _ := procPrintWindow.Call(uintptr(hwnd), hdcMem, pwRenderFullContent); r != 0 {
+			rendered = true
+			break
+		}
+		if attempt < maxRenderAttempts {
+			time.Sleep(75 * time.Millisecond)
+		}
+	}
+	if !rendered {
+		return nil, fmt.Errorf("PrintWindow failed for %dx%d window after %d attempts", width, height, maxRenderAttempts)
+	}
+
+	return captureDCMosaic(hdcMem, 0, 0, width, height)
 }
 
 // CaptureFullScreen renders the entire virtual screen (spanning all
@@ -287,29 +291,41 @@ func CaptureFullScreen() ([]byte, error) {
 	hdcScreen, _, _ := procGetDC.Call(0)
 	defer procReleaseDC.Call(0, hdcScreen)
 
+	return captureDCMosaic(hdcScreen, ox, oy, width, height)
+}
+
+// captureDCMosaic reads a width x height region of srcDC (its top-left at
+// (srcOriginX, srcOriginY) in srcDC's own coordinate space) into a
+// PNG-encoded image, in vertical strips at most maxStripWidth wide so no
+// single GetDIBits call exceeds this host's width limit (see maxStripWidth).
+// Shared by CaptureFullScreen (srcDC is the screen DC, origin the virtual
+// desktop's) and CaptureWindow (srcDC is a memory DC holding a
+// PrintWindow'd window, origin 0,0).
+func captureDCMosaic(srcDC uintptr, srcOriginX, srcOriginY, width, height int) ([]byte, error) {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for stripX := 0; stripX < width; stripX += maxStripWidth {
 		stripW := maxStripWidth
 		if stripX+stripW > width {
 			stripW = width - stripX
 		}
-		if err := captureScreenStrip(hdcScreen, img, ox+stripX, oy, stripX, stripW, height); err != nil {
+		if err := captureScreenStrip(srcDC, img, srcOriginX+stripX, srcOriginY, stripX, stripW, height); err != nil {
 			return nil, err
 		}
 	}
 	return encodePNG(img)
 }
 
-// captureScreenStrip BitBlts one vertical strip of the real screen
-// (stripW wide, full height, source top-left at screen coordinates
-// (srcX, srcY)) and copies it into img at destination x=dstX, y=0.
+// captureScreenStrip BitBlts one vertical strip out of srcDC -- the real
+// screen DC (CaptureFullScreen) or a memory DC holding a PrintWindow'd
+// window (CaptureWindow) -- stripW wide, full height, source top-left at
+// (srcX, srcY) in srcDC's coordinate space, and copies it into img at
+// destination x=dstX, y=0.
 //
 // Retries the whole BitBlt-to-GetDIBits sequence, with a fresh bitmap each
-// attempt, exactly like CaptureWindow/captureWindowOnce: found live that a
-// real Windows host can fail GetDIBits on this path even across several
-// whole-sequence retries, not just within one bitmap's inner retry window
-// -- worse than the PrintWindow/DWM race that motivated the same pattern
-// for CaptureWindow, which fully resolved at 4 attempts. Measured live at
+// attempt: found live that when srcDC is the real screen DC a real Windows
+// host can fail GetDIBits even across several whole-sequence retries, not
+// just within one bitmap's inner retry window (the memory-DC window path
+// never fails here, but shares the code harmlessly). Measured live at
 // 4 attempts: roughly 1 real full-screen capture in 4 still failed
 // outright (most reproducibly on the first strip captured right after the
 // one-time full-screen consent dialog closes, suggesting the dialog's own
