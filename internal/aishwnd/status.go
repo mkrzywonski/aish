@@ -46,10 +46,10 @@ func registerStatusTool(s *mcp.Server, sess *aishwndSession, availableShells []s
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "session_status",
 		Annotations: readOnlyTool("Windows session status"),
-		Description: "Report this Windows session's identity and capabilities: kind, host, platform, the shells " +
+		Description: "Report this Windows session's identity and capabilities: backend, host, platform, the shells " +
 			"run_command can use, and whether operations are visible to the human. Answered entirely from the " +
 			"connection handshake — it never reaches the Windows host, so it cannot block or execute anything. " +
-			"Terminal fields reported by a shared-terminal session (mode, cwd, screen, echo_off, oob_user) do " +
+			"Terminal fields reported by a shared-terminal session (mode, cwd, screen, echo_off, oob_user) " +
 			"do not exist on this backend.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
 		return nil, sessionStatusResult{

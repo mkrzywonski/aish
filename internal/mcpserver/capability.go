@@ -34,7 +34,7 @@ func (t toolAvail) Available() bool { return t.State == toolAvailable }
 // oobToolNames are the primitives whose availability depends on remote tooling.
 var oobToolNames = []string{
 	"file_read", "file_write", "file_edit", "file_patch",
-	"file_stat", "directory_list", "file_grep", "file_search",
+	"file_stat", "directory_list", "directory_create", "file_grep", "file_search",
 	"file_upload", "file_download", "exec",
 }
 
@@ -343,7 +343,10 @@ func (c *Core) requireTool(rt route, tool string) error {
 		}
 		return fmt.Errorf("%s is not safe to use on %s: %s", tool, rt.host, detail)
 	}
-	msg := fmt.Sprintf("%s is unavailable on %s: it needs %s", tool, rt.host, av.Missing)
+	msg := fmt.Sprintf("%s is unavailable on %s", tool, rt.host)
+	if av.Missing != "" {
+		msg += ": it needs " + av.Missing
+	}
 	if av.Install != "" {
 		msg += fmt.Sprintf(". With the user's approval you can install it (run_command: %s), then retry", av.Install)
 	} else if av.Detail != "" {

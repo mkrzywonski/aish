@@ -50,6 +50,10 @@ func main() {
 	distro := fs.String("distro", "", "WSL distro to use with wsl.exe -d (default distro if empty)")
 	name := fs.String("name", "", "session name to present to the aish proxy")
 	shell := fs.String("shell", "powershell", "default persistent shell when exec doesn't specify one: cmd or powershell")
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Fprintln(stdout, "aishwin", version)
+		return
+	}
 	showVersion := fs.Bool("version", false, "print version and exit")
 	guiSmokeTest := fs.Bool("gui-smoke-test", false, "TEMPORARY: show the GUI with fake data and exit, no wire connection")
 	_ = fs.Parse(os.Args[1:])

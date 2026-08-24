@@ -1,4 +1,4 @@
-﻿// aishwnd is the Linux/WSL half of aishwin. aishwin.exe (Windows) spawns it as a
+// aishwnd is the Linux/WSL half of aishwin. aishwin.exe (Windows) spawns it as a
 // child process — by default via `wsl.exe -- aishwnd`, or via
 // `ssh [user@]host aishwnd` for a non-WSL/remote Linux target — and speaks
 // the private wire protocol over its stdin/stdout, exactly like any other
@@ -30,6 +30,14 @@ var version = "dev"
 func main() {
 	version = resolveVersion(version)
 	aishwnd.Version = version
+
+	// `aishwnd version` mirrors `aish version`. Two binaries in one product
+	// answering the same question two different ways is a papercut nobody
+	// should have to remember; --version stays for habit and scripts.
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("aishwnd", version)
+		return
+	}
 
 	fs := flag.NewFlagSet("aishwnd", flag.ExitOnError)
 	showVersion := fs.Bool("version", false, "print version and exit")
