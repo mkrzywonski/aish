@@ -66,7 +66,10 @@ func registerTools(s *mcp.Server, c *Core) {
 			"call to get only new output; omit cursor to get the most recent output. Escape sequences are stripped unless raw, " +
 			"and line breaks are reconstructed from cursor movement on hosts that position the cursor instead of emitting " +
 			"newlines (Windows shells over ssh), so data may contain newlines that are not literal bytes in the stream. " +
-			"dropped_bytes > 0 means the scrollback wrapped and that much output before the cursor is gone.",
+			"dropped_bytes > 0 means the scrollback wrapped and that much output before the cursor is gone. " +
+			"A direct-host session has no terminal and therefore no read_output; the nearest thing there is " +
+			"read_console, a different contract that returns timestamped entries by sequence number rather " +
+			"than bytes by offset.",
 	}, c.readOutput)
 
 	mcp.AddTool(s, &mcp.Tool{

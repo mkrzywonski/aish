@@ -12,15 +12,21 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-// read_output on this backend returns the console feed: the scrolling
-// account of operations that the human watching this Windows machine sees.
+// read_console returns the console feed: the scrolling account of operations
+// that the human watching this Windows machine sees.
 //
-// It carries the same NAME as the shared-terminal tool because it answers the
-// same question — show me what the human has been looking at — and cursor
-// semantics to match, so a caller that knows one knows the other. It is
-// emphatically not an oob_log counterpart: there is no out-of-band route here,
-// so there is no invisible work to recover. That distinction is why the two
-// tools stay separate rather than being merged under one name.
+// It was briefly called read_output, on the reasoning that it answers the same
+// question as the shared terminal's tool — show me what the human has been
+// looking at. Driving it against a live session disproved that: a terminal's
+// read_output returns a BYTE STREAM addressed by byte offsets, while this
+// returns discrete timestamped entries addressed by sequence number. The
+// arguments could not match, so a caller working from the advertised schema
+// had its call rejected by the implementation. One name promising two
+// contracts is the exact trap this work exists to remove, so the names differ
+// where the contracts do.
+//
+// It is also not an oob_log counterpart: there is no out-of-band route here,
+// so there is no invisible work to recover.
 //
 // Before this existed, an agent asked to find out what had already happened on
 // this session had no tool that would say, and reconstructed it from files
@@ -48,7 +54,7 @@ type readOutputResult struct {
 
 func registerConsoleTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "read_output",
+		Name:        "read_console",
 		Annotations: readOnlyTool("Read Windows console feed"),
 		Description: "Read what the human watching this Windows machine has seen: the console feed of " +
 			"operations scrolling in aishwin's window, oldest retained first. Pass the next_cursor from " +
@@ -57,7 +63,9 @@ func registerConsoleTools(s *mcp.Server, sess *aishwndSession) {
 			"client may share this session, or when the user asks what has been happening -- it is the " +
 			"only tool that reports activity from before you connected. Note this is the visible feed, " +
 			"not an out-of-band log: this backend has no invisible route, so there is no hidden " +
-			"activity for a log to recover.",
+			"activity for a log to recover. Named read_console, not read_output, because it returns discrete " +
+			"timestamped entries addressed by sequence number rather than a terminal's byte stream: the " +
+			"shared-terminal read_output is a different contract, not this tool on another host.",
 	}, sess.readOutput)
 }
 
