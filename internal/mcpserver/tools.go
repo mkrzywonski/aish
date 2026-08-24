@@ -85,7 +85,12 @@ func registerTools(s *mcp.Server, c *Core) {
 		Description: "Get the status of the shared terminal session: current host and out-of-band route (local/controlmaster/in_band), " +
 			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
 			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
-			"on this machine. Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
+			"on this machine, and clients: the MCP connections live on this session right now, so you can tell whether " +
+			"another AI client is sharing it. oob_host is the connection TARGET (alias, FQDN or IP as configured) " +
+			"and remote_hostname is what the machine calls itself once probed; target_confidence compares them, " +
+			"and they need not match. When shell_integration is false the host emits no OSC 133, so mode and " +
+			"prompt_ready cannot track the shell and mode_note names what to use instead. " +
+			"Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
 			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Also reports oob_user: the " +
 			"remote_identity_status field explicitly distinguishes unknown, advisory screen evidence, and authoritative " +
 			"probe evidence; unknown or advisory identity never enables POSIX-framed fallback tools. " +
@@ -308,8 +313,28 @@ type sessionStatusResult struct {
 	OobEnabled    bool         `json:"oob_enabled"`
 	// Host-targeting awareness for the jump-box case: where the interactive tty
 	// is (OSC7), where an OOB op would land (probed), and whether they agree.
-	InteractiveHost  string               `json:"interactive_host,omitempty"`
-	OobHost          string               `json:"oob_host,omitempty"`
+	InteractiveHost string `json:"interactive_host,omitempty"`
+	// OobHost is the connection TARGET (alias, FQDN or IP as configured);
+	// RemoteHostname is what the machine calls itself, known only after a
+	// probe. target_confidence is the comparison between them.
+	OobHost        string `json:"oob_host,omitempty"`
+	RemoteHostname string `json:"remote_hostname,omitempty"`
+	// ShellIntegration reports whether OSC 133 marks have been seen. When
+	// false, mode and prompt_ready cannot track the shell and stay at
+	// "running"/false no matter what is on screen.
+	//
+	// ModeNote is set only in that case, naming the fields to trust instead.
+	// mode answers "what is the shell doing" from integration marks; how long
+	// the terminal has been quiet is a different question, already answered
+	// separately by last_output_ms_ago.
+	ShellIntegration bool   `json:"shell_integration"`
+	ModeNote         string `json:"mode_note,omitempty"`
+	// Clients are the MCP connections live on this session right now. A
+	// session can be shared, and an AI had no way to find out: one agent
+	// inferred a second actor from unexplained timestamps in a console log
+	// and could not confirm it. The human already sees this in the Ctrl-]
+	// menu; there was simply no tool equivalent.
+	Clients          []statusClient       `json:"clients,omitempty"`
 	TargetConfidence string               `json:"target_confidence"`
 	RemoteHost       *sshmux.Capabilities `json:"remote_capabilities,omitempty"`
 	OobTools         map[string]toolAvail `json:"oob_tools,omitempty"`
@@ -361,7 +386,16 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	if rt.ci != nil {
 		sshUser = rt.ci.User
 	}
-	interactiveHost, oobHost, confidence := c.hostConfidence(rt)
+	interactiveHost, oobHost, remoteHostname, confidence := c.hostConfidence(rt)
+	integrated := c.Tracker.ShellIntegration()
+	modeNote := ""
+	if !integrated {
+		modeNote = "no OSC 133 shell integration seen on this host, so mode and prompt_ready cannot track " +
+			"the shell: mode stays \"running\" and prompt_ready false however plainly a prompt is on " +
+			"screen. Do not read mode as evidence a command is still running. Use last_output_ms_ago " +
+			"(how long the terminal has been silent) or wait_idle instead, and expect run_command to " +
+			"report framing \"idle\" with no exit code -- judge success from its output."
+	}
 	res := sessionStatusResult{
 		SessionID:        c.Sess.ID,
 		SessionName:      paths.ReadName(c.Sess.ID),
@@ -371,6 +405,10 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		OobEnabled:       c.oobGranted(),
 		InteractiveHost:  interactiveHost,
 		OobHost:          oobHost,
+		RemoteHostname:   remoteHostname,
+		Clients:          c.statusClients(),
+		ShellIntegration: integrated,
+		ModeNote:         modeNote,
 		TargetConfidence: confidence,
 		SSHUser:          sshUser,
 		Cwd:              cwd,

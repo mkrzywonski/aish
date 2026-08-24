@@ -35,10 +35,15 @@ type Foreground struct {
 type Tracker struct {
 	mu          sync.Mutex
 	promptReady bool
-	cmdOpen     bool
-	lastExit    *int
-	cwd         string
-	oscHost     string
+	// sawIntegration latches once an OSC 133 mark has ever arrived. Unlike
+	// promptReady it never goes back to false, which is what makes it usable
+	// as "does this shell have integration at all" rather than "is it at a
+	// prompt this instant".
+	sawIntegration bool
+	cmdOpen        bool
+	lastExit       *int
+	cwd            string
+	oscHost        string
 
 	// ptmxFd returns the PTY master fd, or -1 if the PTY isn't up yet.
 	// Lazy because the fd exists only once the session has started.
@@ -59,9 +64,11 @@ func (t *Tracker) Consume(events <-chan term.Event) {
 		switch ev.Kind {
 		case term.EvPrompt:
 			t.promptReady = true
+			t.sawIntegration = true
 			t.cmdOpen = false
 		case term.EvPreexec:
 			t.promptReady = false
+			t.sawIntegration = true
 			t.cmdOpen = true
 		case term.EvDone:
 			exit := ev.Exit
@@ -81,6 +88,20 @@ func (t *Tracker) PromptReady() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.promptReady
+}
+
+// ShellIntegration reports whether OSC 133 marks have ever been seen on this
+// session.
+//
+// Without them, mode never leaves "running" and prompt_ready never becomes
+// true, however plainly a prompt is sitting on screen — and nothing said why.
+// An evaluation agent reverse-engineered the reason by cross-referencing a
+// run_command framing field against a shell snippet visible in raw scrollback,
+// which is far too much work to learn that a status field cannot be trusted.
+func (t *Tracker) ShellIntegration() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sawIntegration
 }
 
 // Cwd returns the last OSC 7-reported working directory and host.

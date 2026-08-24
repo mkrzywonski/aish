@@ -266,7 +266,18 @@ func (c *Core) HostDrift() (mismatch bool, interactiveHost, oobHost string) {
 	return classifyConfidence(ttyHost, c.Tracker.LocalHost(), caps.Hostname) == "mismatch", interactiveHost, oobHost
 }
 
-func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, confidence string) {
+// hostConfidence reports the interactive host, the connection target, the
+// remote's own hostname once known, and how confident we are they agree.
+//
+// The target and the hostname are different facts and are deliberately kept in
+// different fields. An ssh target is whatever the user typed or configured --
+// an alias, an FQDN, a bare IP -- and there is no reason it should equal what
+// the machine calls itself. Previously one value carried both: it started as
+// the target and was overwritten by the probed hostname, so the same field
+// silently changed meaning once a probe ran, and a caller could not tell which
+// fact it was holding. target_confidence is the comparison between them, so
+// reporting both inputs is what makes its verdict explicable.
+func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, remoteHostname, confidence string) {
 	ttyHost, _ := c.Tracker.Cwd()
 	interactiveHost = ttyHost
 
@@ -275,16 +286,16 @@ func (c *Core) hostConfidence(rt route) (interactiveHost, oobHost, confidence st
 		if interactiveHost == "" {
 			interactiveHost = lh
 		}
-		return interactiveHost, lh, "same"
+		return interactiveHost, lh, lh, "same"
 	}
 
 	oobHost = rt.host
 	caps, ok := c.Mux.CachedCapabilities(rt.ci)
 	if !ok || caps.Hostname == "" {
-		return interactiveHost, oobHost, "unknown"
+		return interactiveHost, oobHost, "", "unknown"
 	}
-	oobHost = caps.Hostname
-	return interactiveHost, oobHost, classifyConfidence(ttyHost, c.Tracker.LocalHost(), caps.Hostname)
+	return interactiveHost, oobHost, caps.Hostname,
+		classifyConfidence(ttyHost, c.Tracker.LocalHost(), caps.Hostname)
 }
 
 // classifyConfidence is the pure host comparison behind hostConfidence,
@@ -374,7 +385,7 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 			return "", perr
 		}
 	}
-	interactiveHost, oobHost, confidence := c.hostConfidence(rt)
+	interactiveHost, oobHost, _, confidence := c.hostConfidence(rt)
 	token := rt.host
 	if rt.ci != nil && rt.ci.Host != "" {
 		token = rt.ci.Host
@@ -528,7 +539,7 @@ func (c *Core) probeHost(ctx context.Context, req *mcp.CallToolRequest, args pro
 	case "in_band":
 		res.Note = "no out-of-band channel to this host; only tools safe for the authoritative remote shell identity can use visible-terminal fallbacks."
 	}
-	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	_, _, _, res.TargetConfidence = c.hostConfidence(rt)
 	res.OobTools = c.oobToolAvailability(rt)
 	c.setProbeIdentityStatus(&res, rt)
 	return nil, res, nil
@@ -545,7 +556,7 @@ func (c *Core) probeHostSFTP(ctx context.Context, cap route, force bool) (*mcp.C
 		} else {
 			res.Note = "SFTP probing requires a live ControlMaster; no subsystem was opened."
 		}
-		_, _, res.TargetConfidence = c.hostConfidence(cap)
+		_, _, _, res.TargetConfidence = c.hostConfidence(cap)
 		res.OobTools = c.oobToolAvailability(cap)
 		c.setProbeIdentityStatus(&res, cap)
 		return nil, res, nil
@@ -563,7 +574,7 @@ func (c *Core) probeHostSFTP(ctx context.Context, cap route, force bool) (*mcp.C
 			Via: rt.via, Host: rt.host,
 			Note: "SFTP probe not run because out-of-band access was not authorized; no subsystem was opened.",
 		}
-		_, _, res.TargetConfidence = c.hostConfidence(rt)
+		_, _, _, res.TargetConfidence = c.hostConfidence(rt)
 		res.OobTools = c.oobToolAvailability(rt)
 		c.setProbeIdentityStatus(&res, rt)
 		return nil, res, nil
@@ -606,7 +617,7 @@ func (c *Core) sftpProbeResult(rt route, result sshmux.SFTPProbeResult) probeHos
 			res.RemoteHost = &caps
 		}
 	}
-	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	_, _, _, res.TargetConfidence = c.hostConfidence(rt)
 	c.setProbeIdentityStatus(&res, rt)
 	return res
 }
@@ -623,7 +634,7 @@ func (c *Core) probeHostDeep(ctx context.Context, cap route, force bool) (*mcp.C
 		} else {
 			res.Note = "active identity probing requires a live ControlMaster; it is never typed into the shared terminal."
 		}
-		_, _, res.TargetConfidence = c.hostConfidence(cap)
+		_, _, _, res.TargetConfidence = c.hostConfidence(cap)
 		res.OobTools = c.oobToolAvailability(cap)
 		c.setProbeIdentityStatus(&res, cap)
 		return nil, res, nil
@@ -642,7 +653,7 @@ func (c *Core) probeHostDeep(ctx context.Context, cap route, force bool) (*mcp.C
 			Via: rt.via, Host: rt.host,
 			Note: "active identity probe not run because out-of-band access was not authorized; nothing was typed into the shared terminal.",
 		}
-		_, _, res.TargetConfidence = c.hostConfidence(rt)
+		_, _, _, res.TargetConfidence = c.hostConfidence(rt)
 		res.OobTools = c.oobToolAvailability(rt)
 		c.setProbeIdentityStatus(&res, rt)
 		return nil, res, nil
@@ -689,7 +700,7 @@ func (c *Core) deepProbeResult(rt route, deep sshmux.DeepProbeResult) probeHostR
 	} else if deepNote != "" {
 		res.Note = deepNote
 	}
-	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	_, _, _, res.TargetConfidence = c.hostConfidence(rt)
 	res.OobTools = c.oobToolAvailability(rt)
 	c.setProbeIdentityStatus(&res, rt)
 	return res
@@ -727,7 +738,7 @@ func (c *Core) blockedProbeResult(rt route, f sshmux.HostFacts) probeHostResult 
 		Note:                 f.Note(),
 		OobTools:             availability(f, c.Mux.NewSessionsBlocked()),
 	}
-	_, _, res.TargetConfidence = c.hostConfidence(rt)
+	_, _, _, res.TargetConfidence = c.hostConfidence(rt)
 	c.setProbeIdentityStatus(&res, rt)
 	return res
 }

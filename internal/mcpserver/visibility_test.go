@@ -1,6 +1,10 @@
 package mcpserver
 
-import "testing"
+import (
+	"testing"
+
+	"ai-ssh/internal/state"
+)
 
 func TestVisibilityOf(t *testing.T) {
 	for _, tc := range []struct {
@@ -62,5 +66,23 @@ func TestOobLogEntryCarriesEffect(t *testing.T) {
 	out := oobLogEntry{Seq: e.Seq, Tool: e.Tool, Via: e.Via, Visible: e.Visible, Effect: e.Effect}
 	if out.Effect != "read" {
 		t.Errorf("effect not carried into the result: %+v", out)
+	}
+}
+
+// The connection target and the machine's own hostname are different facts.
+// One field used to carry both, starting as the target and being overwritten
+// by the probed hostname, so its meaning changed under the caller.
+func TestHostConfidenceKeepsTargetAndHostnameApart(t *testing.T) {
+	c := &Core{Tracker: state.NewTracker(func() int { return -1 })}
+	// Unprobed: the target is known, the hostname is not, and confidence says so.
+	_, target, hostname, confidence := c.hostConfidence(route{via: "controlmaster", host: "vps.wg"})
+	if target != "vps.wg" {
+		t.Errorf("oob_host should be the connection target, got %q", target)
+	}
+	if hostname != "" {
+		t.Errorf("remote_hostname should be empty before a probe, got %q", hostname)
+	}
+	if confidence != "unknown" {
+		t.Errorf("confidence should be unknown before a probe, got %q", confidence)
 	}
 }

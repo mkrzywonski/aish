@@ -52,7 +52,7 @@ func (c *Core) RemoteTrackingApplicable() (host string, applicable bool) {
 	if !trackingApplicableFor(rt.via, c.remoteDialect(rt)) {
 		return "", false
 	}
-	_, oobHost, _ := c.hostConfidence(rt)
+	_, oobHost, _, _ := c.hostConfidence(rt)
 	return oobHost, true
 }
 

@@ -2,6 +2,7 @@ package aishwnd
 
 import (
 	"context"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -32,7 +33,21 @@ type sessionStatusResult struct {
 	// no out-of-band route here, so nothing you do is hidden from the human.
 	OperationsVisible bool `json:"operations_visible"`
 
+	// Clients are the MCP connections live on this session. A session can be
+	// shared, and an AI previously had no way to find out who else was
+	// attached; the Windows console has shown this in its Clients dialog all
+	// along.
+	Clients []statusClient `json:"clients,omitempty"`
+
 	Note string `json:"note"`
+}
+
+// statusClient is one live MCP connection. Declared identity stays separate
+// from connection state: a description is self-reported, not proof.
+type statusClient struct {
+	Description string `json:"description,omitempty"`
+	State       string `json:"state"`
+	Since       string `json:"since"`
 }
 
 const statusNote = "This is a native Windows session reached through aishwnd: there is no shared terminal, " +
@@ -41,6 +56,23 @@ const statusNote = "This is a native Windows session reached through aishwnd: th
 	"named run_command rather than exec: everything you run is mirrored to the human's console in real time. " +
 	"For the authoritative list of tools this session implements, read the `tools` field for this session in " +
 	"list_sessions."
+
+// statusClients snapshots the live connections for session_status.
+func statusClients(a *authManager) []statusClient {
+	infos := a.listClients()
+	if len(infos) == 0 {
+		return nil
+	}
+	out := make([]statusClient, 0, len(infos))
+	for _, ci := range infos {
+		out = append(out, statusClient{
+			Description: ci.Description,
+			State:       ci.State,
+			Since:       ci.Since.Format(time.RFC3339),
+		})
+	}
+	return out
+}
 
 func registerStatusTool(s *mcp.Server, sess *aishwndSession, availableShells []string, defaultShell string, proto int) {
 	mcp.AddTool(s, &mcp.Tool{
@@ -62,6 +94,7 @@ func registerStatusTool(s *mcp.Server, sess *aishwndSession, availableShells []s
 			AvailableShells:   availableShells,
 			DefaultShell:      defaultShell,
 			OperationsVisible: true,
+			Clients:           statusClients(sess.auth),
 			Note:              statusNote,
 		}, nil
 	})

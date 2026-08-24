@@ -189,3 +189,42 @@ func shortDuration(d time.Duration) string {
 		return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 	}
 }
+
+// statusClient is one live MCP connection as session_status reports it.
+//
+// Sessions are shared on purpose here — that is the reason oob_log exists —
+// but nothing told an AI who else was attached. An evaluation agent inferred a
+// second actor from console timestamps it could not otherwise explain and had
+// to report the conclusion as unconfirmed, because no tool would say. The
+// human has had this all along in the Ctrl-] menu.
+//
+// Declared identity and verified peer stay separate fields for the same reason
+// the menu keeps them visually distinct: the description is self-reported and
+// spoofable, the peer is kernel-verified.
+type statusClient struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Peer        string `json:"peer,omitempty"`
+	State       string `json:"state"`
+	Since       string `json:"since"`
+	Self        bool   `json:"self,omitempty"` // this connection, so "who else" is answerable
+}
+
+// statusClients snapshots the live connections for session_status.
+func (c *Core) statusClients() []statusClient {
+	clients := c.ConnectedClients()
+	if len(clients) == 0 {
+		return nil
+	}
+	out := make([]statusClient, 0, len(clients))
+	for _, cl := range clients {
+		out = append(out, statusClient{
+			Name:        cl.Name,
+			Description: cl.Description,
+			Peer:        cl.Peer,
+			State:       cl.State,
+			Since:       cl.Since.Format(time.RFC3339),
+		})
+	}
+	return out
+}
