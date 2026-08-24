@@ -156,12 +156,35 @@ func TestGrepCommandBackends(t *testing.T) {
 	}
 	// grep --null when no rg.
 	cmd, null = grepCommand(sshmux.Capabilities{HasGrep: true, GrepNull: true}, args)
-	if !null || !strings.Contains(cmd, "grep -rnI --null") {
+	// Flags are checked independently rather than as one literal string: the
+	// order is an implementation detail, and asserting it made adding a
+	// required flag look like a regression.
+	if !null || !strings.Contains(cmd, "grep -rnI") || !strings.Contains(cmd, "--null") {
 		t.Fatalf("grep --null backend: %q null=%v", cmd, null)
 	}
 	// plain grep (BusyBox): colon-framed.
 	cmd, null = grepCommand(sshmux.Capabilities{HasGrep: true}, args)
 	if null || !strings.Contains(cmd, "grep -rnI") || strings.Contains(cmd, "--null") {
 		t.Fatalf("plain grep backend: %q null=%v", cmd, null)
+	}
+}
+
+// Given a single file, grep prints no filename by default, so --null has
+// nothing to terminate and the NUL-framed parser sees no records at all: a
+// search that matched reported no matches. Every variant must force -H so the
+// framing does not depend on whether one file or a tree was searched.
+func TestGrepCommandAlwaysForcesTheFilename(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		caps sshmux.Capabilities
+	}{
+		{"ripgrep", sshmux.Capabilities{HasRg: true}},
+		{"grep with --null", sshmux.Capabilities{HasGrep: true, GrepNull: true}},
+		{"plain grep", sshmux.Capabilities{HasGrep: true}},
+	} {
+		cmd, _ := grepCommand(tc.caps, fileGrepArgs{Path: "/tmp/one-file.txt", Pattern: "needle"})
+		if !strings.Contains(cmd, " -H") {
+			t.Errorf("%s: command omits -H, so a single-file search returns a false negative: %s", tc.name, cmd)
+		}
 	}
 }

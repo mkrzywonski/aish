@@ -142,6 +142,15 @@ func (c *Core) grepRemote(rt route, args fileGrepArgs, max int) ([]grepMatch, bo
 // grepCommand builds the remote grep/ripgrep command and reports whether its
 // output is NUL-framed ("path\0line:text", unambiguous) or plain colon-framed
 // ("path:line:text", the last-resort fallback for grep without --null).
+//
+// -H is not optional. Given a SINGLE file, grep prints no filename by default,
+// so --null has nothing to terminate and every record arrives as "line:text".
+// The parser expects a path and finds no records, so a search that matched
+// reported no matches at all -- a false negative indistinguishable from a real
+// one, which is the worst possible outcome for a tool whose own description
+// warns about sweeping for something that must not be there. Forcing the
+// filename makes the framing identical whether one file or a tree was
+// searched.
 func grepCommand(caps sshmux.Capabilities, args fileGrepArgs) (string, bool) {
 	p := sshmux.Quote(args.Path)
 	pat := sshmux.Quote(args.Pattern)
@@ -151,19 +160,19 @@ func grepCommand(caps sshmux.Capabilities, args fileGrepArgs) (string, bool) {
 	}
 	switch {
 	case caps.HasRg:
-		cmd := "rg --no-heading --null -n --color never" + ic
+		cmd := "rg --no-heading --null -n -H --color never" + ic
 		if args.Include != "" {
 			cmd += " -g " + sshmux.Quote(args.Include)
 		}
 		return cmd + " -e " + pat + " -- " + p, true
 	case caps.GrepNull:
-		cmd := "grep -rnI --null" + ic
+		cmd := "grep -rnI -H --null" + ic
 		if args.Include != "" {
 			cmd += " --include=" + sshmux.Quote(args.Include)
 		}
 		return cmd + " -e " + pat + " -- " + p, true
 	default:
-		cmd := "grep -rnI" + ic
+		cmd := "grep -rnI -H" + ic
 		if args.Include != "" {
 			cmd += " --include=" + sshmux.Quote(args.Include)
 		}
