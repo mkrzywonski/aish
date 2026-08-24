@@ -1,4 +1,4 @@
-﻿package aishwnd
+package aishwnd
 
 import (
 	"context"
@@ -68,6 +68,7 @@ type fileStatResult struct {
 	Size         int64  `json:"size"`
 	Mode         string `json:"mode"`
 	ModifiedUnix int64  `json:"modified_unix"`
+	Modified     string `json:"modified"` // RFC 3339, the same instant a human can read
 	// Version is a cheap mtime+size token for if_match writes (version_kind
 	// "mtime-size"). Weaker than file_read's sha256 -- it can miss a
 	// same-size, same-mtime change -- but avoids reading the whole file.
@@ -87,6 +88,7 @@ type directoryEntry struct {
 	Type         string `json:"type"`
 	Size         int64  `json:"size"`
 	ModifiedUnix int64  `json:"modified_unix"`
+	Modified     string `json:"modified"` // RFC 3339, the same instant a human can read
 }
 
 type directoryListResult struct {
@@ -254,7 +256,7 @@ func (s *aishwndSession) fileStat(ctx context.Context, req *mcp.CallToolRequest,
 
 	out := fileStatResult{
 		Path: args.Path, Type: wireRes.Type, Size: wireRes.Size, Mode: wireRes.Mode,
-		ModifiedUnix: wireRes.ModifiedUnix, Via: "aishwin", Host: s.displayHost(),
+		ModifiedUnix: wireRes.ModifiedUnix, Modified: rfc3339(wireRes.ModifiedUnix), Via: "aishwin", Host: s.displayHost(),
 	}
 	out.Version = fmt.Sprintf("mtime-size:%d:%d", out.ModifiedUnix, out.Size)
 	out.VersionKind = "mtime-size"
@@ -292,7 +294,7 @@ func (s *aishwndSession) directoryList(ctx context.Context, req *mcp.CallToolReq
 
 	entries := make([]directoryEntry, len(wireRes.Entries))
 	for i, e := range wireRes.Entries {
-		entries[i] = directoryEntry{Name: e.Name, Type: e.Type, Size: e.Size, ModifiedUnix: e.ModifiedUnix}
+		entries[i] = directoryEntry{Name: e.Name, Type: e.Type, Size: e.Size, ModifiedUnix: e.ModifiedUnix, Modified: rfc3339(e.ModifiedUnix)}
 	}
 	return nil, directoryListResult{Entries: entries, Truncated: wireRes.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
 }
@@ -311,4 +313,16 @@ func numberLines(data []byte) string {
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
 	}
 	return b.String()
+}
+
+// rfc3339 renders a Unix timestamp the way a reader can use directly. The
+// epoch integer stays, since callers compare and sort on it, but returning
+// only that forced anyone wanting a date to convert it by hand — and to guess
+// a timezone. The activity log already reports RFC 3339, so this is also two
+// tools in the same product agreeing on how to say the same thing.
+func rfc3339(unix int64) string {
+	if unix == 0 {
+		return ""
+	}
+	return time.Unix(unix, 0).Format(time.RFC3339)
 }

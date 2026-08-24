@@ -1114,6 +1114,7 @@ type fileStatResult struct {
 	Size         int64  `json:"size"`
 	Mode         string `json:"mode"`
 	ModifiedUnix int64  `json:"modified_unix"`
+	Modified     string `json:"modified"` // RFC 3339, the same instant a human can read
 	// Version is a cheap mtime+size token for if_match writes (version_kind
 	// "mtime-size"). Weaker than file_read's sha256 — it can miss a same-size,
 	// same-mtime change — but needs no hasher on the remote.
@@ -1223,6 +1224,7 @@ type directoryEntry struct {
 	Type         string `json:"type"`
 	Size         int64  `json:"size"`
 	ModifiedUnix int64  `json:"modified_unix"`
+	Modified     string `json:"modified"` // RFC 3339, the same instant a human can read
 }
 
 type directoryListResult struct {
@@ -1274,7 +1276,7 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 				return nil, directoryListResult{}, fmt.Errorf("stat %s: %w", entry.Name(), err)
 			}
 			res.Entries = append(res.Entries, directoryEntry{
-				Name: entry.Name(), Type: localFileType(info.Mode()), Size: info.Size(), ModifiedUnix: info.ModTime().Unix(),
+				Name: entry.Name(), Type: localFileType(info.Mode()), Size: info.Size(), ModifiedUnix: info.ModTime().Unix(), Modified: rfc3339(info.ModTime().Unix()),
 			})
 		}
 		return nil, res, nil
@@ -1286,7 +1288,7 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 		}
 		for _, info := range dir.Entries {
 			res.Entries = append(res.Entries, directoryEntry{
-				Name: info.Name, Type: localFileType(info.Mode), Size: info.Size, ModifiedUnix: info.ModTime.Unix(),
+				Name: info.Name, Type: localFileType(info.Mode), Size: info.Size, ModifiedUnix: info.ModTime.Unix(), Modified: rfc3339(info.ModTime.Unix()),
 			})
 		}
 		sort.Slice(res.Entries, func(i, j int) bool { return res.Entries[i].Name < res.Entries[j].Name })
@@ -1338,7 +1340,7 @@ func (c *Core) dirListGNU(ci *sshmux.ConnInfo, path string, max int) ([]director
 			return nil, fmt.Errorf("invalid directory entry metadata for %q", parts[i])
 		}
 		entries = append(entries, directoryEntry{
-			Name: string(parts[i]), Type: findFileType(string(parts[i+1])), Size: size, ModifiedUnix: int64(mtime),
+			Name: string(parts[i]), Type: findFileType(string(parts[i+1])), Size: size, ModifiedUnix: int64(mtime), Modified: rfc3339(int64(mtime)),
 		})
 	}
 	return entries, nil
@@ -1373,7 +1375,7 @@ func (c *Core) dirListPortable(ci *sshmux.ConnInfo, path string, caps sshmux.Cap
 		size, _ := strconv.ParseInt(f[2], 10, 64)
 		mtime, _ := strconv.ParseInt(f[3], 10, 64)
 		entries = append(entries, directoryEntry{
-			Name: filepath.Base(f[0]), Type: remoteFileType(f[1]), Size: size, ModifiedUnix: mtime,
+			Name: filepath.Base(f[0]), Type: remoteFileType(f[1]), Size: size, ModifiedUnix: mtime, Modified: rfc3339(mtime),
 		})
 	}
 	return entries, nil
@@ -2037,4 +2039,13 @@ func readFull(f *os.File, buf []byte) (int, error) {
 		}
 	}
 	return total, nil
+}
+
+// rfc3339 renders a Unix timestamp readably alongside the epoch integer, which
+// callers still need for comparison. See the note in internal/aishwnd/files.go.
+func rfc3339(unix int64) string {
+	if unix == 0 {
+		return ""
+	}
+	return time.Unix(unix, 0).Format(time.RFC3339)
 }

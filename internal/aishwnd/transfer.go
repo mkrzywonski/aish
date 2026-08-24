@@ -1,7 +1,9 @@
-﻿package aishwnd
+package aishwnd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -31,6 +33,10 @@ type transferResult struct {
 	Bytes int64  `json:"bytes"`
 	Via   string `json:"via"`
 	Host  string `json:"host"`
+	// Sha256 lets one call answer "did it arrive intact". Without it,
+	// confirming a transfer meant a second round trip to file_read or
+	// file_stat, even though file_read already computes exactly this.
+	Sha256 string `json:"sha256,omitempty"`
 }
 
 func registerTransferTools(s *mcp.Server, sess *aishwndSession) {
@@ -40,7 +46,8 @@ func registerTransferTools(s *mcp.Server, sess *aishwndSession) {
 		Description: fmt.Sprintf("Copy a file from the Linux/WSL machine (where this MCP server runs) to the "+
 			"Windows host — the direction of `scp local_path remote:remote_path`, so local_path is always the "+
 			"Linux side and remote_path always the Windows side. Whole-file, one operation — not for files "+
-			"larger than %d bytes; chunk larger transfers with file_read/file_write instead.", maxTransferBytes),
+			"larger than %d bytes; chunk larger transfers with file_read/file_write instead. The result carries "+
+			"the content sha256, so \"did it arrive intact\" is answered by this call rather than a follow-up read.", maxTransferBytes),
 	}, sess.fileUpload)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -49,7 +56,8 @@ func registerTransferTools(s *mcp.Server, sess *aishwndSession) {
 		Description: fmt.Sprintf("Copy a file from the Windows host to the Linux/WSL machine (where this MCP "+
 			"server runs) — the direction of `scp remote:remote_path local_path`, so remote_path is always the "+
 			"Windows side and local_path always the Linux side. Whole-file, one operation — not for files larger "+
-			"than %d bytes; chunk larger transfers with file_read/file_write instead.", maxTransferBytes),
+			"than %d bytes; chunk larger transfers with file_read/file_write instead. The result carries the "+
+			"content sha256, so \"did it arrive intact\" is answered by this call rather than a follow-up read.", maxTransferBytes),
 	}, sess.fileDownload)
 }
 
@@ -59,7 +67,10 @@ func (s *aishwndSession) fileUpload(ctx context.Context, req *mcp.CallToolReques
 	}
 	data, err := os.ReadFile(args.LocalPath)
 	if err != nil {
-		return nil, transferResult{}, err
+		// Name the side that failed. A bare "no such file or directory" is
+		// exactly as plausible for a mistyped path as for a path from the
+		// wrong machine, and local/remote confusion is likeliest here.
+		return nil, transferResult{}, fmt.Errorf("reading local_path on the Linux side: %w", err)
 	}
 	if len(data) > maxTransferBytes {
 		return nil, transferResult{}, fmt.Errorf("local file is %d bytes, exceeding the file_upload limit of %d; chunk it with file_read/file_write instead", len(data), maxTransferBytes)
@@ -69,9 +80,9 @@ func (s *aishwndSession) fileUpload(ctx context.Context, req *mcp.CallToolReques
 	// for this same tool.
 	n, err := s.writeRemoteFile(args.RemotePath, data, "", "", false)
 	if err != nil {
-		return nil, transferResult{}, err
+		return nil, transferResult{}, fmt.Errorf("writing remote_path on the Windows host: %w", err)
 	}
-	return nil, transferResult{Bytes: int64(n), Via: "aishwin", Host: s.displayHost()}, nil
+	return nil, transferResult{Bytes: int64(n), Via: "aishwin", Host: s.displayHost(), Sha256: sha256Hex(data)}, nil
 }
 
 func (s *aishwndSession) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
@@ -80,7 +91,7 @@ func (s *aishwndSession) fileDownload(ctx context.Context, req *mcp.CallToolRequ
 	}
 	data, eof, err := s.readRemoteFile(args.RemotePath, 0, maxTransferBytes)
 	if err != nil {
-		return nil, transferResult{}, err
+		return nil, transferResult{}, fmt.Errorf("reading remote_path on the Windows host: %w", err)
 	}
 	if !eof {
 		return nil, transferResult{}, fmt.Errorf("remote file exceeds the file_download limit of %d bytes; chunk it with file_read/file_write instead", maxTransferBytes)
@@ -89,7 +100,14 @@ func (s *aishwndSession) fileDownload(ctx context.Context, req *mcp.CallToolRequ
 	// file_download — only its SFTP route (which aishwin has no equivalent
 	// of) writes via temp+rename.
 	if err := os.WriteFile(args.LocalPath, data, 0o644); err != nil {
-		return nil, transferResult{}, err
+		return nil, transferResult{}, fmt.Errorf("writing local_path on the Linux side: %w", err)
 	}
-	return nil, transferResult{Bytes: int64(len(data)), Via: "aishwin", Host: s.displayHost()}, nil
+	return nil, transferResult{Bytes: int64(len(data)), Via: "aishwin", Host: s.displayHost(), Sha256: sha256Hex(data)}, nil
+}
+
+// sha256Hex is the same "sha256:" version token file_read already returns, so
+// a transfer can be verified against a later read without another round trip.
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
