@@ -102,8 +102,12 @@ func viaField(m map[string]json.RawMessage) string {
 // human had seen something they did not.
 func visibilityOf(tool, via string) string {
 	switch {
-	case controlTools[tool]:
-		// Reports a route without taking it; nothing happened to be seen.
+	case controlTools[tool] || skipLogging(tool):
+		// Nothing happened that could have been seen or hidden: these report
+		// a route without taking it (session_status), read aish's own state
+		// (oob_log), or are protocol calls. Answering "unknown" for them
+		// implied we could not tell whether the human saw something, when in
+		// fact there was nothing to see.
 		return ""
 	case terminalTools[tool]:
 		return visibilityVisible

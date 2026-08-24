@@ -386,6 +386,7 @@ type oobLogEntry struct {
 	Via        string `json:"via"`
 	Host       string `json:"host,omitempty"`
 	Visible    bool   `json:"visible"`
+	Effect     string `json:"effect,omitempty"` // "acted" | "read"
 	ExitCode   *int   `json:"exit_code,omitempty"`
 	Bytes      *int64 `json:"bytes,omitempty"`
 	Warning    string `json:"warning,omitempty"`
@@ -439,6 +440,7 @@ func (c *Core) oobLogTool(ctx context.Context, req *mcp.CallToolRequest, args oo
 			Via:        e.Via,
 			Host:       e.Host,
 			Visible:    e.Visible,
+			Effect:     e.Effect,
 			ExitCode:   e.ExitCode,
 			Bytes:      e.Bytes,
 			Warning:    e.Warning,

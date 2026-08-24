@@ -16,6 +16,7 @@ func TestVisibilityOf(t *testing.T) {
 		{"control tools report nothing", "session_status", "controlmaster", ""},
 		{"set_session_name reports nothing", "set_session_name", "", ""},
 		{"unresolved route claims nothing", "file_write", "", visibilityUnknown},
+		{"reading the log is not an operation", "oob_log", "", ""},
 	} {
 		if got := visibilityOf(tc.tool, tc.via); got != tc.want {
 			t.Errorf("%s: visibilityOf(%q, %q) = %q, want %q", tc.name, tc.tool, tc.via, got, tc.want)
@@ -51,5 +52,15 @@ func TestEffectOf(t *testing.T) {
 		if got := effectOf(tool); got != want {
 			t.Errorf("effectOf(%q) = %q, want %q", tool, got, want)
 		}
+	}
+}
+
+// effect was computed on the internal entry and never mapped to the tool's
+// result, so the distinction existed everywhere except where a caller reads it.
+func TestOobLogEntryCarriesEffect(t *testing.T) {
+	e := activityEntry{Seq: 1, Tool: "file_read", Via: "local", Effect: effectOf("file_read")}
+	out := oobLogEntry{Seq: e.Seq, Tool: e.Tool, Via: e.Via, Visible: e.Visible, Effect: e.Effect}
+	if out.Effect != "read" {
+		t.Errorf("effect not carried into the result: %+v", out)
 	}
 }
