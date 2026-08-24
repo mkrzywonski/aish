@@ -1,4 +1,4 @@
-﻿//go:build windows
+//go:build windows
 
 package main
 
@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"ai-ssh/internal/aishwinwire"
 )
@@ -101,4 +102,30 @@ func handleDirectoryList(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		wireEntries[i] = aishwinwire.DirEntryData{Name: e.Name, Type: e.Type, Size: e.Size, ModifiedUnix: e.ModifiedUnix}
 	}
 	send(wc, "directory_list_result", f.ID, aishwinwire.DirectoryListResultData{Entries: wireEntries, Truncated: truncated})
+}
+
+// handleDirectoryCreate makes a directory and its parents. Idempotent by
+// design: an existing directory is a success, and `created` says which case it
+// was, so a caller can repeat the call without special-casing.
+func handleDirectoryCreate(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	var req aishwinwire.DirectoryCreateData
+	if err := json.Unmarshal(f.Data, &req); err != nil {
+		return
+	}
+	AppendLogColor("Creating directory "+req.Path, colorFileOp)
+	existed := false
+	if info, err := os.Stat(req.Path); err == nil {
+		if !info.IsDir() {
+			send(wc, "directory_create_result", f.ID, aishwinwire.DirectoryCreateResultData{
+				Error: req.Path + " exists and is not a directory",
+			})
+			return
+		}
+		existed = true
+	}
+	if err := os.MkdirAll(req.Path, 0o755); err != nil {
+		send(wc, "directory_create_result", f.ID, aishwinwire.DirectoryCreateResultData{Error: err.Error()})
+		return
+	}
+	send(wc, "directory_create_result", f.ID, aishwinwire.DirectoryCreateResultData{Created: !existed})
 }

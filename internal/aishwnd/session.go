@@ -159,6 +159,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	registerCommandTools(server, sess, hello.AvailableShells, hello.DefaultShell)
 	registerStatusTool(server, sess, hello.AvailableShells, hello.DefaultShell, hello.Proto)
 	registerConsoleTools(server, sess)
+	registerDirectoryCreateTool(server, sess)
 	registerFileTools(server, sess)
 	registerEditTools(server, sess)
 	registerSearchTools(server, sess)

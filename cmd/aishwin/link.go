@@ -131,6 +131,8 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		go handleFileStat(wc, f)
 	case "directory_list":
 		go handleDirectoryList(wc, f)
+	case "directory_create":
+		go handleDirectoryCreate(wc, f)
 	case "file_grep":
 		go handleGrep(wc, f)
 	case "file_search":

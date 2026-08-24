@@ -284,6 +284,7 @@ func capabilityAvailability(caps sshmux.Capabilities) map[string]toolAvail {
 	set("file_upload", encode && decode, "base64 (with a decode flag)", "coreutils")
 	set("file_edit", encode && decode, "base64 (with a decode flag)", "coreutils")
 	set("file_patch", encode && decode, "base64 (with a decode flag)", "coreutils")
+	set("directory_create", true, "", "") // mkdir is POSIX; no probe can make it absent
 	set("file_stat", statOK, "stat", "coreutils")
 	set("directory_list", caps.HasFind && (statOK || (caps.FindPrint && caps.HeadZ)), "find and stat", "findutils")
 	set("file_grep", caps.HasRg || caps.HasGrep, "ripgrep or grep", "ripgrep")

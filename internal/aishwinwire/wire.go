@@ -68,6 +68,16 @@ type HelloAckData struct {
 // console menu) to aishwnd -- the reverse direction from exec/file_*, which
 // aishwnd sends to aishwin. Conn's Send/Await are symmetric, so no separate
 // mechanism is needed for a request originating on this side.
+// DirectoryCreateData asks for a directory, parents included.
+type DirectoryCreateData struct {
+	Path string `json:"path"`
+}
+
+type DirectoryCreateResultData struct {
+	Created bool   `json:"created"` // false when it already existed
+	Error   string `json:"error,omitempty"`
+}
+
 // ConsoleReadData asks for the console feed -- the scrolling account of
 // operations the human watching this machine sees -- since a cursor.
 type ConsoleReadData struct {

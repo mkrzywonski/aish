@@ -330,3 +330,50 @@ func rfc3339(unix int64) string {
 	}
 	return time.Unix(unix, 0).Format(time.RFC3339)
 }
+
+type directoryCreateArgs struct {
+	Path string `json:"path" jsonschema:"absolute directory path to create on the Windows host; parents are created as needed"`
+}
+
+type directoryCreateResult struct {
+	Path    string `json:"path"`
+	Created bool   `json:"created"` // false when it already existed
+	Via     string `json:"via"`
+	Host    string `json:"host"`
+}
+
+func registerDirectoryCreateTool(s *mcp.Server, sess *aishwndSession) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "directory_create",
+		Annotations: mutatingTool("Create directory on Windows host", false, true),
+		Description: "Create an absolute directory on the Windows host, creating parents as needed — the " +
+			"Windows equivalent of your Bash `mkdir -p`. Succeeds if it already exists, so it is safe to " +
+			"repeat; `created` says which happened. Use this rather than run_command for preparing a " +
+			"working directory: run_command is mirrored to the human's console, and setting up a scratch " +
+			"folder is not something they need to watch.",
+	}, sess.directoryCreate)
+}
+
+func (s *aishwndSession) directoryCreate(ctx context.Context, req *mcp.CallToolRequest, args directoryCreateArgs) (*mcp.CallToolResult, directoryCreateResult, error) {
+	if args.Path == "" {
+		return nil, directoryCreateResult{}, errors.New("path must not be empty")
+	}
+	data, err := json.Marshal(aishwinwire.DirectoryCreateData{Path: args.Path})
+	if err != nil {
+		return nil, directoryCreateResult{}, err
+	}
+	raw, err := s.roundTrip("directory_create", data, 20*time.Second)
+	if err != nil {
+		return nil, directoryCreateResult{}, err
+	}
+	var wireRes aishwinwire.DirectoryCreateResultData
+	if err := json.Unmarshal(raw, &wireRes); err != nil {
+		return nil, directoryCreateResult{}, fmt.Errorf("malformed directory_create result from the Windows peer: %w", err)
+	}
+	if wireRes.Error != "" {
+		return nil, directoryCreateResult{}, errors.New(wireRes.Error)
+	}
+	return nil, directoryCreateResult{
+		Path: args.Path, Created: wireRes.Created, Via: "aishwin", Host: s.displayHost(),
+	}, nil
+}

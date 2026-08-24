@@ -89,6 +89,16 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	}, c.directoryList)
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "directory_create",
+		Annotations: mutatingTool("Create directory on session host", false, true),
+		Description: "Create an absolute directory on the session's current host, creating parents as needed — " +
+			"the remote-host equivalent of your Bash `mkdir -p`. Succeeds if it already exists, so it is safe " +
+			"to repeat; `created` says which happened. Use this rather than exec for preparing a working " +
+			"directory: exec is for commands the human is meant to see. Requires an authorized local or " +
+			"remote OOB route with a working shell.",
+	}, c.directoryCreate)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_upload",
 		Annotations: mutatingTool("Upload file to session host", true, false),
 		Description: "Copy a local file to the remote host of the current SSH session over its authorized OOB route. " +
