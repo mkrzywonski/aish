@@ -121,7 +121,7 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	case "run_command", "task_poll":
 		// Dispatched off the read loop: a foreground command can legitimately
 		// run for the caller's full timeout, and must not block prompt/notify
-		// frames (or other exec/exec_poll/file_* frames) arriving meanwhile.
+		// frames (or other run_command/task_poll/file_* frames) arriving meanwhile.
 		go cmdD.handle(wc, f)
 	case "file_read":
 		go handleFileRead(wc, f)
@@ -137,6 +137,8 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		go handleSearch(wc, f)
 	case "capture_screen":
 		go handleCaptureScreen(wc, f)
+	case "console_read":
+		go handleConsoleRead(wc, f)
 	}
 }
 

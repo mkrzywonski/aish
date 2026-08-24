@@ -1,4 +1,4 @@
-﻿// Package aishwinwire is the private wire protocol between cmd/aishwin
+// Package aishwinwire is the private wire protocol between cmd/aishwin
 // (Windows) and cmd/aishwnd (Linux): newline-delimited JSON over the child
 // process's stdio pipes, type-discriminated, correlated by request id.
 // Shared by both binaries so the frame shapes can't drift between them —
@@ -68,6 +68,28 @@ type HelloAckData struct {
 // console menu) to aishwnd -- the reverse direction from exec/file_*, which
 // aishwnd sends to aishwin. Conn's Send/Await are symmetric, so no separate
 // mechanism is needed for a request originating on this side.
+// ConsoleReadData asks for the console feed -- the scrolling account of
+// operations the human watching this machine sees -- since a cursor.
+type ConsoleReadData struct {
+	Cursor int64 `json:"cursor,omitempty"`
+	Max    int   `json:"max,omitempty"`
+}
+
+// ConsoleEntry is one line of that feed.
+type ConsoleEntry struct {
+	Seq  int64  `json:"seq"`
+	At   string `json:"at"` // RFC 3339
+	Text string `json:"text"`
+	Kind string `json:"kind,omitempty"`
+}
+
+type ConsoleReadResultData struct {
+	Entries    []ConsoleEntry `json:"entries"`
+	NextCursor int64          `json:"next_cursor"`
+	Dropped    int64          `json:"dropped"`
+	Error      string         `json:"error,omitempty"`
+}
+
 type RenameData struct {
 	Name string `json:"name"`
 }

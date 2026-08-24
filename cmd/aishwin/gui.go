@@ -315,6 +315,20 @@ func mainWndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) ui
 const colorFileOp = 0x00FF0000 // blue
 const colorRunning = 0x000000FF // red -- "a command just started" announcement
 
+// feedKindFor labels a retained feed entry by the colour the human saw it in,
+// so a reader gets the same grouping the window conveys visually. Uncoloured
+// lines are shell output, which is the bulk of the feed.
+func feedKindFor(color uint32) string {
+	switch color {
+	case colorFileOp:
+		return "file"
+	case colorRunning:
+		return "command"
+	default:
+		return "output"
+	}
+}
+
 // logEntry is one queued log line and how to render it: useColor false
 // means "reset to the control's automatic default color" (never silently
 // inherit color left over from a previous colored line at the same caret
@@ -339,6 +353,10 @@ func AppendLogColor(line string, color uint32) {
 }
 
 func appendLogEntry(e logEntry) {
+	// Retain it for read_output as well as drawing it, from the one place
+	// every line passes through, so the feed an AI reads and the window a
+	// human watches cannot fall out of step.
+	feedAppend(e.text, feedKindFor(e.color))
 	logMu.Lock()
 	logQueue = append(logQueue, e)
 	logMu.Unlock()
