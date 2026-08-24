@@ -86,3 +86,28 @@ func TestHostConfidenceKeepsTargetAndHostnameApart(t *testing.T) {
 		t.Errorf("confidence should be unknown before a probe, got %q", confidence)
 	}
 }
+
+// The question host tracking exists to answer is "do my invisible commands
+// land on the machine the human is watching" — which came up originally with a
+// jump host. It is answered by comparing the terminal's reported host with the
+// probed out-of-band hostname. The connection target is NOT part of that
+// comparison: an alias, an FQDN, an IP or a ProxyJump expression need not
+// equal any hostname, so comparing it would manufacture disagreement on
+// exactly the setups where the answer is hardest.
+func TestConfidenceComparesReportedHostsNotTheConnectionTarget(t *testing.T) {
+	// Terminal says "vps", probed host says "vps": same machine, however the
+	// target was written.
+	if got := classifyConfidence("vps", "mjk-desktop", "vps"); got != "same" {
+		t.Errorf("matching reported hosts should be same, got %q", got)
+	}
+	// Terminal says one machine, the out-of-band channel reports another:
+	// that is the divergence worth refusing writes over.
+	if got := classifyConfidence("vps", "mjk-desktop", "otherbox"); got == "same" {
+		t.Errorf("diverging reported hosts must not read as same, got %q", got)
+	}
+	// A terminal with no OSC 7 leaves the tracker holding the LOCAL host; that
+	// is absence of evidence, not evidence of divergence.
+	if got := classifyConfidence("mjk-desktop", "mjk-desktop", "vps"); got == "same" {
+		t.Errorf("stale local host must not be read as agreement, got %q", got)
+	}
+}

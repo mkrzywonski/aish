@@ -86,9 +86,14 @@ func registerTools(s *mcp.Server, c *Core) {
 			"mode (prompt/running/fullscreen), cwd, prompt-ready and secret-input (echo_off) flags, foreground process, " +
 			"session id and name, screen size, alternate-screen flag, time since last output, and other live aish sessions " +
 			"on this machine, and clients: the MCP connections live on this session right now, so you can tell whether " +
-			"another AI client is sharing it. oob_host is the connection TARGET (alias, FQDN or IP as configured) " +
-			"and remote_hostname is what the machine calls itself once probed; target_confidence compares them, " +
-			"and they need not match. When shell_integration is false the host emits no OSC 133, so mode and " +
+			"another AI client is sharing it. Host identity uses three fields and only two of them are " +
+			"comparable: interactive_host is what the TERMINAL reports it is on, remote_hostname is what the " +
+			"OUT-OF-BAND channel's host reports it is, and target_confidence compares THOSE two -- it answers " +
+			"whether your invisible commands land on the machine the human is looking at. oob_host is a " +
+			"different kind of thing: the connection target as configured (alias, FQDN, IP, jump-host " +
+			"expression), which has no obligation to equal any hostname. Never compare oob_host against " +
+			"interactive_host to decide whether the hosts agree. When shell_integration is false the host " +
+			"emits no OSC 133, so mode and " +
 			"prompt_ready cannot track the shell and mode_note names what to use instead. " +
 			"Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
 			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Also reports oob_user: the " +
@@ -314,9 +319,16 @@ type sessionStatusResult struct {
 	// Host-targeting awareness for the jump-box case: where the interactive tty
 	// is (OSC7), where an OOB op would land (probed), and whether they agree.
 	InteractiveHost string `json:"interactive_host,omitempty"`
-	// OobHost is the connection TARGET (alias, FQDN or IP as configured);
-	// RemoteHostname is what the machine calls itself, known only after a
-	// probe. target_confidence is the comparison between them.
+	// InteractiveHost and RemoteHostname are the COMPARABLE pair: what the
+	// terminal reports it is on, and what the out-of-band host reports it is.
+	// TargetConfidence compares those two, which is the question that matters
+	// -- do invisible commands land on the machine the human is watching.
+	//
+	// OobHost is not part of that comparison. It is the connection target as
+	// configured: an alias, an FQDN, a bare IP, a jump-host expression. It has
+	// no obligation to equal any hostname, and comparing it against
+	// InteractiveHost would manufacture disagreement on exactly the setups
+	// (aliases, ProxyJump) where this question is hardest to answer.
 	OobHost        string `json:"oob_host,omitempty"`
 	RemoteHostname string `json:"remote_hostname,omitempty"`
 	// ShellIntegration reports whether OSC 133 marks have been seen. When
