@@ -1136,10 +1136,17 @@ type fileStatResult struct {
 	Warning     string `json:"warning,omitempty"`
 }
 
-// setMtimeVersion fills the mtime-size version token from Size/ModifiedUnix.
+// setMtimeVersion fills the mtime-size version token from Size/ModifiedUnix,
+// and the readable timestamp alongside it.
+//
+// Every route finishes a stat by calling this, which is why the readable form
+// is derived here rather than at each branch: file_stat has three of them
+// (local, SFTP, and a parsed remote line) and populating the field per branch
+// missed two, so the epoch was set and its readable twin came back empty.
 func (r *fileStatResult) setMtimeVersion() {
 	r.Version = fmt.Sprintf("mtime-size:%d:%d", r.ModifiedUnix, r.Size)
 	r.VersionKind = "mtime-size"
+	r.Modified = rfc3339(r.ModifiedUnix)
 }
 
 func (c *Core) fileStat(ctx context.Context, req *mcp.CallToolRequest, args fileStatArgs) (*mcp.CallToolResult, fileStatResult, error) {

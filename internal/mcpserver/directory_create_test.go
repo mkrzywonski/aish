@@ -65,3 +65,18 @@ func TestRequireToolMessageIsCompleteWithoutAMissingField(t *testing.T) {
 		t.Errorf("error stops mid-sentence: %q", err)
 	}
 }
+
+// file_stat has three route branches; populating the readable timestamp in
+// each of them missed two, so the epoch was set and its twin came back empty.
+func TestFileStatReadableTimestampIsAlwaysSet(t *testing.T) {
+	var r fileStatResult
+	r.ModifiedUnix = 1787589290
+	r.Size = 17
+	r.setMtimeVersion()
+	if r.Modified == "" {
+		t.Fatal("modified is empty while modified_unix is set")
+	}
+	if r.Version == "" {
+		t.Error("version token not set")
+	}
+}
