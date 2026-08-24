@@ -82,7 +82,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "directory_list",
 		Annotations: readOnlyTool("List directory on session host"),
-		Description: "List direct children of an absolute directory on the session's current host, sorted by name, with " +
+		Description: "List direct children of an absolute directory on the session's current host — the remote-host " +
+			"equivalent of your Bash `ls -la`. Sorted by name, with " +
 			"type, size, and modification time. Requires an authorized local or remote OOB route; remote reads may fall " +
 			"back to retained SFTP after a conclusive shell failure.",
 	}, c.directoryList)

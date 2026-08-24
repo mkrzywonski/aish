@@ -50,7 +50,8 @@ type activityEntry struct {
 	Target   string // the identifying argument: path, command, pattern
 	Via      string // channel | sftp | local | in_band | terminal | control
 	Host     string
-	Visible  bool // true when the operation was visible in the shared terminal
+	Visible  bool   // true when the operation was visible in the shared terminal
+	Effect   string // "acted" | "read": whether the call changed anything or only looked
 	Error    string
 	ExitCode *int
 	Bytes    *int64
@@ -138,6 +139,35 @@ var invisibleRoutes = map[string]bool{
 	"controlmaster": true, // a one-off ControlMaster slave
 	"sftp":          true, // the retained SFTP client
 	"local":         true, // direct local fs/exec on a local session
+}
+
+// readOnlyOps only look. Recording that distinction matters because the log's
+// own labels invite a wrong reading without it: read_screen is filed as
+// via:"terminal", visible:true, which an evaluation agent initially took to
+// mean the read had somehow written to the terminal. Reviewing a list of
+// operations, "did this change anything" is usually the first question, and it
+// was previously answerable only by recognising each tool by name.
+var readOnlyOps = map[string]bool{
+	"read_screen":    true,
+	"read_output":    true,
+	"wait_idle":      true,
+	"file_read":      true,
+	"file_stat":      true,
+	"file_grep":      true,
+	"file_search":    true,
+	"directory_list": true,
+	"file_download":  true, // writes locally, reads the session's host
+	"oob_log":        true,
+	"probe_host":     true,
+	"session_status": true,
+}
+
+// effectOf classifies one call for the log.
+func effectOf(tool string) string {
+	if readOnlyOps[tool] {
+		return "read"
+	}
+	return "acted"
 }
 
 // controlTools act on neither a host nor the terminal. session_status needs the
@@ -277,6 +307,7 @@ func (c *Core) entryFor(req mcp.Request, params *mcp.CallToolParamsRaw, res mcp.
 		e.Via = "unresolved"
 	}
 	e.Visible = e.Via != "unresolved" && !invisibleRoutes[e.Via]
+	e.Effect = effectOf(e.Tool)
 	return e
 }
 
@@ -454,6 +485,9 @@ func formatActivity(e activityEntry) string {
 	}
 	if e.Target != "" {
 		parts = append(parts, truncate(e.Target, 60))
+	}
+	if e.Effect == "read" {
+		parts = append(parts, "(read-only)")
 	}
 	switch {
 	case e.Error != "":

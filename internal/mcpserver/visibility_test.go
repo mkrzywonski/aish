@@ -32,3 +32,24 @@ func TestVisibilityMatchesTheAuditTrail(t *testing.T) {
 		}
 	}
 }
+
+// "Did this change anything" is the first question when reviewing a list of
+// operations, and it was previously answerable only by recognising tool names.
+func TestEffectOf(t *testing.T) {
+	for tool, want := range map[string]string{
+		"read_screen":    "read",
+		"file_read":      "read",
+		"directory_list": "read",
+		"oob_log":        "read",
+		"file_write":     "acted",
+		"file_edit":      "acted",
+		"exec":           "acted",
+		"run_command":    "acted",
+		"send_input":     "acted",
+		"file_upload":    "acted",
+	} {
+		if got := effectOf(tool); got != want {
+			t.Errorf("effectOf(%q) = %q, want %q", tool, got, want)
+		}
+	}
+}

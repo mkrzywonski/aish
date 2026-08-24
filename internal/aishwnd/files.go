@@ -102,7 +102,11 @@ func registerFileTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_read",
 		Annotations: readOnlyTool("Read file on Windows host"),
-		Description: "Read a file from the Windows host. Non-UTF-8 content is returned base64 (see encoding).",
+		Description: "Read a file from the Windows host. Non-UTF-8 content is returned base64 (see encoding)." +
+			"Every operation on this session is mirrored to the human's console as it happens, and the " +
+			"result says so in its visibility field. Do not carry that assumption to a shared-terminal " +
+			"session: file_read there is silent when an out-of-band route is authorized, but otherwise " +
+			"falls back to typing through the terminal, which puts the file's contents on a human's screen.",
 	}, sess.fileRead)
 
 	mcp.AddTool(s, &mcp.Tool{
