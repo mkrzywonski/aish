@@ -23,9 +23,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -182,9 +184,15 @@ func (p *aggProxy) forward(ctx context.Context, tool string, req *mcp.CallToolRe
 	}
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
-		// Connection likely died with the session; drop it and report so the
-		// AI can re-list and retry.
-		p.drop(info.ID)
+		// Only a dead connection warrants dropping the pooled session. A
+		// tool-level refusal — an unknown tool name, a rejected argument —
+		// arrives over a perfectly healthy connection, and evicting on it
+		// forced a fresh dial and a full re-authorization on the very next
+		// call. Sessions differ in which tools they implement, so "unknown
+		// tool" is an ordinary answer here, not evidence of a broken link.
+		if isTransportError(err) {
+			p.drop(info.ID)
+		}
 		return p.annotate(ctx, toolError("session %s: %v", info.Label(), err), live), nil
 	}
 	return p.annotate(ctx, res, live), nil
@@ -354,6 +362,23 @@ func (p *aggProxy) clientDescription() string {
 	}
 }
 
+// isTransportError reports whether a failed call means the connection itself
+// is unusable, as opposed to the session having answered with a refusal. Only
+// the former justifies tearing a pooled connection down; a timeout counts,
+// because a late response would desynchronize the stream.
+func isTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne)
+}
+
 func (p *aggProxy) drop(id string) {
 	p.mu.Lock()
 	pc := p.conns[id]
@@ -449,17 +474,34 @@ func (p *aggProxy) versionInfo(ctx context.Context, req *mcp.CallToolRequest, ar
 // ---- tool-list mirroring (schema cache) ----
 
 // toolSpecs returns the session tool set to advertise (all session tools
-// except the internal authentication tools). It mirrors a live session's
-// schemas and caches them to disk so it works even when no session is
-// currently running. On a first run with no session and no cache yet, the
-// proxy still starts with only its local tools; reconnect after starting a
-// session to advertise the mirrored session tools.
+// except the internal authentication tools), cached to disk so it works even
+// when no session is currently running. On a first run with no session and no
+// cache yet, the proxy still starts with only its local tools; reconnect after
+// starting a session to advertise the mirrored session tools.
+//
+// It unions EVERY live session's tools rather than mirroring one. Sessions
+// come in kinds — a PTY-backed shared terminal and a native Windows peer —
+// that implement genuinely different tools, so sampling a single session
+// advertised one kind's surface as if it were universal: whichever session id
+// happened to sort first decided what the client could do. A tool only the
+// other kind implements then had no handler registered at all (see the
+// registration loop in Run), leaving it unroutable even though the target
+// served it perfectly well.
 func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
-	if live := List(); len(live) > 0 {
-		if tools, err := p.fetchTools(ctx, live[0]); err == nil {
-			saveToolCache(tools)
-			return filterTools(tools), nil
+	var sets []labeledTools
+	for _, info := range List() {
+		tools, err := p.fetchTools(ctx, info)
+		if err != nil {
+			// One unreachable session must not cost us the others' tools.
+			fmt.Fprintf(os.Stderr, "aish mcp-proxy: listing tools from session %s: %v\n", info.Label(), err)
+			continue
 		}
+		sets = append(sets, labeledTools{label: info.Label(), tools: filterTools(tools)})
+	}
+	if len(sets) > 0 {
+		merged := mergeToolSpecs(sets)
+		saveToolCache(merged)
+		return merged, nil
 	}
 	if tools := loadToolCache(); tools != nil {
 		return filterTools(tools), nil
@@ -495,6 +537,150 @@ func filterTools(tools []*mcp.Tool) []*mcp.Tool {
 		out = append(out, t)
 	}
 	return out
+}
+
+// labeledTools is one session's advertised tool set, tagged for divergence
+// reporting; labeledTool is a single tool from it.
+type labeledTools struct {
+	label string
+	tools []*mcp.Tool
+}
+
+type labeledTool struct {
+	label string
+	tool  *mcp.Tool
+}
+
+// mergeToolSpecs unions tool sets by name. Only one variant of a shared name
+// can be advertised, so the routing-aware one (already declaring `session`)
+// wins and the advertised description says plainly that other sessions
+// implement it differently. Silently presenting one kind's variant as
+// universal is exactly what lets a client read one implementation's
+// documentation while calling another's — the same tool name can mean
+// "invisible, authorization-gated" on one session and "mirrored to a human in
+// real time" on the next.
+func mergeToolSpecs(sets []labeledTools) []*mcp.Tool {
+	var order []string
+	variants := map[string][]labeledTool{}
+	for _, s := range sets {
+		for _, t := range s.tools {
+			if _, seen := variants[t.Name]; !seen {
+				order = append(order, t.Name)
+			}
+			variants[t.Name] = append(variants[t.Name], labeledTool{label: s.label, tool: t})
+		}
+	}
+	out := make([]*mcp.Tool, 0, len(order))
+	for _, name := range order {
+		vs := variants[name]
+		base := vs[0]
+		for _, v := range vs {
+			if schemaDeclaresSession(v.tool.InputSchema) {
+				base = v
+				break
+			}
+		}
+		merged := *base.tool
+		if others := divergentLabels(vs, base); len(others) > 0 {
+			merged.Description = strings.TrimRight(merged.Description, " ") +
+				" NOTE: sessions on this machine implement different variants of this tool." +
+				" This text describes " + base.label + "; " + strings.Join(others, ", ") +
+				" differ (behaviour, visibility or accepted arguments may not match)." +
+				" Confirm the target session before relying on the details above."
+		}
+		ensureSessionArg(&merged)
+		out = append(out, &merged)
+	}
+	return out
+}
+
+// divergentLabels names the sessions whose variant of a tool differs from the
+// one being advertised.
+func divergentLabels(vs []labeledTool, base labeledTool) []string {
+	var out []string
+	for _, v := range vs {
+		if v.label != base.label && !sameToolShape(v.tool, base.tool) {
+			out = append(out, v.label)
+		}
+	}
+	return out
+}
+
+// sameToolShape reports whether two same-named tools are interchangeable from
+// a caller's point of view: identical prose and identical accepted arguments.
+func sameToolShape(a, b *mcp.Tool) bool {
+	if a.Description != b.Description {
+		return false
+	}
+	pa, pb := schemaPropertyNames(a.InputSchema), schemaPropertyNames(b.InputSchema)
+	if len(pa) != len(pb) {
+		return false
+	}
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// schemaPropertyNames returns a mirrored schema's declared property names,
+// sorted, for comparison.
+func schemaPropertyNames(schema any) []string {
+	props, _ := schemaProperties(schema)
+	names := make([]string, 0, len(props))
+	for k := range props {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// schemaProperties returns the properties map of a mirrored (JSON-decoded)
+// input schema.
+func schemaProperties(schema any) (map[string]any, bool) {
+	m, ok := schema.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	props, ok := m["properties"].(map[string]any)
+	return props, ok
+}
+
+func schemaDeclaresSession(schema any) bool {
+	props, _ := schemaProperties(schema)
+	_, ok := props["session"]
+	return ok
+}
+
+// sessionArgDescription mirrors the wording of internal/mcpserver's SessionArg.
+const sessionArgDescription = "run this call in another live session, addressed by id or name (see list_sessions); default: the session this connection is attached to"
+
+// ensureSessionArg adds the `session` routing property to a mirrored schema
+// that lacks one. A session server serving exactly one session has nothing to
+// route and so omits the argument — but the proxy REQUIRES it whenever more
+// than one session is live, and those same schemas set
+// additionalProperties:false. Advertising them unchanged told every client that
+// the one argument which makes the call valid was forbidden: a strict client
+// could not express the call at all, and a lenient one worked only by ignoring
+// the schema it had just been given.
+func ensureSessionArg(t *mcp.Tool) {
+	m, ok := t.InputSchema.(map[string]any)
+	if !ok {
+		return
+	}
+	props, ok := m["properties"].(map[string]any)
+	if !ok {
+		props = map[string]any{}
+		m["properties"] = props
+	}
+	if _, exists := props["session"]; exists {
+		return
+	}
+	props["session"] = map[string]any{
+		"type":        "string",
+		"description": sessionArgDescription,
+	}
 }
 
 func toolCachePath() string {
