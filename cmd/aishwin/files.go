@@ -34,13 +34,26 @@ func readFile(path string, offset int64, max int) (data []byte, eof bool, err er
 		return nil, false, err
 	}
 	defer f.Close()
+	// A directory opens cleanly and then fails on the first Read — an error
+	// this function used to discard, so reading a folder returned empty
+	// content with eof set, indistinguishable from a genuinely empty file
+	// (down to a valid sha256 of the empty string). Refuse it by name, and
+	// point at the tool that does answer the question.
+	if info, statErr := f.Stat(); statErr == nil && info.IsDir() {
+		return nil, false, fmt.Errorf("%s is a directory, not a file; use directory_list to see what it contains", path)
+	}
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return nil, false, err
 		}
 	}
 	buf := make([]byte, max+1)
-	n, _ := readFullBuf(f, buf)
+	n, readErr := readFullBuf(f, buf)
+	// A short read ends in io.EOF, which is ordinary. Any other failure has
+	// to reach the caller rather than being reported as empty content.
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return nil, false, readErr
+	}
 	eof = n <= max
 	if n > max {
 		n = max
