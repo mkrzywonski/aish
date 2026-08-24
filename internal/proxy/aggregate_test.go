@@ -165,12 +165,12 @@ func TestUnsupportedToolErrorIsActionable(t *testing.T) {
 			"88f98135": {"directory_list", "file_read", "run_command"},
 		},
 	}
-	info := SessionInfo{ID: "88f98135", Name: "Windows", Backend: "windows_peer"}
+	info := SessionInfo{ID: "88f98135", Name: "Windows", Backend: "direct_host"}
 	msg := p.unsupportedToolError(context.Background(), info, "session_status")
 	if msg == "" {
 		t.Fatal("calling a tool the session does not implement was allowed through")
 	}
-	for _, want := range []string{"session_status", "Windows", "windows_peer", "not a typo", "run_command"} {
+	for _, want := range []string{"session_status", "Windows", "direct_host", "not a typo", "run_command"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal should mention %q; got: %s", want, msg)
 		}
@@ -183,7 +183,7 @@ func TestUnsupportedToolErrorAllowsImplementedTools(t *testing.T) {
 		lastNames: map[string]string{},
 		toolNames: map[string][]string{"88f98135": {"file_read", "run_command"}},
 	}
-	info := SessionInfo{ID: "88f98135", Name: "Windows", Backend: "windows_peer"}
+	info := SessionInfo{ID: "88f98135", Name: "Windows", Backend: "direct_host"}
 	if msg := p.unsupportedToolError(context.Background(), info, "file_read"); msg != "" {
 		t.Errorf("implemented tool was refused: %s", msg)
 	}

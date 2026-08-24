@@ -37,10 +37,10 @@ func TestKindRoundTrip(t *testing.T) {
 	if got := ReadBackend(id); got != "" {
 		t.Errorf("a session with no backend file should read as unknown, got %q", got)
 	}
-	if err := WriteBackend(id, BackendWindowsPeer); err != nil {
+	if err := WriteBackend(id, BackendDirectHost); err != nil {
 		t.Fatal(err)
 	}
-	if got := ReadBackend(id); got != BackendWindowsPeer {
-		t.Errorf("ReadBackend = %q, want %q", got, BackendWindowsPeer)
+	if got := ReadBackend(id); got != BackendDirectHost {
+		t.Errorf("ReadBackend = %q, want %q", got, BackendDirectHost)
 	}
 }

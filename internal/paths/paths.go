@@ -73,8 +73,16 @@ func WriteName(id, name string) error {
 // Session backends. The backend is which implementation serves a session, and
 // it decides what that session can possibly do: BackendSharedTerminal is a
 // terminal on a local pty that a human watches and types into, optionally
-// SSH'd elsewhere; BackendWindowsPeer is a native Windows machine reached
-// through aishwnd, with no terminal to share.
+// SSH'd elsewhere; BackendDirectHost is a machine the AI reaches directly,
+// with no terminal for a human to share — today that is a Windows machine
+// reached through aishwnd.
+//
+// The value deliberately does not name the operating system, because the
+// operating system is a different axis and is reported separately: a
+// shared-terminal session SSH'd to a Windows host is running Windows too, so
+// an OS-flavoured value here would be true of both. "peer" was avoided as
+// well — this codebase already uses that word for the kernel-verified client
+// process the activity log reports, and one term cannot mean two things.
 //
 // This is NOT the platform and NOT the shell, both of which are separate axes
 // reported elsewhere. A shared-terminal session SSH'd to a Windows host IS
@@ -83,7 +91,7 @@ func WriteName(id, name string) error {
 // out-of-band route for anything to be invisible on.
 const (
 	BackendSharedTerminal = "shared_terminal"
-	BackendWindowsPeer    = "windows_peer"
+	BackendDirectHost     = "direct_host"
 )
 
 // BackendFile returns the path of the file recording a session's backend. It is

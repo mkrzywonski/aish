@@ -55,7 +55,7 @@ func registerStatusTool(s *mcp.Server, sess *aishwndSession, availableShells []s
 		return nil, sessionStatusResult{
 			SessionID:         sess.id,
 			SessionName:       sess.name,
-			Backend:           paths.BackendWindowsPeer,
+			Backend:           paths.BackendDirectHost,
 			Host:              sess.displayHost(),
 			Platform:          "windows",
 			Proto:             proto,

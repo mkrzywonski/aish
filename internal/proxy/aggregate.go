@@ -426,10 +426,10 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	live := List()
 	for _, s := range live {
 		out.Sessions = append(out.Sessions, sessionEntry{
-			ID:    s.ID,
-			Name:  s.Name,
+			ID:      s.ID,
+			Name:    s.Name,
 			Backend: s.Backend,
-			Tools: p.sessionToolNames(ctx, s),
+			Tools:   p.sessionToolNames(ctx, s),
 		})
 	}
 	// Refresh the rename baseline so list_sessions establishes ground truth
@@ -529,7 +529,7 @@ func (p *aggProxy) sessionServerInfo(ctx context.Context, info SessionInfo) (nam
 // starting a session to advertise the mirrored session tools.
 //
 // It unions EVERY live session's tools rather than mirroring one. Sessions
-// come in backends — a pty-backed shared terminal and a native Windows peer —
+// come in backends — a pty-backed shared terminal and a directly-reached host —
 // that implement genuinely different tools, so sampling a single session
 // advertised one backend's surface as if it were universal: whichever session id
 // happened to sort first decided what the client could do. A tool only the
@@ -706,8 +706,8 @@ func (p *aggProxy) unsupportedToolError(ctx context.Context, info SessionInfo, t
 // backendHint explains, in one clause, why a backend has the tools it has.
 func backendHint(backend string) string {
 	switch backend {
-	case paths.BackendWindowsPeer:
-		return " — a native Windows peer with no shared terminal, so it has no terminal tools and no out-of-band/visibility distinction"
+	case paths.BackendDirectHost:
+		return " — a machine reached directly, with no terminal for a human to share, so it has no terminal tools and no out-of-band/visibility distinction"
 	case paths.BackendSharedTerminal:
 		return " — a shared terminal a human can watch and type into"
 	}

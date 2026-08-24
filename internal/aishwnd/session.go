@@ -139,7 +139,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 		os.RemoveAll(dir)
 	}()
 
-	_ = paths.WriteBackend(id, paths.BackendWindowsPeer)
+	_ = paths.WriteBackend(id, paths.BackendDirectHost)
 
 	if hello.Name != "" && paths.ValidName(hello.Name) {
 		_ = paths.WriteName(id, hello.Name)

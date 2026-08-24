@@ -20,7 +20,7 @@ import (
 type SessionInfo struct {
 	ID    string
 	Name  string // "" when unnamed
-	Backend string // paths.BackendSharedTerminal / paths.BackendWindowsPeer; "" on a session that predates the backend file
+	Backend string // paths.BackendSharedTerminal / paths.BackendDirectHost; "" on a session that predates the backend file
 	Sock  string
 	MTime int64 // session dir mtime, unix nanos
 }
