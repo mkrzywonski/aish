@@ -25,6 +25,9 @@ import (
 
 // Core bundles everything tool handlers need to observe and drive a session.
 type Core struct {
+	// spill tracks the one retained oversized-output file (see spill.go).
+	spill spillState
+
 	Sess    *session.Session
 	Term    *term.Terminal
 	Tracker *state.Tracker

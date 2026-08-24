@@ -130,7 +130,11 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"in the shared shell; for commands the user should see, or that need the shell's current identity/privileges, " +
 			"prefer run_command. sudo, su and other privilege escalation are REFUSED on the out-of-band route and must go " +
 			"through run_command: the human sees the command and types their own password, and the out-of-band channel has " +
-			"no terminal for a password prompt anyway.",
+			"no terminal for a password prompt anyway. Unlike run_command, exec output is NOT in the terminal " +
+			"scrollback, so oversized output cannot be re-read with read_output: it is trimmed from the middle " +
+			"and the full text is written to the file named by output_path on the host that ran it. Read that " +
+			"with file_read, or search it with file_grep without reading it. It is replaced the next time " +
+			"output overflows, so retrieve it before then.",
 	}, c.execTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -1505,8 +1509,15 @@ type execResult struct {
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
 	TimedOut bool   `json:"timed_out,omitempty"`
-	Via      string `json:"via"`
-	Host     string `json:"host"`
+	// Truncated says output was trimmed. exec has no scrollback behind it, so
+	// the full text is written to OutputPath on the host that ran the command
+	// (OutputBytes is its size) and retrieved with file_read or file_grep.
+	Truncated   bool   `json:"truncated,omitempty"`
+	OutputPath  string `json:"output_path,omitempty"`
+	OutputBytes int64  `json:"output_bytes,omitempty"`
+	Warning     string `json:"warning,omitempty"`
+	Via         string `json:"via"`
+	Host        string `json:"host"`
 }
 
 func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args execArgs) (*mcp.CallToolResult, execResult, error) {
@@ -1590,7 +1601,8 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 		if err != nil {
 			return nil, execResult{}, err
 		}
-		res := execResult{Via: "channel", Host: rt.host, Output: capString(cres.Output, execOutputCap)}
+		res := execResult{Via: "channel", Host: rt.host}
+		c.attachSpill(ctx, &res, rt, c.Sess.ID, cres.Output)
 		if cres.TimedOut {
 			res.TimedOut = true
 			return nil, res, nil
@@ -1611,7 +1623,8 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
-	res := execResult{Via: rt.via, Host: rt.host, Output: capString(buf.Bytes(), execOutputCap)}
+	res := execResult{Via: rt.via, Host: rt.host}
+	c.attachSpill(ctx, &res, rt, c.Sess.ID, buf.Bytes())
 	if cctx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true
 		return nil, res, nil
