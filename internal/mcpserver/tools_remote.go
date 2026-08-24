@@ -130,7 +130,11 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"in the shared shell; for commands the user should see, or that need the shell's current identity/privileges, " +
 			"prefer run_command. sudo, su and other privilege escalation are REFUSED on the out-of-band route and must go " +
 			"through run_command: the human sees the command and types their own password, and the out-of-band channel has " +
-			"no terminal for a password prompt anyway. Unlike run_command, exec output is NOT in the terminal " +
+			"no terminal for a password prompt anyway. Every result reports target_confidence: whether aish " +
+			"can confirm this ran on the machine the human is watching. If it is not \"same\", say which host " +
+			"you believe you are on and check with the user before anything destructive -- better still, " +
+			"resolve it, since the aish menu can install prompt tracking on the remote and turn the guess " +
+			"into a fact. Unlike run_command, exec output is NOT in the terminal " +
 			"scrollback, so oversized output cannot be re-read with read_output: it is trimmed from the middle " +
 			"and the full text is written to the file named by output_path on the host that ran it. Read that " +
 			"with file_read, or search it with file_grep without reading it. It is replaced the next time " +
@@ -390,6 +394,19 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 	if rt.ci != nil && rt.ci.Host != "" {
 		token = rt.ci.Host
 	}
+	// unverifiedNote is what the CALLER is told whenever identity could not be
+	// established. The human is prompted at most once per host so they are not
+	// nagged, but that quiet is for them, not for the AI: after a single "yes"
+	// every later operation used to look indistinguishable from one on a
+	// verified host. Silence about an unverified target is how a command ends
+	// up on the wrong machine.
+	unverifiedNote := fmt.Sprintf(
+		"host identity UNVERIFIED on %q: the interactive shell does not report a hostname, so aish cannot "+
+			"confirm out-of-band operations run on the machine the human is watching. Before anything "+
+			"destructive, say which host you believe you are on and check with the user, or resolve it -- "+
+			"the aish menu (Ctrl-]) offers [p] to install prompt tracking, after which target_confidence "+
+			"becomes \"same\" and this stops being a guess.", oobHost)
+
 	switch divergencePolicy(confidence, kind, c.targetConfirmed(token)) {
 	case divFail:
 		return "", fmt.Errorf(
@@ -418,11 +435,16 @@ func (c *Core) guardTarget(rt route, kind opKind) (warning string, err error) {
 			return "", nil
 		case ok && ans == 'y':
 			c.confirmTarget(token)
-			return "", nil
+			// The human waved this one through; the caller still needs to know
+			// the target was never verified.
+			return unverifiedNote, nil
 		default:
 			return "", fmt.Errorf("out-of-band write to %s not confirmed (its host could not be verified); reconnect ssh through aish, set up the aish prompt from the aish menu, or use run_command", oobHost)
 		}
 	default:
+		if confidence != "same" {
+			return unverifiedNote, nil
+		}
 		return "", nil
 	}
 }
@@ -1530,8 +1552,13 @@ type execResult struct {
 	OutputPath  string `json:"output_path,omitempty"`
 	OutputBytes int64  `json:"output_bytes,omitempty"`
 	Warning     string `json:"warning,omitempty"`
-	Via         string `json:"via"`
-	Host        string `json:"host"`
+	// TargetConfidence is how sure aish is that this ran on the machine the
+	// human is watching: "same", "unknown" or "mismatch". Reported on every
+	// out-of-band command rather than left for the caller to go and ask,
+	// because the cost of assuming is a command on the wrong host.
+	TargetConfidence string `json:"target_confidence,omitempty"`
+	Via              string `json:"via"`
+	Host             string `json:"host"`
 }
 
 func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args execArgs) (*mcp.CallToolResult, execResult, error) {
@@ -1541,12 +1568,14 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 		}
 	}
 	rt := c.route()
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	guardWarning, err := c.guardTarget(rt, opMutate)
+	if err != nil {
 		return nil, execResult{}, err
 	}
 	if err := c.requireTool(rt, "exec"); err != nil {
 		return nil, execResult{}, err
 	}
+	_, _, _, targetConfidence := c.hostConfidence(rt)
 
 	// Privilege escalation must not happen out of band. Running sudo invisibly
 	// breaks the promise the shared terminal exists to keep — that a privileged
@@ -1592,7 +1621,7 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 			if err != nil {
 				return nil, execResult{}, err
 			}
-			return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host}, nil
+			return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host, Warning: guardWarning, TargetConfidence: targetConfidence}, nil
 		}
 		cmd := c.buildExec(context.Background(), rt, args.Command, args.Cwd)
 		task, err := c.Tasks.Start(cmd)
@@ -1615,7 +1644,7 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 		if err != nil {
 			return nil, execResult{}, err
 		}
-		res := execResult{Via: "channel", Host: rt.host}
+		res := execResult{Via: "channel", Host: rt.host, Warning: guardWarning, TargetConfidence: targetConfidence}
 		c.attachSpill(ctx, &res, rt, c.Sess.ID, cres.Output)
 		if cres.TimedOut {
 			res.TimedOut = true
@@ -1636,8 +1665,8 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err := cmd.Run()
-	res := execResult{Via: rt.via, Host: rt.host}
+	err = cmd.Run()
+	res := execResult{Via: rt.via, Host: rt.host, Warning: guardWarning, TargetConfidence: targetConfidence}
 	c.attachSpill(ctx, &res, rt, c.Sess.ID, buf.Bytes())
 	if cctx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true

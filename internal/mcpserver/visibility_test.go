@@ -111,3 +111,26 @@ func TestConfidenceComparesReportedHostsNotTheConnectionTarget(t *testing.T) {
 		t.Errorf("stale local host must not be read as agreement, got %q", got)
 	}
 }
+
+// The human is prompted at most once per host so they are not nagged. That
+// quiet is for them, not for the AI: after a single "yes" every later
+// operation looked identical to one on a verified host, and silence about an
+// unverified target is how a command lands on the wrong machine.
+func TestDivergencePolicyPromptsHumanOnceButNeverGoesQuietForReads(t *testing.T) {
+	// First mutation on an unverified host: ask the human.
+	if got := divergencePolicy("unknown", opMutate, false); got != divConfirm {
+		t.Errorf("first unverified mutation should confirm, got %v", got)
+	}
+	// Once confirmed, do not re-prompt.
+	if got := divergencePolicy("unknown", opMutate, true); got != divAllow {
+		t.Errorf("confirmed host should not re-prompt, got %v", got)
+	}
+	// A detected mismatch is refused outright, confirmed or not.
+	if got := divergencePolicy("mismatch", opMutate, true); got != divFail {
+		t.Errorf("mismatch must fail closed even after confirmation, got %v", got)
+	}
+	// Reads are never blocked, but a mismatch is always surfaced.
+	if got := divergencePolicy("mismatch", opRead, true); got != divWarn {
+		t.Errorf("mismatched read should warn, got %v", got)
+	}
+}
