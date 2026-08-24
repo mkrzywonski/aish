@@ -1,4 +1,4 @@
-﻿package aishwnd
+package aishwnd
 
 import (
 	"context"
@@ -31,9 +31,12 @@ type runCommandResult struct {
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
 	TimedOut bool   `json:"timed_out,omitempty"`
-	Shell    string `json:"shell"`
-	Via      string `json:"via"`
-	Host     string `json:"host"`
+	// Truncated says the output was shortened from the middle; both ends are
+	// present, so the command's conclusion is never the part that is cut.
+	Truncated bool   `json:"truncated,omitempty"`
+	Shell     string `json:"shell"`
+	Via       string `json:"via"`
+	Host      string `json:"host"`
 }
 
 type taskStatusArgs struct {
@@ -44,6 +47,7 @@ type taskStatusArgs struct {
 type taskStatusResult struct {
 	Running    bool   `json:"running"`
 	Output     string `json:"output"`
+	Truncated  bool   `json:"truncated,omitempty"`
 	NextCursor int64  `json:"next_cursor"`
 	ExitCode   *int   `json:"exit_code,omitempty"`
 }
@@ -71,11 +75,13 @@ func registerCommandTools(s *mcp.Server, sess *aishwndSession, availableShells [
 			"switching which one you use for one call never loses another kind's state. " +
 			"Use background=true for long-running commands, then poll task_status. A foreground command that " +
 			"times out kills and replaces that shell's persistent process (state is lost) rather than risk its " +
-			"late output corrupting the next command's result.",
+			"late output corrupting the next command's result. Very large output is shortened from the MIDDLE, " +
+			"keeping both ends and setting truncated: a command's conclusion is usually its last line, so the " +
+			"end is never the part that gets cut.",
 	}, sess.runCommandTool)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "task_status",
+		Name: "task_status",
 		Description: "Poll a background task by the task_id returned when a command was started with " +
 			"background=true (run_command on this Windows backend; exec on the shared-terminal backend): " +
 			"incremental output since next_cursor, whether it is still running, and the exit code once it " +
@@ -111,14 +117,16 @@ func (s *aishwndSession) runCommandTool(ctx context.Context, req *mcp.CallToolRe
 	if res.Error != "" {
 		return nil, runCommandResult{}, errors.New(res.Error)
 	}
+	output, truncated := capOutput(res.Output)
 	return nil, runCommandResult{
-		Output:   res.Output,
-		ExitCode: res.ExitCode,
-		TaskID:   res.TaskID,
-		TimedOut: res.TimedOut,
-		Shell:    res.Shell,
-		Via:      "aishwin",
-		Host:     s.displayHost(),
+		Output:    output,
+		Truncated: truncated,
+		ExitCode:  res.ExitCode,
+		TaskID:    res.TaskID,
+		TimedOut:  res.TimedOut,
+		Shell:     res.Shell,
+		Via:       "aishwin",
+		Host:      s.displayHost(),
 	}, nil
 }
 
@@ -146,9 +154,11 @@ func (s *aishwndSession) taskStatus(ctx context.Context, req *mcp.CallToolReques
 	if res.Error != "" {
 		return nil, taskStatusResult{}, errors.New(res.Error)
 	}
+	output, truncated := capOutput(res.Output)
 	return nil, taskStatusResult{
 		Running:    res.Running,
-		Output:     res.Output,
+		Output:     output,
+		Truncated:  truncated,
 		NextCursor: res.NextCursor,
 		ExitCode:   res.ExitCode,
 	}, nil
