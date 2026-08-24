@@ -707,6 +707,7 @@ func mergeToolSpecs(sets []labeledTools) []*mcp.Tool {
 			}
 		}
 		merged := *base.tool
+		merged.InputSchema = mergeSchemas(base, vs)
 		if others := divergentBackends(vs, base); len(others) > 0 {
 			merged.Description = strings.TrimRight(merged.Description, " ") +
 				" NOTE: backends on this machine implement different variants of this tool." +
@@ -788,6 +789,117 @@ func backendHint(backend string) string {
 		return " — a shared terminal a human can watch and type into"
 	}
 	return ""
+}
+
+// mergeSchemas advertises the UNION of a shared tool's arguments across
+// backends, annotating any argument the backends do not all accept.
+//
+// Advertising one variant's schema silently removed the other's extra
+// arguments from the client's reach: run_command on a direct host accepts
+// background, shell and cwd, none of which survived into the advertised
+// schema, so through the proxy a background command could not be started and
+// cmd could not be chosen over powershell. That is the same capability loss as
+// a tool missing from the list entirely — only harder to see, because the tool
+// itself was right there.
+//
+// Sending an argument the target does not accept now fails with a clear
+// validation error naming it, which is a far better outcome than the
+// capability being unreachable.
+func mergeSchemas(base labeledTool, vs []labeledTool) any {
+	baseSchema, ok := base.tool.InputSchema.(map[string]any)
+	if !ok {
+		return base.tool.InputSchema
+	}
+	out := map[string]any{}
+	for k, v := range baseSchema {
+		out[k] = v
+	}
+	props := map[string]any{}
+	if p, ok := baseSchema["properties"].(map[string]any); ok {
+		for k, v := range p {
+			props[k] = v
+		}
+	}
+	// Which backends accept each argument.
+	owners := map[string]map[string]bool{}
+	backends := map[string]bool{}
+	for _, v := range vs {
+		b := describeBackend(v.backend)
+		backends[b] = true
+		vp, _ := schemaProperties(v.tool.InputSchema)
+		for name, spec := range vp {
+			if owners[name] == nil {
+				owners[name] = map[string]bool{}
+			}
+			owners[name][b] = true
+			if _, exists := props[name]; !exists {
+				props[name] = spec
+			}
+		}
+	}
+	for name, spec := range props {
+		if len(owners[name]) == 0 || len(owners[name]) == len(backends) {
+			continue // accepted everywhere, or ours alone to describe
+		}
+		m, ok := spec.(map[string]any)
+		if !ok {
+			continue
+		}
+		only := make([]string, 0, len(owners[name]))
+		for b := range owners[name] {
+			only = append(only, b)
+		}
+		sort.Strings(only)
+		copied := map[string]any{}
+		for k, v := range m {
+			copied[k] = v
+		}
+		desc, _ := copied["description"].(string)
+		if desc != "" {
+			desc += " "
+		}
+		copied["description"] = desc + "(accepted only by the " + strings.Join(only, " and ") + " backend)"
+		props[name] = copied
+	}
+	out["properties"] = props
+
+	// Require only what every backend requires: forcing one backend's
+	// requirement onto another would reject calls that backend accepts.
+	out["required"] = intersectRequired(vs)
+	return out
+}
+
+// intersectRequired returns the arguments every variant marks required.
+func intersectRequired(vs []labeledTool) []any {
+	counts := map[string]int{}
+	for _, v := range vs {
+		m, ok := v.tool.InputSchema.(map[string]any)
+		if !ok {
+			continue
+		}
+		req, _ := m["required"].([]any)
+		seen := map[string]bool{}
+		for _, r := range req {
+			name, _ := r.(string)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			counts[name]++
+		}
+	}
+	var out []string
+	for name, n := range counts {
+		if n == len(vs) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	anyOut := make([]any, len(out))
+	for i, name := range out {
+		anyOut[i] = name
+	}
+	return anyOut
 }
 
 // divergentBackends names the BACKENDS whose variant of a tool differs from

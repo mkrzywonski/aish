@@ -202,3 +202,39 @@ func TestUnsupportedToolErrorSilentWhenSurfaceUnknown(t *testing.T) {
 		t.Errorf("should defer to the session when its tools are unknown, got: %s", msg)
 	}
 }
+
+// Advertising one variant's schema silently removed the other's arguments from
+// the client's reach: a direct-host run_command accepts background/shell/cwd,
+// none of which survived, so a background command could not be started at all.
+func TestMergeToolSpecsUnionsArguments(t *testing.T) {
+	merged := mergeToolSpecs([]labeledTools{
+		{label: "aaa (nixos)", backend: "shared_terminal", tools: []*mcp.Tool{
+			{Name: "run_command", Description: "type into the terminal", InputSchema: schema("command", "timeout_ms", "session")},
+		}},
+		{label: "bbb (Windows)", backend: "direct_host", tools: []*mcp.Tool{
+			{Name: "run_command", Description: "mirrored to the console", InputSchema: schema("command", "timeout_ms", "background", "shell", "cwd")},
+		}},
+	})
+	props, ok := schemaProperties(find(t, merged, "run_command").InputSchema)
+	if !ok {
+		t.Fatal("merged schema lost its properties")
+	}
+	for _, want := range []string{"command", "timeout_ms", "session", "background", "shell", "cwd"} {
+		if _, exists := props[want]; !exists {
+			t.Errorf("argument %q is not reachable through the advertised schema", want)
+		}
+	}
+	// A backend-specific argument must say so, or a caller cannot tell why it
+	// was rejected on the other backend.
+	spec, _ := props["background"].(map[string]any)
+	desc, _ := spec["description"].(string)
+	if !strings.Contains(desc, "direct_host") {
+		t.Errorf("backend-specific argument is not labelled: %q", desc)
+	}
+	// An argument both accept must NOT be labelled.
+	cspec, _ := props["command"].(map[string]any)
+	cdesc, _ := cspec["description"].(string)
+	if strings.Contains(cdesc, "accepted only by") {
+		t.Errorf("shared argument was labelled backend-specific: %q", cdesc)
+	}
+}
