@@ -57,6 +57,9 @@ var (
 
 	devInfoDialogMu   sync.Mutex
 	devInfoDialogHwnd syscall.Handle
+
+	devEnvDialogMu   sync.Mutex
+	devEnvDialogHwnd syscall.Handle
 )
 
 func init() {
@@ -105,6 +108,16 @@ func init() {
 		devInfoDialogHwnd = 0
 		devInfoDialogMu.Unlock()
 	}
+	onEnvDialogOpen = func(hwnd syscall.Handle) {
+		devEnvDialogMu.Lock()
+		devEnvDialogHwnd = hwnd
+		devEnvDialogMu.Unlock()
+	}
+	onEnvDialogClose = func() {
+		devEnvDialogMu.Lock()
+		devEnvDialogHwnd = 0
+		devEnvDialogMu.Unlock()
+	}
 }
 
 // startDevControlWatcher polls for a trigger file every 300ms for the life
@@ -146,17 +159,14 @@ func startDevControlWatcher() {
 //	                        needed before settingsclick:<idEnvEditBtn> or
 //	                        settingsclick:<idEnvDeleteBtn>, mirroring a
 //	                        user clicking a row before Edit/Delete
-//	envtype:<value>         if the Environment tab's in-place Key or Value
-//	                        edit is currently active, set its text
-//	envcommit               if the Environment tab's in-place Key or Value
-//	                        edit is currently active, commit it (mirrors
-//	                        Enter/Tab/losing focus -- posted as a real
-//	                        WM_KEYDOWN so the list view's own built-in
-//	                        Key-cell label-edit handling runs exactly as it
-//	                        would for a real keypress)
-//	envcancel               if the Environment tab's in-place Key or Value
-//	                        edit is currently active, cancel it (mirrors
-//	                        Escape)
+//	envname:<value>         if the Add/Edit Variable dialog is open, set
+//	                        its Name field's text
+//	envvalue:<value>        if the Add/Edit Variable dialog is open, set
+//	                        its Value field's text
+//	envok                   if the Add/Edit Variable dialog is open, click
+//	                        its OK button
+//	envdlgcancel            if the Add/Edit Variable dialog is open, click
+//	                        its Cancel button
 //	radioclick:<id>         simulate a real click (BM_CLICK) on the given
 //	                        control id -- needed for BS_AUTORADIOBUTTON
 //	                        controls, whose check/uncheck auto-behavior a
@@ -189,11 +199,6 @@ func startDevControlWatcher() {
 //	infook                  if an info dialog (Help>About) is currently
 //	                        open, click its OK button to dismiss it
 //
-// currentEnvEditControl returns whichever control the Environment tab's
-// in-place edit is currently focused on: the Value overlay if the value
-// step is active, else the list view's own built-in Key-cell label-edit
-// control (retrieved via LVM_GETEDITCONTROL) if the key step is active,
-// else 0.
 // statusBarCheckString is a temporary diagnostic for verifying
 // gui_statusbar.go without a working screenshot pipeline -- reports the
 // LED's logical state, the tooltip popup's visibility/text, and (if the
@@ -218,8 +223,9 @@ func statusBarCheckString() string {
 	devInfoDialogMu.Lock()
 	infoDialogOpen := devInfoDialogHwnd != 0
 	devInfoDialogMu.Unlock()
-	return fmt.Sprintf("connected=%v hotItem=%d tooltipVisible=%v tooltipText=%q settingsOpen=%v tabSel=%d autoScrollEnabled=%v clientCountText=%q clientsDialogOpen=%v infoDialogOpen=%v",
-		statusConnected.Load(), statusHotItem, tipVisible != 0, tooltipText, settingsHwnd != 0, tabSel, autoScrollEnabled, clientText, clientsDialogOpen, infoDialogOpen)
+	envDialogOpen := envDialogHwnd() != 0
+	return fmt.Sprintf("connected=%v hotItem=%d tooltipVisible=%v tooltipText=%q settingsOpen=%v tabSel=%d autoScrollEnabled=%v clientCountText=%q clientsDialogOpen=%v infoDialogOpen=%v envDialogOpen=%v",
+		statusConnected.Load(), statusHotItem, tipVisible != 0, tooltipText, settingsHwnd != 0, tabSel, autoScrollEnabled, clientText, clientsDialogOpen, infoDialogOpen, envDialogOpen)
 }
 
 // statusItemCenterLParam resolves idxStr to a status bar item index and
@@ -242,15 +248,38 @@ func statusItemCenterLParam(idxStr string) (idx int, lParam uintptr, err error) 
 	return idx, uintptr(uint32(cx)) | uintptr(uint32(cy))<<16, nil
 }
 
-func currentEnvEditControl() syscall.Handle {
-	if envValueEditHwnd != 0 {
-		return envValueEditHwnd
+// envDialogHwnd returns the open Add/Edit Variable dialog's HWND, or 0 if
+// none is open.
+func envDialogHwnd() syscall.Handle {
+	devEnvDialogMu.Lock()
+	defer devEnvDialogMu.Unlock()
+	return devEnvDialogHwnd
+}
+
+// setEnvDialogField sets one of the Add/Edit Variable dialog's edit fields
+// (idEnvNameEdit or idEnvValueEdit) to value, mirroring a user typing it.
+func setEnvDialogField(id uint16, value string) string {
+	hwnd := envDialogHwnd()
+	if hwnd == 0 {
+		return "error: no Add/Edit Variable dialog is currently open"
 	}
-	if currentEnvEdit.active && envListHwnd != 0 {
-		h, _, _ := procSendMessageW.Call(uintptr(envListHwnd), lvmGetEditControl, 0, 0)
-		return syscall.Handle(h)
+	edit, _, _ := procGetDlgItem.Call(uintptr(hwnd), uintptr(id))
+	if edit == 0 {
+		return "error: dialog field not found"
 	}
-	return 0
+	procSetWindowTextW.Call(edit, uintptr(unsafe.Pointer(utf16ptr(value))))
+	return "ok"
+}
+
+// clickEnvDialog posts a WM_COMMAND(id) to the open Add/Edit Variable
+// dialog, mirroring a click on its OK or Cancel button.
+func clickEnvDialog(id uint16) string {
+	hwnd := envDialogHwnd()
+	if hwnd == 0 {
+		return "error: no Add/Edit Variable dialog is currently open"
+	}
+	procPostMessageW.Call(uintptr(hwnd), wmCommand, uintptr(id), 0)
+	return "ok"
 }
 
 func runDevCommand(cmd string) string {
@@ -391,30 +420,17 @@ func runDevCommand(cmd string) string {
 		procSendMessageW.Call(uintptr(envListHwnd), lvmSetItemState, uintptr(idx), uintptr(unsafe.Pointer(&item)))
 		return "ok"
 
-	case strings.HasPrefix(cmd, "envtype:"):
-		value := strings.TrimPrefix(cmd, "envtype:")
-		hwnd := currentEnvEditControl()
-		if hwnd == 0 {
-			return "error: no environment-tab edit is currently active"
-		}
-		procSetWindowTextW.Call(uintptr(hwnd), uintptr(unsafe.Pointer(utf16ptr(value))))
-		return "ok"
+	case strings.HasPrefix(cmd, "envname:"):
+		return setEnvDialogField(idEnvNameEdit, strings.TrimPrefix(cmd, "envname:"))
 
-	case cmd == "envcommit":
-		hwnd := currentEnvEditControl()
-		if hwnd == 0 {
-			return "error: no environment-tab edit is currently active"
-		}
-		procPostMessageW.Call(uintptr(hwnd), wmKeyDown, uintptr(vkReturn), 0)
-		return "ok"
+	case strings.HasPrefix(cmd, "envvalue:"):
+		return setEnvDialogField(idEnvValueEdit, strings.TrimPrefix(cmd, "envvalue:"))
 
-	case cmd == "envcancel":
-		hwnd := currentEnvEditControl()
-		if hwnd == 0 {
-			return "error: no environment-tab edit is currently active"
-		}
-		procPostMessageW.Call(uintptr(hwnd), wmKeyDown, uintptr(vkEscape), 0)
-		return "ok"
+	case cmd == "envok":
+		return clickEnvDialog(idOK)
+
+	case cmd == "envdlgcancel":
+		return clickEnvDialog(idCancelBtn)
 
 	case strings.HasPrefix(cmd, "radioclick:"):
 		// A synthetic WM_COMMAND to the dialog (unlike settingsclick's

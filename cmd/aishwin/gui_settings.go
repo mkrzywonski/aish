@@ -308,22 +308,6 @@ func ShowSettingsDialogPage(page int) {
 	)
 }
 
-// resetEnvEditState abandons any in-progress Environment-tab inline edit
-// (the key edit, or the value overlay) without writing anything to the
-// access state. Called whenever the Settings dialog itself is closing
-// (idOK/idCancelBtn/wmClose) so a stray edit in progress at that moment
-// can't leave a dangling overlay window or stale package-level state
-// behind for the next time the dialog opens.
-func resetEnvEditState() {
-	if keyEditHwnd != 0 {
-		unsubclassKeyEdit()
-		procSendMessageW.Call(uintptr(envListHwnd), lvmCancelEditLabel, 0, 0)
-	}
-	destroyEnvValueEdit()
-	currentEnvEdit = envRowEdit{}
-	envValueEditCommitting = false
-}
-
 func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {
 	switch message {
 	case wmInitDialog:
@@ -352,53 +336,10 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 			sel, _, _ := procSendMessageW.Call(uintptr(settingsTabHwnd), tcmGetCurSel, 0, 0)
 			showSettingsPage(hwndDlg, int(sel))
 			return 1
-		case hdr.hwndFrom == envListHwnd && int32(hdr.code) == lvnBeginLabelEditW:
-			// Grab and subclass the list view's own temporary label-edit
-			// control the instant it exists, rather than trusting its
-			// default Enter/Tab/focus-loss behavior (see
-			// keyEditSubclassProc's doc comment for why that trust turned
-			// out to be misplaced), and resize it to match the Key
-			// column's own width -- CreateWindow-style pixel placement
-			// isn't ours to control here, comctl32 sizes it to the
-			// item's text bounds by default, which is narrower than the
-			// column.
-			h, _, _ := procSendMessageW.Call(uintptr(envListHwnd), lvmGetEditControl, 0, 0)
-			if h != 0 {
-				keyEditHwnd = syscall.Handle(h)
-				orig, _, _ := procGetWindowLongPtrW.Call(uintptr(keyEditHwnd), uintptr(gwlpWndProc))
-				keyEditOrigProc = orig
-				procSetWindowLongPtrW.Call(uintptr(keyEditHwnd), uintptr(gwlpWndProc), keyEditSubclassPtr)
-
-				// LVM_GETSUBITEMRECT's documented quirk (see
-				// ListView_GetSubItemRect in commctrl.h): the subitem
-				// index goes in rect.top, and which kind of rect to
-				// compute goes in rect.left.
-				r := rect{top: 0, left: lvirLabel}
-				procSendMessageW.Call(uintptr(envListHwnd), lvmGetSubItemRect, uintptr(currentEnvEdit.row), uintptr(unsafe.Pointer(&r)))
-				procMoveWindow.Call(uintptr(keyEditHwnd), uintptr(r.left), uintptr(r.top), uintptr(r.right-r.left), uintptr(r.bottom-r.top), 1)
-			}
-			setDlgMsgResult(hwndDlg, 0) // allow editing
-			return 1
-		case hdr.hwndFrom == envListHwnd && int32(hdr.code) == lvnEndLabelEditW:
-			// keyEditSubclassProc always ends editing itself (via
-			// LVM_CANCELEDITLABEL, after already applying whatever it
-			// decided to the item's text) before this notification can
-			// fire naturally, so there's nothing left to do here except
-			// give the DLGPROC a well-defined reply.
-			setDlgMsgResult(hwndDlg, 0)
-			return 1
 		case hdr.hwndFrom == envListHwnd && int32(hdr.code) == nmDblClk:
-			if !currentEnvEdit.active {
-				beginEditSelectedEnvRow() // NM_DBLCLK fires after the click already selected the row
-			}
+			editSelectedEnvVar() // NM_DBLCLK fires after the click already selected the row
 			return 1
 		}
-	case wmEnvKeyEditDone:
-		finishKeyEdit()
-		return 1
-	case wmEnvValueEditDone:
-		finishValueEdit()
-		return 1
 	case wmCommand:
 		id := uint16(wParam & 0xFFFF)
 		if uint16(wParam>>16) != bnClicked {
@@ -427,14 +368,10 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 			StartConnection(resolveSpawnFromSettings())
 			return 1
 		case idEnvAddBtn:
-			if !currentEnvEdit.active {
-				beginAddEnvRow()
-			}
+			addEnvVar()
 			return 1
 		case idEnvEditBtn:
-			if !currentEnvEdit.active {
-				beginEditSelectedEnvRow()
-			}
+			editSelectedEnvVar()
 			return 1
 		case idEnvDeleteBtn:
 			key, _, ok := selectedEnvRow()
@@ -447,7 +384,6 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 			AppendLog(fmt.Sprintf("aishwin: removed %s", key))
 			return 1
 		case idOK:
-			resetEnvEditState()
 			var errs []string
 			for i, f := range currentSettingsFields {
 				editHwnd, _, _ := procGetDlgItem.Call(uintptr(hwndDlg), uintptr(idSettingsEditBase+i))
@@ -473,7 +409,6 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 			onSettingsDialogClose()
 			return 1
 		case idCancelBtn:
-			resetEnvEditState()
 			procEndDialog.Call(uintptr(hwndDlg), 0)
 			settingsTabHwnd = 0
 			envListHwnd = 0
@@ -482,7 +417,6 @@ func settingsDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam u
 			return 1
 		}
 	case wmClose:
-		resetEnvEditState()
 		procEndDialog.Call(uintptr(hwndDlg), 0)
 		settingsTabHwnd = 0
 		envListHwnd = 0
@@ -533,7 +467,7 @@ func createEnvList(hwndDlg syscall.Handle) {
 		0,
 		uintptr(unsafe.Pointer(utf16ptr("SysListView32"))),
 		uintptr(unsafe.Pointer(utf16ptr(""))),
-		uintptr(wsChild|wsBorder|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways|lvsEditLabels),
+		uintptr(wsChild|wsBorder|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways),
 		uintptr(px), uintptr(py), uintptr(pcx), uintptr(pcy),
 		uintptr(hwndDlg), uintptr(idEnvList), uintptr(inst), 0,
 	)
@@ -609,331 +543,62 @@ func envListItemText(row, subItem int) string {
 	return syscall.UTF16ToString(buf[:n])
 }
 
-// envRowEdit tracks the two-step (key, then value) in-place edit flow for
-// the Environment tab's list view: originalKey == "" means Add (a
-// genuinely blank new row); a non-empty originalKey means Edit (an
-// existing row, possibly having its key renamed). newKey is filled in
-// once the key step commits, right before the value step begins.
-type envRowEdit struct {
-	active      bool
-	row         int
-	originalKey string
-	newKey      string
+// addEnvVar opens the modal Add Variable dialog and, if the user confirms
+// with a valid name, records the variable, pushes it live into every
+// currently-running shell (pushLiveEnv), and rebuilds the list with the new
+// row selected and scrolled into view.
+func addEnvVar() {
+	name, value, ok := AskEnvVar("Add Variable", "", "")
+	if !ok {
+		return
+	}
+	access.setEnv(name, value)
+	pushLiveEnv(name, value)
+	refreshEnvList()
+	selectEnvRowByKey(name)
+	AppendLog(fmt.Sprintf("aishwin: set %s (applies to new commands now; already-running ones are unaffected)", name))
 }
 
-var currentEnvEdit envRowEdit
-
-// beginAddEnvRow inserts a blank row and starts the list view's own
-// built-in label edit on its Key cell (LVN_BEGINLABELEDIT, handled in
-// settingsDialogProc, subclasses the resulting edit control -- see
-// keyEditSubclassProc).
-func beginAddEnvRow() {
-	count, _, _ := procSendMessageW.Call(uintptr(envListHwnd), lvmGetItemCount, 0, 0)
-	row := int(count)
-	item := lvItemW{mask: lvifText, iItem: int32(row), pszText: utf16ptr("")}
-	procSendMessageW.Call(uintptr(envListHwnd), lvmInsertItemW, 0, uintptr(unsafe.Pointer(&item)))
-	setEnvCellText(row, 1, "")
-	currentEnvEdit = envRowEdit{active: true, row: row, originalKey: ""}
-	procSendMessageW.Call(uintptr(envListHwnd), lvmEnsureVisible, uintptr(row), 0)
-	procSetFocus.Call(uintptr(envListHwnd))
-	procSendMessageW.Call(uintptr(envListHwnd), lvmEditLabelW, uintptr(row), 0)
-}
-
-// beginEditSelectedEnvRow starts the list view's own built-in label edit
-// on the currently selected row's Key cell.
-func beginEditSelectedEnvRow() {
-	idx := selectedEnvIndex()
-	if idx < 0 {
+// editSelectedEnvVar opens the modal Edit Variable dialog pre-filled with
+// the selected row. Confirming applies the change -- a renamed key removes
+// the old one first -- then live-pushes and rebuilds the list. Nothing
+// selected is a no-op with a log note. Reached from both the Edit button
+// and a double-click.
+func editSelectedEnvVar() {
+	oldKey, oldValue, ok := selectedEnvRow()
+	if !ok {
 		AppendLog("aishwin: select a variable to edit first")
 		return
 	}
-	currentEnvEdit = envRowEdit{active: true, row: idx, originalKey: envListItemText(idx, 0)}
-	procSendMessageW.Call(uintptr(envListHwnd), lvmEnsureVisible, uintptr(idx), 0)
-	procSetFocus.Call(uintptr(envListHwnd))
-	procSendMessageW.Call(uintptr(envListHwnd), lvmEditLabelW, uintptr(idx), 0)
-}
-
-// keyEditHwnd/keyEditOrigProc are valid only while the list view's
-// built-in Key-cell label edit control exists.
-var (
-	keyEditHwnd        syscall.Handle
-	keyEditOrigProc    uintptr
-	keyEditSubclassPtr = syscall.NewCallback(keyEditSubclassProc)
-)
-
-// keyEditSubclassProc is a genuine WNDPROC swap on the list view's own
-// temporary label-edit control (installed from LVN_BEGINLABELEDIT). This
-// control is NOT a dialog child (it's a child of the list view), so
-// IsDialogMessage's normal Tab-navigation/default-button handling doesn't
-// apply to it the way it would to a real dialog control -- found live
-// that Tab did nothing (no way to reach the Value cell) and that relying
-// on the control's own default Enter/Escape handling for LVN_ENDLABELEDIT
-// correlated with the whole Settings dialog closing after a single
-// keystroke (a DLGPROC must report a WM_NOTIFY reply via
-// SetWindowLongPtr(DWLP_MSGRESULT), not its own return value -- see
-// win32.go's dwlpMsgResult -- so the control was reading an undefined
-// accept/reject result). Subclassing hands Tab/Enter/Escape entirely to
-// this file's own logic instead. The actual teardown (LVM_CANCELEDITLABEL,
-// which destroys this very control) is deferred to wmEnvKeyEditDone rather
-// than done synchronously here, since this handler is itself running AS
-// that control's WM_KEYDOWN processing -- destroying a window from deep
-// inside its own message handling is the kind of reentrancy Win32 code
-// conventionally avoids even where it happens to work.
-func keyEditSubclassProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {
-	switch message {
-	case wmGetDlgCode:
-		// Belt-and-braces alongside envValueEditSubclassProc's identical
-		// case: comctl32's own internal label-edit subclass may already
-		// claim this, but our own WM_KEYDOWN handling must never depend
-		// on that being true.
-		r, _, _ := procCallWindowProcW.Call(keyEditOrigProc, uintptr(hwnd), uintptr(message), wParam, lParam)
-		return r | dlgcWantAllKeys
-	case wmKeyDown:
-		switch wParam {
-		case vkReturn, vkTab:
-			deferKeyEditEnd(hwnd, true)
-			return 0
-		case vkEscape:
-			deferKeyEditEnd(hwnd, false)
-			return 0
-		}
-	case wmChar:
-		// TranslateMessage synthesizes a WM_CHAR follow-up for each of the
-		// WM_KEYDOWNs handled above (13/9/27) -- swallow it too, or it
-		// reaches comctl32's OWN internal label-edit subclass underneath
-		// ours (via the CallWindowProcW fallthrough below) and ends
-		// editing its own way, racing deferKeyEditEnd's already-scheduled
-		// wmEnvKeyEditDone. Found live: the dialog's Environment tab
-		// accepted a typed key but never advanced to editing the Value
-		// cell, because comctl32's own end-of-edit won that race.
-		switch wParam {
-		case vkReturn, vkTab, vkEscape:
-			return 0
-		}
-	}
-	r, _, _ := procCallWindowProcW.Call(keyEditOrigProc, uintptr(hwnd), uintptr(message), wParam, lParam)
-	return r
-}
-
-func unsubclassKeyEdit() {
-	if keyEditHwnd == 0 {
+	name, value, confirmed := AskEnvVar("Edit Variable", oldKey, oldValue)
+	if !confirmed {
 		return
 	}
-	procSetWindowLongPtrW.Call(uintptr(keyEditHwnd), uintptr(gwlpWndProc), keyEditOrigProc)
-	keyEditHwnd = 0
-	keyEditOrigProc = 0
-}
-
-// pendingKeyEditCommit/pendingKeyEditText carry a decision from
-// deferKeyEditEnd (running inside the key edit's own WM_KEYDOWN handling)
-// to finishKeyEdit (running afresh once the posted wmEnvKeyEditDone is
-// dequeued, safely after that handling has fully returned).
-var (
-	pendingKeyEditCommit bool
-	pendingKeyEditText   string
-)
-
-// deferKeyEditEnd reads the Key edit's current text directly (rather than
-// trusting the list view's own label-edit commit path) while the control
-// still exists, then posts wmEnvKeyEditDone to actually end editing and
-// act on it once this call stack unwinds.
-func deferKeyEditEnd(hwnd syscall.Handle, commit bool) {
-	if commit {
-		buf := make([]uint16, 256)
-		n, _, _ := procSendMessageW.Call(uintptr(hwnd), wmGetText, uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
-		pendingKeyEditText = strings.ToUpper(strings.TrimSpace(syscall.UTF16ToString(buf[:n])))
+	if name != oldKey {
+		access.unsetEnv(oldKey)
 	}
-	pendingKeyEditCommit = commit
-	procPostMessageW.Call(uintptr(currentSettingsDlgHwnd), wmEnvKeyEditDone, 0, 0)
-}
-
-// finishKeyEdit performs the actual teardown deferKeyEditEnd scheduled:
-// ends the native label edit on our terms, then either abandons the row
-// (Escape, or an empty key) or applies the committed key and starts
-// editing the Value cell.
-func finishKeyEdit() {
-	if !currentEnvEdit.active || keyEditHwnd == 0 {
-		return // already handled, e.g. the dialog closed in the meantime
-	}
-	row := currentEnvEdit.row
-	unsubclassKeyEdit()
-	procSendMessageW.Call(uintptr(envListHwnd), lvmCancelEditLabel, 0, 0)
-	if !pendingKeyEditCommit || pendingKeyEditText == "" {
-		// Escape, or cleared entirely: discard -- refreshEnvList rebuilds
-		// from the untouched access state, which never had this row (Add)
-		// or still has the old key text (Edit).
-		currentEnvEdit = envRowEdit{}
-		refreshEnvList()
-		return
-	}
-	setEnvCellText(row, 0, pendingKeyEditText)
-	beginValueEdit(row, pendingKeyEditText)
-}
-
-// envValueEditHwnd/envValueEditOrigProc/envValueEditCommitting are valid
-// only while the Value-cell overlay edit control (below) exists.
-var (
-	envValueEditHwnd        syscall.Handle
-	envValueEditOrigProc    uintptr
-	envValueEditSubclassPtr = syscall.NewCallback(envValueEditSubclassProc)
-	envValueEditCommitting  bool
-)
-
-// beginValueEdit creates a plain EDIT control positioned exactly over the
-// Value cell of row (via LVM_GETSUBITEMRECT), pre-filled with its current
-// text (or empty for a brand new row), selects all of it for convenient
-// overwrite-by-typing, and subclasses it so Enter/losing focus commits and
-// Escape cancels -- SysListView32 has no built-in notion of editing a
-// subitem, only the item's own column-0 text, so this control (and all of
-// its commit/cancel behavior) is entirely our own.
-func beginValueEdit(row int, key string) {
-	currentEnvEdit.newKey = key
-	envValueEditCommitting = false
-
-	procSendMessageW.Call(uintptr(envListHwnd), lvmEnsureVisible, uintptr(row), 0)
-
-	// LVM_GETSUBITEMRECT's documented quirk (see ListView_GetSubItemRect
-	// in commctrl.h): the subitem index goes in rect.top, and which kind
-	// of rect to compute (LVIR_BOUNDS, the whole cell) goes in rect.left
-	// -- neither is a normal message parameter.
-	r := rect{top: 1, left: lvirBounds}
-	procSendMessageW.Call(uintptr(envListHwnd), lvmGetSubItemRect, uintptr(row), uintptr(unsafe.Pointer(&r)))
-
-	existing := ""
-	if currentEnvEdit.originalKey != "" {
-		existing = envListItemText(row, 1)
-	}
-
-	inst := getModuleHandle()
-	h, _, _ := procCreateWindowExW.Call(
-		0,
-		uintptr(unsafe.Pointer(utf16ptr("EDIT"))),
-		uintptr(unsafe.Pointer(utf16ptr(existing))),
-		uintptr(wsChild|wsVisible|wsBorder|esAutoHScroll),
-		uintptr(r.left), uintptr(r.top), uintptr(r.right-r.left), uintptr(r.bottom-r.top),
-		uintptr(envListHwnd), 0, uintptr(inst), 0,
-	)
-	envValueEditHwnd = syscall.Handle(h)
-
-	orig, _, _ := procGetWindowLongPtrW.Call(uintptr(envValueEditHwnd), uintptr(gwlpWndProc))
-	envValueEditOrigProc = orig
-	procSetWindowLongPtrW.Call(uintptr(envValueEditHwnd), uintptr(gwlpWndProc), envValueEditSubclassPtr)
-
-	procSendMessageW.Call(uintptr(envValueEditHwnd), emSetSel, 0, ^uintptr(0))
-	procSetFocus.Call(uintptr(envValueEditHwnd))
-}
-
-// envValueEditSubclassProc is a genuine WNDPROC swap (GWLP_WNDPROC),
-// necessary because the Value overlay is a plain EDIT control with no
-// built-in "end editing" concept -- unlike the list view's own Key-cell
-// label edit, which at least knows an edit is in progress. Every message
-// not explicitly handled here is forwarded to the control's original
-// window procedure via CallWindowProcW. The actual teardown (destroying
-// this very control) is deferred to wmEnvValueEditDone rather than done
-// synchronously here, for the same reentrancy reason as the Key edit's
-// keyEditSubclassProc.
-func envValueEditSubclassProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {
-	switch message {
-	case wmGetDlgCode:
-		// Without this, IsDialogMessage intercepts Enter itself (see
-		// dlgcWantAllKeys's doc comment) and our WM_KEYDOWN case below
-		// never runs at all.
-		r, _, _ := procCallWindowProcW.Call(envValueEditOrigProc, uintptr(hwnd), uintptr(message), wParam, lParam)
-		return r | dlgcWantAllKeys
-	case wmKeyDown:
-		switch wParam {
-		case vkReturn, vkTab:
-			deferValueEditEnd(hwnd, true)
-			return 0
-		case vkEscape:
-			deferValueEditEnd(hwnd, false)
-			return 0
-		}
-	case wmChar:
-		// A plain EDIT control beeps on an unhandled WM_CHAR like Enter/
-		// Escape/Tab; since WM_KEYDOWN above already acted on them,
-		// swallow the synthesized follow-up so it doesn't also beep.
-		switch wParam {
-		case vkReturn, vkTab, vkEscape:
-			return 0
-		}
-	case wmKillFocus:
-		// Losing focus for ANY reason (Tab, a click elsewhere, clicking
-		// OK) commits, same as a real input field.
-		deferValueEditEnd(hwnd, true)
-	}
-	r, _, _ := procCallWindowProcW.Call(envValueEditOrigProc, uintptr(hwnd), uintptr(message), wParam, lParam)
-	return r
-}
-
-func destroyEnvValueEdit() {
-	if envValueEditHwnd == 0 {
-		return
-	}
-	procDestroyWindow.Call(uintptr(envValueEditHwnd))
-	envValueEditHwnd = 0
-	envValueEditOrigProc = 0
-}
-
-// pendingValueEditCommit/pendingValueEditText carry a decision from
-// deferValueEditEnd (running inside the overlay's own message handling)
-// to finishValueEdit (running afresh once the posted wmEnvValueEditDone is
-// dequeued).
-var (
-	pendingValueEditCommit bool
-	pendingValueEditText   string
-)
-
-// deferValueEditEnd reads the overlay's current text (if committing) while
-// it still exists, then posts wmEnvValueEditDone to actually tear it down
-// and act on the decision once this call stack unwinds.
-// envValueEditCommitting is set here (not just in finishValueEdit) because
-// WM_KILLFOCUS can otherwise fire again during that later, deferred
-// teardown and re-enter this function.
-func deferValueEditEnd(hwnd syscall.Handle, commit bool) {
-	if envValueEditHwnd == 0 || envValueEditCommitting {
-		return
-	}
-	envValueEditCommitting = true
-	if commit {
-		buf := make([]uint16, 512)
-		n, _, _ := procSendMessageW.Call(uintptr(hwnd), wmGetText, uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
-		pendingValueEditText = syscall.UTF16ToString(buf[:n])
-	}
-	pendingValueEditCommit = commit
-	procPostMessageW.Call(uintptr(currentSettingsDlgHwnd), wmEnvValueEditDone, 0, 0)
-}
-
-// finishValueEdit performs the actual teardown deferValueEditEnd
-// scheduled, then, if committing, finalizes the whole two-step edit: a
-// rename (the key changed from what an Edit started with) removes the old
-// key first, then the new/updated key=value is written for real,
-// live-pushed to any running shell, and the list is rebuilt to show it in
-// its correct sorted position. Escape (or the dialog closing first)
-// leaves the access state untouched.
-func finishValueEdit() {
-	if envValueEditHwnd == 0 {
-		return // already handled, e.g. the dialog closed in the meantime
-	}
-	edit := currentEnvEdit
-	destroyEnvValueEdit()
-	currentEnvEdit = envRowEdit{}
-	envValueEditCommitting = false
-
-	if !pendingValueEditCommit {
-		refreshEnvList()
-		return
-	}
-	if edit.originalKey != "" && edit.originalKey != edit.newKey {
-		access.unsetEnv(edit.originalKey)
-	}
-	access.setEnv(edit.newKey, pendingValueEditText)
-	pushLiveEnv(edit.newKey, pendingValueEditText)
+	access.setEnv(name, value)
+	pushLiveEnv(name, value)
 	refreshEnvList()
-	if edit.originalKey == "" {
-		AppendLog(fmt.Sprintf("aishwin: set %s (applies to new commands now; already-running ones are unaffected)", edit.newKey))
-	} else {
-		AppendLog(fmt.Sprintf("aishwin: updated %s", edit.newKey))
+	selectEnvRowByKey(name)
+	AppendLog(fmt.Sprintf("aishwin: updated %s", name))
+}
+
+// selectEnvRowByKey selects and scrolls to the row whose Key equals key, so
+// a just-added or just-edited variable stays visible after refreshEnvList's
+// sorted rebuild moved it. A no-op if the key isn't present.
+func selectEnvRowByKey(key string) {
+	if envListHwnd == 0 {
+		return
+	}
+	count, _, _ := procSendMessageW.Call(uintptr(envListHwnd), lvmGetItemCount, 0, 0)
+	for i := 0; i < int(count); i++ {
+		if envListItemText(i, 0) == key {
+			item := lvItemW{mask: lvifState, state: lvisSelected | lvisFocused, stateMask: lvisSelected | lvisFocused}
+			procSendMessageW.Call(uintptr(envListHwnd), lvmSetItemState, uintptr(i), uintptr(unsafe.Pointer(&item)))
+			procSendMessageW.Call(uintptr(envListHwnd), lvmEnsureVisible, uintptr(i), 0)
+			return
+		}
 	}
 }
 
