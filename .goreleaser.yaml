@@ -45,6 +45,12 @@ builds:
   # aishwin is the Windows half (see cmd/aishwin): raw syscall-based Win32
   # GUI code, no cgo, so it cross-compiles from this Linux CI runner exactly
   # like the other two.
+  #
+  # -H=windowsgui is required, not cosmetic: without it the release binary is
+  # linked for the console subsystem and every shell that launches aishwin is
+  # held until the window closes. The subsystem has no source-level equivalent
+  # in Go, so it must be repeated in each build command (Makefile, install.ps1,
+  # here).
   - id: aishwin
     main: ./cmd/aishwin
     binary: aishwin
@@ -57,7 +63,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -H=windowsgui -X main.version={{ .Version }}
 
 archives:
   - id: aish

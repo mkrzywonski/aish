@@ -82,8 +82,8 @@ function Install-Prebuilt {
 }
 
 # Ensure-Go makes sure `go` is on PATH for this session, installing it via
-# winget if missing -- aishwin has no cgo, so a plain `go build` is all a
-# from-source install needs.
+# winget if missing -- aishwin has no cgo, so the Go toolchain alone is all a
+# from-source install needs (see Install-FromSource for the one required flag).
 function Ensure-Go {
 	if (Get-Command go -ErrorAction SilentlyContinue) {
 		Write-Log "using existing $(go version)"
@@ -129,7 +129,11 @@ function Install-FromSource {
 	Write-Log "building aishwin"
 	Push-Location $repoDir
 	try {
-		go build -o (Join-Path $InstallDir "aishwin.exe") ./cmd/aishwin
+		# -H=windowsgui links for the GUI subsystem so a shell that launches
+		# aishwin gets its prompt back immediately instead of being held until
+		# the window closes. It is link-time only -- nothing in the source can
+		# set it -- so every build command has to carry it.
+		go build -ldflags "-H=windowsgui" -o (Join-Path $InstallDir "aishwin.exe") ./cmd/aishwin
 	} finally {
 		Pop-Location
 	}
