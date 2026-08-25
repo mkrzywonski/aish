@@ -32,6 +32,23 @@ from Go's embedded VCS metadata instead of carrying a hand-maintained release
 fallback. Release artifacts take their version from the Git tag
 (`.goreleaser.yaml`) and Nix builds identify themselves by the flake revision.
 
+Building `aishwin.exe` natively on Windows (no `make` there) must pass the
+linker flag by hand:
+
+```powershell
+go build -ldflags "-H=windowsgui" -o aishwin.exe ./cmd/aishwin
+go build -tags aishwindev -ldflags "-H=windowsgui" -o aishwin-dev.exe ./cmd/aishwin
+```
+
+A plain `go build ./cmd/aishwin` silently produces a CONSOLE-subsystem binary
+that holds the launching shell until the GUI exits. The subsystem is a
+link-time property with no source-level equivalent in Go — no build tag or
+directive can set it — so a build that omits the flag is not detectably wrong,
+it just behaves like the bug that flag was added to fix. `cmd/aishwin`'s
+`AttachConsole` path makes `version` print from EITHER subsystem, so a
+console-subsystem build looks correct right up to the point where it holds the
+terminal.
+
 ## Testing changes without a real terminal
 
 Unit tests cover the connection-auth handshake (`internal/mcpserver/connauth_test.go`) and proxy resolution (`internal/proxy/proxy_test.go`); run them with `nix-shell -p go --run "go test ./..."`. Everything else is verified by driving a live session. The Bash tool has no TTY, so start a session under `script` with a FIFO holding stdin open (run in background):

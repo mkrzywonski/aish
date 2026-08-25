@@ -100,6 +100,8 @@ func main() {
 
 	refreshStatus()
 
+	warnIfHoldingShell()
+
 	title := "aishwin"
 	if devBuild {
 		title = "aishwin [DEV -- auto-approves, unattended-test channel active]"

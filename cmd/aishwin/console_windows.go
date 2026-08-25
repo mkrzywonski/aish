@@ -2,7 +2,10 @@
 
 package main
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 // aishwin is built for the GUI subsystem (-H=windowsgui in the Makefile), so a
 // shell that launches it gets its prompt straight back instead of being held
@@ -36,6 +39,17 @@ func haveConsole() bool {
 	return hwnd != 0
 }
 
+// builtForConsole records that this process already owned a console before
+// attachParentConsole ran. Only a CONSOLE-subsystem binary does; a
+// GUI-subsystem one starts with none and has to borrow its parent's. So this
+// is a runtime read of a link-time property, and it is exactly the property
+// that decides whether the launching shell is being held.
+//
+// (A GUI build started with CREATE_NEW_CONSOLE would also read true, but
+// nothing launches aishwin that way, and the cost of being wrong is one
+// unnecessary warning line.)
+var builtForConsole bool
+
 // attachParentConsole borrows the launching terminal's console, if there is
 // one, and points this process's standard output at it.
 //
@@ -45,6 +59,7 @@ func haveConsole() bool {
 // handles askpass and returns before this is called.
 func attachParentConsole() {
 	if haveConsole() {
+		builtForConsole = true
 		return
 	}
 	if r, _, _ := procAttachConsole.Call(attachParentProcess); r == 0 {
@@ -69,4 +84,26 @@ func consoleStderr() *os.File {
 		return nil
 	}
 	return os.Stderr
+}
+
+// warnIfHoldingShell tells the user their binary was linked for the wrong
+// subsystem, just before the GUI opens and the symptom appears.
+//
+// Worth a line of output because the mistake is invisible otherwise: `go build
+// ./cmd/aishwin` without -ldflags "-H=windowsgui" produces a binary that
+// behaves correctly in every respect except that it pins the shell that
+// started it, and `aishwin version` still prints from either subsystem, so the
+// obvious smoke test passes. The Makefile targets pass the flag; a native
+// Windows build has no make and must pass it by hand.
+//
+// Deferred to here rather than emitted from attachParentConsole so that
+// `aishwin version` and other exit-immediately paths stay quiet -- they hold
+// the shell for no meaningful time, so there is nothing to warn about.
+func warnIfHoldingShell() {
+	if !builtForConsole {
+		return
+	}
+	fmt.Fprintln(stderr, "aishwin: warning: this binary was linked for the console subsystem, "+
+		"so the shell that started it stays blocked until the window closes.")
+	fmt.Fprintln(stderr, "aishwin: rebuild with: go build -ldflags \"-H=windowsgui\" -o aishwin.exe ./cmd/aishwin")
 }
