@@ -75,8 +75,32 @@ func annotateVisibility(ctr *mcp.CallToolResult, tool string) {
 		return
 	}
 	m["visibility"] = encoded
-	if out, err := json.Marshal(m); err == nil {
-		ctr.StructuredContent = json.RawMessage(out)
+	writeStructured(ctr, m)
+}
+
+// writeStructured stores the amended object and keeps the text block in step
+// with it.
+//
+// The SDK serializes the handler's typed result into BOTH StructuredContent
+// and a TextContent block, and it does that before our middleware runs. Editing
+// only the structured half left the two disagreeing: a client that reads the
+// text block — many do, and it is what the spec suggests for exactly this
+// purpose — would never see the fields we stamped, silently losing the
+// annotation for that whole class of client. So the text block is rewritten
+// too, but only when it still holds precisely what the SDK put there; a handler
+// that supplied its own content is left alone.
+func writeStructured(ctr *mcp.CallToolResult, m map[string]json.RawMessage) {
+	before, _ := ctr.StructuredContent.(json.RawMessage)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	ctr.StructuredContent = json.RawMessage(out)
+	if len(ctr.Content) != 1 {
+		return
+	}
+	if tc, ok := ctr.Content[0].(*mcp.TextContent); ok && tc.Text == string(before) {
+		tc.Text = string(out)
 	}
 }
 

@@ -203,7 +203,7 @@ func Serve(ctx context.Context, core *Core, socketPath string) error {
 	// visibility and target_confidence are stamped innermost of all, so they
 	// annotate the handler's own result before the log reads it and before
 	// anything forwards it.
-	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core), oobLogMiddleware(core), visibilityMiddleware(), targetConfidenceMiddleware(core))
+	server.AddReceivingMiddleware(connAuthMiddleware(core), crossSession(core), oobLogMiddleware(core), visibilityMiddleware(), targetConfidenceMiddleware(core), annotateSchemaMiddleware())
 
 	go func() {
 		<-ctx.Done()

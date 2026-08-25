@@ -3,7 +3,9 @@ package aishwnd
 import (
 	"context"
 	"encoding/json"
+	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -60,7 +62,73 @@ func annotateVisible(ctr *mcp.CallToolResult) {
 		return
 	}
 	m["visibility"] = encoded
-	if out, err := json.Marshal(m); err == nil {
-		ctr.StructuredContent = json.RawMessage(out)
+	writeStructured(ctr, m)
+}
+
+// writeStructured stores the amended object and keeps the text block in step,
+// since the SDK serializes the handler's typed result into both before this
+// middleware runs. See annotateSchema for why the schema has to allow the
+// field at all.
+func writeStructured(ctr *mcp.CallToolResult, m map[string]json.RawMessage) {
+	before, _ := ctr.StructuredContent.(json.RawMessage)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	ctr.StructuredContent = json.RawMessage(out)
+	if len(ctr.Content) != 1 {
+		return
+	}
+	if tc, ok := ctr.Content[0].(*mcp.TextContent); ok && tc.Text == string(before) {
+		tc.Text = string(out)
+	}
+}
+
+// annotateSchemaMiddleware declares `visibility` in every advertised output
+// schema and reopens the schema to extras.
+//
+// The SDK infers each schema from the handler's typed result and marks it
+// additionalProperties:false, then validates the handler's output against it
+// INSIDE the typed handler — before this middleware adds anything. So the
+// stamped field never faces server-side validation, and a client that checks
+// structured content against the advertised schema rejects every call instead.
+func annotateSchemaMiddleware() mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if method != "tools/list" || err != nil {
+				return res, err
+			}
+			if lt, ok := res.(*mcp.ListToolsResult); ok && lt != nil {
+				schemaMu.Lock()
+				for _, t := range lt.Tools {
+					patchResultSchema(t)
+				}
+				schemaMu.Unlock()
+			}
+			return res, err
+		}
+	}
+}
+
+var schemaMu sync.Mutex
+
+func patchResultSchema(t *mcp.Tool) {
+	if t == nil {
+		return
+	}
+	s, ok := t.OutputSchema.(*jsonschema.Schema)
+	if !ok || s == nil || s.Type != "object" {
+		return
+	}
+	s.AdditionalProperties = nil
+	if s.Properties == nil {
+		s.Properties = map[string]*jsonschema.Schema{}
+	}
+	if _, exists := s.Properties["visibility"]; !exists {
+		s.Properties["visibility"] = &jsonschema.Schema{
+			Type:        "string",
+			Description: "whether the human saw this happen; always \"visible\" on this backend",
+		}
 	}
 }

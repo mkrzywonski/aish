@@ -77,9 +77,7 @@ func (c *Core) annotateTargetConfidence(ctr *mcp.CallToolResult, tool string) {
 		return
 	}
 	m["target_confidence"] = encoded
-	if out, err := json.Marshal(m); err == nil {
-		ctr.StructuredContent = json.RawMessage(out)
-	}
+	writeStructured(ctr, m)
 }
 
 // targetConfidenceFor answers for one completed call, returning "" when the

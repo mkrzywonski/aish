@@ -1,4 +1,4 @@
-﻿package aishwnd
+package aishwnd
 
 import (
 	"context"

@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	github.com/creack/pty v1.1.24
+	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/pkg/sftp v1.13.11
 	github.com/vito/midterm v0.2.4
@@ -18,7 +19,6 @@ require (
 	github.com/danielgatis/go-iterator v0.0.1 // indirect
 	github.com/danielgatis/go-utf8 v1.0.0 // indirect
 	github.com/danielgatis/go-vte v1.0.8 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.18 // indirect
