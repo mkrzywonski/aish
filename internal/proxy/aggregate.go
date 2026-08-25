@@ -61,27 +61,27 @@ type pooledConn struct {
 }
 
 const serverInstructions = "" +
-	"Aish gives you access to human-owned shared terminal sessions and to the current host inside each " +
-	"session, including a remote host reached by SSH. Your native shell and filesystem tools remain " +
+	"Aish gives you access to human-owned shared terminal sessions and the current host in each, " +
+	"including a remote host reached by SSH. Your native shell and filesystem tools remain " +
 	"local: when the user refers to an aish/shared terminal, its current host, or a remote host they " +
-	"SSH'd into there, use aish tools instead. Start with list_sessions, then session_status; recheck " +
-	"after SSH transitions. Sessions differ by backend and tools; plan against list_sessions' tool list. New" +
+	"SSH'd into, use aish tools instead. Start with list_sessions, then session_status; recheck " +
+	"after SSH transitions. Sessions differ by backend and tools; plan against that tool list. New" +
 	" SSH hosts have `unknown` OOB tools; call probe_host once, then always plan against oob_tools. " +
-	"`screen` remote_dialect_source is advisory, never implies POSIX, and never disables a tool. If probe" +
-	" evidence makes oob_tools unavailable, do not re-probe; use run_command instead. Deep identity " +
-	"probing is diagnostic, explicit, and may trigger MFA; never use instead of oob_tools. Explicit SFTP " +
-	"may trigger MFA; a sticky shell failure permits merged SFTP-backed oob_tools. Every session tool " +
-	"accepts `session` (id or name). Use run_command for commands the human should see. Use exec, file_*," +
+	"`screen` remote_dialect_source is advisory: never implies POSIX, never disables a tool. If probe" +
+	" evidence makes oob_tools unavailable, do not re-probe; use run_command. Deep identity " +
+	"probing is diagnostic and explicit, may trigger MFA, and never replaces oob_tools. Explicit SFTP " +
+	"may trigger MFA; a sticky shell failure permits merged SFTP-backed oob_tools. Every tool accepts " +
+	"`session` (id or name). Use run_command for commands the human should see. Use exec, file_*," +
 	" and directory_list for native-like work on the session's current host when OOB is authorized. Out-" +
-	"of-band work is invisible; oob_log records it — read it when another client shares the session or " +
-	"the user asks what happened off-screen. Out-of-band tools act as session_status.oob_user (the SSH " +
-	"login user), which does NOT change when the human switches user via su or sudo -i; check oob_user " +
-	"before ownership- or privilege-sensitive work, and if their shell switched users say so and prefer " +
-	"run_command (it runs as the shared shell's current user). sudo, su and other escalation must go " +
-	"through run_command, never exec: escalating out of band is refused, because a privileged command has" +
-	" to be one the human saw, and they type their own password. Never send passwords or other secrets; " +
-	"if echo_off is true, wait for the human. Name the target session and host in chat before the first " +
-	"substantial or destructive op."
+	"of-band work is invisible; oob_log records it — read it when another client shares the session. " +
+	"Out-of-band tools act as session_status.oob_user (the SSH login user), which does NOT change when " +
+	"the human switches user via su or sudo -i; check oob_user before ownership- or privilege-sensitive " +
+	"work, and prefer run_command if their shell switched users. sudo, su and other escalation must go " +
+	"through run_command, never exec: it is refused out of band, because a privileged command has to be " +
+	"one the human saw and authorized. Never send passwords or other secrets; if echo_off is true, wait " +
+	"for the human. Name the target session and host before the first substantial op. If a result's " +
+	"target_confidence is not `same`, aish cannot confirm it landed on the human's machine: check with " +
+	"the user before anything destructive."
 
 // Serve runs the aggregating proxy over stdio until the client disconnects.
 // If psk is non-nil, the proxy derives a deterministic identity from it so

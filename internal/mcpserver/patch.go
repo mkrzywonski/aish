@@ -30,6 +30,7 @@ type filePatchResult struct {
 	BytesWritten int    `json:"bytes_written"`
 	Via          string `json:"via"`
 	Host         string `json:"host"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args filePatchArgs) (*mcp.CallToolResult, filePatchResult, error) {
@@ -55,7 +56,8 @@ func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args fil
 	if rt.via == "in_band" {
 		return nil, filePatchResult{}, oobPrimitiveError("file_patch", rt.host)
 	}
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	guardWarning, err := c.guardTarget(rt, opMutate)
+	if err != nil {
 		return nil, filePatchResult{}, err
 	}
 	data, err := c.readOOBFile(ctx, rt, args.Path, maxFileEdit)
@@ -86,6 +88,7 @@ func (c *Core) filePatch(ctx context.Context, req *mcp.CallToolRequest, args fil
 		BytesWritten: len(updated),
 		Via:          resultVia(rt),
 		Host:         rt.host,
+		Warning:      guardWarning,
 	}, nil
 }
 

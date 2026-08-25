@@ -963,6 +963,7 @@ type fileWriteResult struct {
 	BytesWritten int    `json:"bytes_written"`
 	Via          string `json:"via"`
 	Host         string `json:"host"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fileWriteArgs) (*mcp.CallToolResult, fileWriteResult, error) {
@@ -992,7 +993,8 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 			return nil, fileWriteResult{}, err
 		}
 	}
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	guardWarning, err := c.guardTarget(rt, opMutate)
+	if err != nil {
 		return nil, fileWriteResult{}, err
 	}
 
@@ -1002,7 +1004,7 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 		if err := c.writeFileAtomic(ctx, rt, args.Path, data, args.Mode, args.IfMatch); err != nil {
 			return nil, fileWriteResult{}, err
 		}
-		return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host}, nil
+		return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host, Warning: guardWarning}, nil
 	}
 	if args.IfMatch != "" {
 		return nil, fileWriteResult{}, errors.New("if_match requires an out-of-band route; it is not available for append or in-band writes")
@@ -1067,7 +1069,7 @@ func (c *Core) fileWrite(ctx context.Context, req *mcp.CallToolRequest, args fil
 			return nil, fileWriteResult{}, fmt.Errorf("in-band write failed: %.200s", res.Output)
 		}
 	}
-	return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host}, nil
+	return nil, fileWriteResult{BytesWritten: len(data), Via: resultVia(rt), Host: rt.host, Warning: guardWarning}, nil
 }
 
 // ---- file_edit ----
@@ -1085,6 +1087,7 @@ type fileEditResult struct {
 	BytesWritten int    `json:"bytes_written"`
 	Via          string `json:"via"`
 	Host         string `json:"host"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args fileEditArgs) (*mcp.CallToolResult, fileEditResult, error) {
@@ -1106,7 +1109,8 @@ func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args file
 	if rt.via == "in_band" {
 		return nil, fileEditResult{}, oobPrimitiveError("file_edit", rt.host)
 	}
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	guardWarning, err := c.guardTarget(rt, opMutate)
+	if err != nil {
 		return nil, fileEditResult{}, err
 	}
 	data, err := c.readOOBFile(ctx, rt, args.Path, maxFileEdit)
@@ -1149,6 +1153,7 @@ func (c *Core) fileEdit(ctx context.Context, req *mcp.CallToolRequest, args file
 		BytesWritten: len(updated),
 		Via:          resultVia(rt),
 		Host:         rt.host,
+		Warning:      guardWarning,
 	}, nil
 }
 
@@ -1470,7 +1475,8 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 			return nil, transferResult{}, err
 		}
 	}
-	if _, err := c.guardTarget(rt, opMutate); err != nil {
+	guardWarning, err := c.guardTarget(rt, opMutate)
+	if err != nil {
 		return nil, transferResult{}, err
 	}
 	data, err := os.ReadFile(expandLocal(args.LocalPath))
@@ -1480,7 +1486,7 @@ func (c *Core) fileUpload(ctx context.Context, req *mcp.CallToolRequest, args tr
 	if err := c.writeFileAtomic(ctx, rt, args.RemotePath, data, "", ""); err != nil {
 		return nil, transferResult{}, err
 	}
-	return nil, transferResult{Bytes: int64(len(data)), Via: resultVia(rt), Host: rt.host}, nil
+	return nil, transferResult{Bytes: int64(len(data)), Via: resultVia(rt), Host: rt.host, Warning: guardWarning}, nil
 }
 
 func (c *Core) fileDownload(ctx context.Context, req *mcp.CallToolRequest, args transferArgs) (*mcp.CallToolResult, transferResult, error) {
