@@ -29,6 +29,9 @@ type runCommandArgs struct {
 type runCommandResult struct {
 	Output   string `json:"output,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
+	Framing     string `json:"framing"`
+	CursorStart int64  `json:"cursor_start"`
+	CursorEnd   int64  `json:"cursor_end"`
 	TaskID   string `json:"task_id,omitempty"`
 	TimedOut bool   `json:"timed_out,omitempty"`
 	// Truncated says the output was shortened from the middle; both ends are
@@ -128,6 +131,9 @@ func (s *aishwndSession) runCommandTool(ctx context.Context, req *mcp.CallToolRe
 	return nil, runCommandResult{
 		Output:      output,
 		Truncated:   truncated,
+		Framing:     "direct",
+		CursorStart: 0,
+		CursorEnd:   0,
 		OutputPath:  res.OutputPath,
 		OutputBytes: res.OutputBytes,
 		ExitCode:    res.ExitCode,
