@@ -5,8 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ai-ssh/internal/authproto"
+	"ai-ssh/internal/paths"
 )
 
 // defaultApprovalTimeout/defaultChallengeTTL mirror the constants in
@@ -26,10 +30,10 @@ const (
 
 // connAuth is the per-MCP-connection authorization state. Unlike
 // internal/mcpserver/connauth.go's version, there is no kernel-verified peer
-// (no SO_PEERCRED equivalent for a link relayed from a TCP connection to
-// Windows) and no persisted grants (every aishwin.exe restart re-prompts;
-// acceptable since these sessions are expected to be long-lived, not
-// frequently restarted).
+// (no SO_PEERCRED equivalent for a link relayed from a TCP connection to Windows).
+// Grants ARE persisted to the session directory so that PSK-based proxies
+// (which always present the same public key) can reconnect without re-prompting
+// after the proxy process restarts, as long as the aishwnd session is alive.
 type connAuth struct {
 	mu       sync.Mutex
 	denied   bool
@@ -268,6 +272,22 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 		return nil, authproto.RequestAccessResult{GrantID: st.grantID}, nil
 	}
 
+	// Check if this public key has a persisted grant from a prior approval.
+	// This allows PSK-based proxies to reconnect without re-prompting after
+	// process restart, as long as the session is still alive.
+	if grantID, ok := a.lookupPersistedGrant(key); ok {
+		a.mu.Lock()
+		a.grants[grantID] = clientGrant{publicKey: key, clientName: clientName(req.Session)}
+		a.mu.Unlock()
+		st.grantID = grantID
+		recognized := args.ClientDescription
+		if recognized == "" {
+			recognized = clientName(req.Session)
+		}
+		a.sess.Notify("recognized previously-approved client %q", recognized)
+		return nil, authproto.RequestAccessResult{GrantID: grantID}, nil
+	}
+
 	name := clientName(req.Session)
 	declared := args.ClientDescription
 	if declared == "" {
@@ -295,6 +315,10 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 	a.grants[grantID] = clientGrant{publicKey: key, clientName: name}
 	a.mu.Unlock()
 	st.grantID = grantID
+
+	// Persist the grant so the same public key (PSK-derived or otherwise) can
+	// reconnect without prompting after the proxy process restarts.
+	a.persistGrant(grantID, key)
 
 	return nil, authproto.RequestAccessResult{GrantID: grantID}, nil
 }
@@ -372,6 +396,75 @@ func decodePublicKey(encoded string) (ed25519.PublicKey, error) {
 		return nil, errors.New("invalid Ed25519 public key")
 	}
 	return ed25519.PublicKey(key), nil
+}
+
+// --- Grant persistence ---
+//
+// Mirrors internal/mcpserver/connauth.go's grant persistence: writes approved
+// grants to a JSON file in the session directory, keyed by public key. This
+// allows a PSK-based proxy (which always presents the same public key) to
+// reconnect without re-prompting after its process restarts. The grants file
+// lives in the session dir and is removed when the session exits (the session
+// dir is cleaned up by os.RemoveAll in session.go's Run), so grants are scoped
+// to one aishwnd session lifetime — matching the regular aish behavior.
+
+type persistedGrant struct {
+	GrantID   string `json:"grant_id"`
+	PublicKey string `json:"public_key"` // base64url-encoded
+}
+
+func (a *authManager) grantsFilePath() string {
+	return filepath.Join(paths.SessionDir(a.sess.id), "grants.json")
+}
+
+func (a *authManager) loadPersistedGrants() []persistedGrant {
+	b, err := os.ReadFile(a.grantsFilePath())
+	if err != nil {
+		return nil
+	}
+	var grants []persistedGrant
+	if json.Unmarshal(b, &grants) != nil {
+		return nil
+	}
+	return grants
+}
+
+func (a *authManager) savePersistedGrants(grants []persistedGrant) {
+	b, err := json.Marshal(grants)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(a.grantsFilePath(), b, 0o600)
+}
+
+func (a *authManager) persistGrant(grantID string, key ed25519.PublicKey) {
+	encoded := base64.RawURLEncoding.EncodeToString(key)
+	grants := a.loadPersistedGrants()
+	// Replace existing entry for this key, or append.
+	found := false
+	for i, g := range grants {
+		if g.PublicKey == encoded {
+			grants[i].GrantID = grantID
+			found = true
+			break
+		}
+	}
+	if !found {
+		grants = append(grants, persistedGrant{GrantID: grantID, PublicKey: encoded})
+	}
+	a.savePersistedGrants(grants)
+}
+
+// lookupPersistedGrant checks if the given public key has been previously
+// approved and persisted. Returns the grant ID and true if found.
+func (a *authManager) lookupPersistedGrant(key ed25519.PublicKey) (string, bool) {
+	encoded := base64.RawURLEncoding.EncodeToString(key)
+	for _, g := range a.loadPersistedGrants() {
+		if g.PublicKey == encoded {
+			return g.GrantID, true
+		}
+	}
+	return "", false
 }
 
 func randomID(n int) (string, error) {
