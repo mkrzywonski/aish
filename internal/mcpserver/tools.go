@@ -92,9 +92,10 @@ func registerTools(s *mcp.Server, c *Core) {
 			"whether your invisible commands land on the machine the human is looking at. oob_host is a " +
 			"different kind of thing: the connection target as configured (alias, FQDN, IP, jump-host " +
 			"expression), which has no obligation to equal any hostname. Never compare oob_host against " +
-			"interactive_host to decide whether the hosts agree. When shell_integration is false the host " +
-			"emits no OSC 133, so mode and " +
-			"prompt_ready cannot track the shell and mode_note names what to use instead. " +
+			"interactive_host to decide whether the hosts agree. Whenever mode_note is present, mode has " +
+			"stopped tracking the shell you are talking to -- the host emits no OSC 133, or the foreground " +
+			"process is ssh and the local marks cannot see past it -- and the note names what to read " +
+			"instead. Note that shell_integration describes the LOCAL shell and stays true inside ssh. " +
 			"Includes oob_tools (per-tool out-of-band availability); on a host not yet probed these read " +
 			"\"unknown\" — this call never opens a channel, so run probe_host to resolve them. Also reports oob_user: the " +
 			"remote_identity_status field explicitly distinguishes unknown, advisory screen evidence, and authoritative " +
@@ -400,14 +401,8 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	}
 	interactiveHost, oobHost, remoteHostname, confidence := c.hostConfidence(rt)
 	integrated := c.Tracker.ShellIntegration()
-	modeNote := ""
-	if !integrated {
-		modeNote = "no OSC 133 shell integration seen on this host, so mode and prompt_ready cannot track " +
-			"the shell: mode stays \"running\" and prompt_ready false however plainly a prompt is on " +
-			"screen. Do not read mode as evidence a command is still running. Use last_output_ms_ago " +
-			"(how long the terminal has been silent) or wait_idle instead, and expect run_command to " +
-			"report framing \"idle\" with no exit code -- judge success from its output."
-	}
+	foreground := c.Tracker.Foreground()
+	modeNote := stuckModeNote(integrated, foreground)
 	res := sessionStatusResult{
 		SessionID:        c.Sess.ID,
 		SessionName:      paths.ReadName(c.Sess.ID),
@@ -426,7 +421,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 		Cwd:              cwd,
 		PromptReady:      c.Tracker.PromptReady(),
 		EchoOff:          c.Tracker.EchoOff(),
-		Foreground:       c.Tracker.Foreground(),
+		Foreground:       foreground,
 		Rows:             snap.Rows,
 		Cols:             snap.Cols,
 		AltScreen:        snap.AltScreen,
@@ -515,4 +510,39 @@ func (c *Core) setSessionName(ctx context.Context, req *mcp.CallToolRequest, arg
 		c.OnRenamed(args.Name)
 	}
 	return nil, setSessionNameResult{SessionID: c.Sess.ID, Name: args.Name}, nil
+}
+
+// stuckModeNote explains a mode field that has stopped tracking what the AI is
+// actually talking to, and names what to use instead.
+//
+// Two different situations produce the same stuck reading, and only one of them
+// was covered when this note was first written.
+//
+// The first is a host that emits no OSC 133 at all: nothing ever marks a prompt,
+// so mode never leaves "running".
+//
+// The second is the common one, and it was missed. ShellIntegration is a latch
+// on marks ever seen, so an integrated local shell keeps reporting true after
+// the human types `ssh somewhere`. Local marks cannot see past ssh, so for the
+// whole remote session mode reads "running" -- correctly, in that ssh really is
+// the running foreground process, but uselessly, because it will read that way
+// however idle the remote prompt is. The status then said shell_integration
+// true, offered no note, and left mode looking authoritative when it was inert.
+func stuckModeNote(integrated bool, fg *state.Foreground) string {
+	const useInstead = "Do not read mode as evidence a command is still running. Use last_output_ms_ago " +
+		"(how long the terminal has been silent) or wait_idle instead, and expect run_command to " +
+		"report framing \"idle\" with no exit code -- judge success from its output."
+	switch {
+	case !integrated:
+		return "no OSC 133 shell integration seen on this host, so mode and prompt_ready cannot track " +
+			"the shell: mode stays \"running\" and prompt_ready false however plainly a prompt is on " +
+			"screen. " + useInstead
+	case fg != nil && fg.Comm == "ssh":
+		return "the terminal's foreground process is ssh, so the shell being typed into is on a remote " +
+			"host. This session's OSC 133 marks come from the local shell and cannot see past ssh, so " +
+			"mode stays \"running\" and prompt_ready false for the whole remote session, however plainly " +
+			"a remote prompt is on screen. shell_integration true describes the local shell, not the " +
+			"remote one. " + useInstead
+	}
+	return ""
 }
