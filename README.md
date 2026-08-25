@@ -617,8 +617,9 @@ AISH installs this in the session's *own* shell. But a shell you reach **later**
 — after `ssh host`, or after `su - user` on a remote — comes up with that
 host/user's plain default prompt: no badge, and no OSC 7, so AISH drops to
 `unknown` host confidence and starts asking for a per-write confirmation. Restore
-both with **`Ctrl-]` → `p`** (offered whenever AISH is on a remote it can't yet
-verify), which types the one-time badge + OSC 7 snippet into that shell. It is
+both with **`Ctrl-]` → `p`** (offered on any remote; hidden only on a local
+session, where your own shell already has the badge), which types the one-time
+badge + OSC 7 snippet into that shell. It is
 session-only and per-shell, so you have to remember to do it after each hop —
 AISH never auto-injects into a shell it didn't start.
 

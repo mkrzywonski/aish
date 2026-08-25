@@ -333,8 +333,11 @@ func runMain(args []string) int {
 			"  [l] recent out-of-band activity",
 			"  [k] revoke client access",
 		}
-		// Offer the aish prompt (badge + host tracking) only on a remote whose
-		// host aish can't yet verify.
+		// Offer the aish prompt (badge + host tracking) on any remote, hidden
+		// only on a purely local session. Deliberately NOT gated on host
+		// confidence: a remote that emits no OSC 7 leaves the stale local host
+		// matching the OOB host, which reads as a false "same" and would hide
+		// this option exactly when it is needed.
 		if trackHost, ok := core.RemoteTrackingApplicable(); ok {
 			accept += "p"
 			lines = append(lines, fmt.Sprintf("  [p] set up aish prompt on %s", trackHost))
