@@ -181,6 +181,18 @@ and point it at the session.
 
 Equivalent manual command: `claude mcp add aish --scope user -- aish mcp-proxy`.
 
+### Teach your AI to use AISH well
+
+[`SKILL.md`](SKILL.md) in this repository is a guide written for the AI, not for
+you: the workflow, the two backends, the visible/invisible choice, and the
+handful of traps that reliably waste an agent's time. The MCP server sends every
+client a 2 KB summary of the same rules automatically — this is the long form.
+
+Point your assistant at the file and ask it to install it. The last section
+tells it how for its own platform (it drops straight into
+`~/.claude/skills/aish/SKILL.md` for Claude Code, or `~/.codex/AGENTS.md` for
+Codex). Re-copy it after upgrading AISH.
+
 ### Launch a shared terminal for collaborating with the AI
 
 ```sh
