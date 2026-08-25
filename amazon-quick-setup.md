@@ -5,14 +5,13 @@ This guide sets up the **aish** MCP connection so Amazon Quick can drive your sh
 ## Prerequisites
 
 - **Windows** with WSL2 installed (Ubuntu distro)
-- **aish** installed inside WSL at `/usr/local/bin/aish`
 - **Amazon Quick** desktop app
 
-> If you haven't installed aish yet, run this inside your WSL Ubuntu terminal:
+> If you haven't installed aish yet, open a **WSL Ubuntu terminal** and run:
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/mkrzywonski/aish/main/install.sh | bash
-> sudo cp ~/.local/bin/aish /usr/local/bin/aish
 > ```
+> This installs `aish` to `/usr/local/bin/aish` automatically.
 
 ---
 
@@ -114,7 +113,7 @@ Quick should respond by listing your active session(s). You can then ask it to r
 You need at least one running `aish` session in a WSL terminal. Start one with just `aish`.
 
 ### Connection times out
-Make sure `aish` is at `/usr/local/bin/aish` (not just `~/.local/bin/aish`). WSL's non-login shell uses a PATH that starts with `/usr/local/bin`, so that's where the binary must live.
+Make sure `aish` is at `/usr/local/bin/aish`. WSL's non-login shell (which is what Quick launches) uses a PATH that starts with `/usr/local/bin`, so that's where the binary must live. The default `install.sh` puts it there.
 
 Verify: `wsl -d Ubuntu -- which aish` should return `/usr/local/bin/aish`.
 
@@ -125,9 +124,9 @@ The PSK isn't working. Check that:
 - Confirm with: `wsl -d Ubuntu -- aish --version` (should show ≥ 0.4.0)
 
 ### After upgrading aish
-Always sync the binary to `/usr/local/bin`:
+Re-run the installer to upgrade:
 ```bash
-sudo cp ~/.local/bin/aish /usr/local/bin/aish
+curl -fsSL https://raw.githubusercontent.com/mkrzywonski/aish/main/install.sh | bash
 ```
 Then toggle the MCP connection off/on in Quick settings (or restart Quick) to pick up the new version.
 
