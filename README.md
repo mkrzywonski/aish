@@ -136,6 +136,10 @@ It has two halves: `aishwin.exe` on Windows, and `aishwnd` on the Linux/WSL
 side it connects to (by default via `wsl.exe`, or over `ssh` for a separate
 remote Linux box).
 
+It appears to the AI as a session with the `direct_host` backend, alongside any
+`shared_terminal` sessions, and implements its own tool set — see
+[Session backends](#session-backends).
+
 ```powershell
 iwr https://raw.githubusercontent.com/mkrzywonski/aish/main/install.ps1 | iex
 ```
@@ -145,6 +149,18 @@ Then install `aishwnd` on the Linux side it will connect to (e.g. inside WSL):
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mkrzywonski/aish/main/install.sh | bash -s -- --components aishwnd
 ```
+
+Building `aishwin.exe` from a checkout **must pass the subsystem flag**:
+
+```powershell
+go build -ldflags "-H=windowsgui" -o aishwin.exe ./cmd/aishwin
+```
+
+A plain `go build ./cmd/aishwin` links for the console subsystem, which holds
+the shell that launched it until the window closes. The subsystem is a
+link-time property with no source-level equivalent in Go, so every build
+command carries the flag (`make aishwin`, the release build and `install.ps1`
+all do). A binary built without it says so at startup.
 
 ## Running AISH
 
@@ -173,11 +189,18 @@ aish --name myproject      # ... with a meaningful name
 aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
-You can run multiple sessions and share them with the AI.
-Every MCP tool accepts a `session` argument (id or name). `session_status` lists
-other live sessions. The proxy attaches to one session by default, but that is
+You can run multiple sessions and share them with the AI. Every MCP tool accepts
+a `session` argument (id or name); `list_sessions` enumerates them with their
+backend and tool list. The proxy attaches to one session by default, but that is
 only the default target, not a boundary. Use `AISH_SESSION=<id|name>` or
 `--session <id|name>` in the proxy args to pick a default explicitly.
+
+The proxy advertises the **union** of the tools across every live session, so a
+tool belonging to only one backend is still reachable, and it re-derives that set
+as sessions come and go (emitting `notifications/tools/list_changed`). It also
+watches for renames: if a session's name changes under a client that has been
+using it, the next result carries a notice saying so, rather than letting the AI
+silently aim at the wrong target.
 
 ```sh
 aish sessions              # list live sessions: id, name
@@ -201,7 +224,7 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `read_screen` | Rendered screen text (works during vim/htop), cursor, alt-screen flag |
 | `read_output` | Incremental scrollback with cursors; escape-stripped |
 | `wait_idle` | Wait for output to go quiet |
-| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), interactive/OOB host, target confidence, cached SFTP status, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
+| `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, the MCP `clients` currently sharing the session, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), the three host fields (`interactive_host`, `oob_host`, `remote_hostname`), target confidence, cached SFTP status, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
 | `probe_host` | Initialize the OOB shell toolset, or explicitly diagnose identity (`deep=true`) or SFTP (`sftp=true`). Each fresh probe may prompt for OOB consent/MFA and caches its outcome; selectors are independent and `force=true` retries only the selected axis. After a conclusive shell failure, a retained SFTP client can serve file reads and atomic writes |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
 | `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
@@ -209,12 +232,39 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `file_patch` | Apply a unified diff (multi-hunk) to a text file on the current host; applied in AISH, written atomically; OOB only |
 | `file_grep` / `file_search` | Regex content search and name-glob file finding on the current host (ripgrep/grep/find, best-effort); OOB only |
 | `file_stat` / `directory_list` | Native-style path metadata and directory browsing on the current host; OOB only |
+| `directory_create` | `mkdir -p` on the current host; idempotent, and `created` says whether it already existed |
 | `file_upload` / `file_download` | Local ↔ remote copies over the multiplexed connection |
-| `exec` / `exec_status` | Commands on the current host, with optional `cwd`; OOB background tasks with incremental polling |
+| `exec` / `task_status` | Commands on the current host, with optional `cwd`; OOB background tasks with incremental polling |
 | `oob_log` | Read what happened out of band — which client ran which tool, on which host and route, and how it ended. Incremental with cursors; invisible operations by default, `include_visible` for the full call history. Never records file contents |
+| `list_sessions` / `version_info` | Served by the proxy, not a session: enumerate live sessions with their backend and actual tool list, and report every component's version |
 
 Every tool also takes an optional `session` (id or name) to target another
 live session on the machine.
+
+Two fields are stamped on **every** result that describes an operation, by
+middleware rather than by each tool, so a tool added later cannot forget them:
+
+- **`visibility`** — `visible` (it happened in the shared terminal, the human
+  saw it), `silent` (out of band, nothing appeared on screen), or `unknown`
+  (the route never resolved — AISH claims nothing rather than guessing).
+- **`target_confidence`** — whether AISH can confirm the operation landed on the
+  machine the human is watching. See
+  [Wrong-host protection](#wrong-host-protection).
+
+### Session backends
+
+`list_sessions` reports a **backend** per session, and the two backends do not
+implement the same tools. Plan against the `tools` list it returns rather than
+assuming the tool schema you loaded applies everywhere.
+
+| Backend | What it is | Notable tools |
+|---|---|---|
+| `shared_terminal` | An AISH PTY session you and the AI both type into (`aish`) | the full set above, including `run_command`, `send_input`/`send_keys`, `read_screen`/`read_output`, `probe_host`, `oob_log` |
+| `direct_host` | A native Windows shell driven through `aishwin` — no shared PTY, its own window | `capture_screen` (screenshot of the window), `read_console` (scrollback), plus `run_command`, the `file_*` suite, `directory_*` and `task_status` |
+
+A tool absent from a session's list is genuinely not there; calling it returns a
+capability error naming the backend and what that session does offer, rather
+than a bare "unknown tool".
 
 Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
 (`--oob`, the Ctrl-] runtime toggle, or an interactive grant). Without one,
@@ -230,6 +280,22 @@ create the ControlMaster. Enabling OOB after SSH is already running does not
 retrofit multiplexing onto that existing SSH process; it only affects later SSH
 connections. See
 [Security](#security).
+
+### Oversized output
+
+Tool results carry at most 16 KiB of command output inline — one bound shared by
+every path, so output is never spilled at one threshold and trimmed at another.
+Nothing is lost to it. `run_command` types into the shared terminal, so its full
+output is in the scrollback and the result's cursors let you page the rest back
+with `read_output`.
+
+`exec` has no scrollback behind it, so oversized output is trimmed **from the
+middle** (the conclusion of a command is usually its last line) and the complete
+text is written to a file on the host that ran the command; the result reports
+`truncated`, `output_bytes` and `output_path`. Retrieve it with `file_read`, or
+search it with `file_grep` without reading it at all. One such file exists at a
+time per session — the previous one is deleted when the next is written — so
+collect it before running another command.
 
 ### Remote prerequisites
 
@@ -394,6 +460,23 @@ channel per host. That usually means one MFA prompt per host per session
 instead of one per OOB operation. An explicit SFTP probe is a separate retained
 channel and may cause another prompt. Lost channels are not reopened silently.
 
+### Privilege escalation stays visible
+
+`exec` **refuses** `sudo`, `su`, `doas`, `pkexec` and `runuser` on any invisible
+route. A privileged command has to be one you saw and authorized with your own
+password, so escalation has to go through `run_command`, which types into the
+shared terminal. The in-band route is exempt for exactly that reason — it is
+already visible.
+
+On most hosts the refusal is also the practical answer: the out-of-band channel
+has no TTY and its stdin is the null device, so a password prompt would fail
+rather than reach anyone.
+
+Like the SSH block, this is a **guardrail, not a boundary**: `bash -c 'sudo …'`
+gets through, and anything running as your uid could escalate anyway. It has the
+same standing as the tool annotations — it stops an AI from escalating by
+accident, not an attacker from escalating on purpose.
+
 ### The out-of-band activity log
 
 Consent governs *whether* invisible work may happen. The activity log is the
@@ -432,13 +515,45 @@ security boundary.
 
 When you use one host as a jump box (`ssh a`, then `ssh b` from there), the
 interactive shell can be on **b** while the out-of-band channel still points at
-**a**. AISH guards against writing to the wrong host: on the first probe it
-records the OOB host and compares it to where the shell reports it is
-(`session_status` shows `interactive_host`, `oob_host`, and `target_confidence`).
-On a **detected mismatch** an OOB *write* (`file_write`/`file_edit`/`file_patch`/
-`file_upload`) fails closed and a *read* is flagged with a warning; when the
-host **can't be verified** (no shell host reporting) a write asks for a one-time
-confirmation per host. This is an initial policy, not a final UX.
+**a**. AISH guards against acting on the wrong host.
+
+Three fields describe host identity and **only two of them are comparable**:
+
+- **`interactive_host`** — what the *terminal* reports it is on, from OSC 7.
+- **`remote_hostname`** — what the *out-of-band channel's* host reports, from
+  the probe.
+- **`target_confidence`** — compares those two. It answers the one question
+  that matters: do invisible commands land on the machine you are looking at?
+
+**`oob_host` is a different kind of thing** and is deliberately excluded from
+the comparison: it is the connection target as *configured* — an alias, an
+FQDN, a bare IP, a `ProxyJump` expression — with no obligation to equal any
+hostname. Comparing it against `interactive_host` would manufacture
+disagreement on exactly the setups where the question is hardest.
+
+The three outcomes:
+
+| `target_confidence` | Meaning | Reads | Writes |
+|---|---|---|---|
+| `same` | the two hostnames agree | proceed | proceed |
+| `mismatch` | they genuinely differ | warned | **fail closed** |
+| `unknown` | the remote reports no hostname, so AISH cannot tell | proceed, with a note | one confirmation per host, then a note on every later write |
+
+`unknown` is not the same as `mismatch`, and the distinction is load-bearing. A
+lean remote that emits no OSC 7 leaves the terminal reporting the stale *local*
+hostname; comparing that against the probed remote would read as a real
+disagreement and fail-close every write on the very hosts this is meant to
+help. AISH recognises that case and says `unknown` instead.
+
+Every routed result carries `target_confidence`, and while it is not `same`
+every result also carries a note explaining what to do about it. The human is
+prompted at most once per host so they are not nagged — but that quiet is for
+the human, not for the AI: after a single "yes", an operation on an unverified
+host must not look identical to one on a verified host.
+
+The fix is one keystroke: **`Ctrl-]` → `p`** installs the AISH prompt on the
+remote, `interactive_host` starts tracking, and `target_confidence` becomes
+`same`. The note says so, and the write confirmation offers `[p]` inline.
 
 Out-of-band writes are also **atomic** (temp file + rename, preserving mode and
 refusing to follow a symlink) and support optimistic concurrency: `file_read`
@@ -494,6 +609,17 @@ both with **`Ctrl-]` → `p`** (offered whenever AISH is on a remote it can't ye
 verify), which types the one-time badge + OSC 7 snippet into that shell. It is
 session-only and per-shell, so you have to remember to do it after each hop —
 AISH never auto-injects into a shell it didn't start.
+
+**OSC 7 and OSC 133 are separate, and `p` only restores the first.** OSC 7 is
+host reporting, which is what host confidence needs. OSC 133 is the prompt
+marking behind `session_status`'s `mode` and `prompt_ready`, and those marks
+come from the session's local shell — they cannot see past `ssh`. So for the
+whole of a remote session `mode` reads `running` (correctly: `ssh` really is the
+running foreground process) however idle the remote prompt is, and
+`shell_integration` stays `true` because it describes the local shell.
+`session_status` says so in `mode_note` whenever `mode` has stopped tracking the
+shell you're talking to, and points at `last_output_ms_ago` or `wait_idle`
+instead.
 
 ## The AISH menu
 
@@ -600,3 +726,11 @@ a hard kill.
   connections elsewhere can't be adopted.
 - bash and zsh get OSC 133 integration; fish and other unsupported shells
   fall back to idle detection, with commands typed bare and no exit code.
+- OSC 133 does not survive `ssh`, so `mode` and `prompt_ready` describe the
+  local shell for the whole of a remote session. `session_status` flags this in
+  `mode_note`; use `last_output_ms_ago` or `wait_idle` instead.
+- The out-of-band channel runs as the SSH login user (`oob_user`) and does not
+  follow an interactive `su`/`sudo -i` in the shared shell. Check `oob_user`
+  before ownership-sensitive work.
+- `Ctrl-]` → `p` is per-shell and session-only, so it has to be repeated after
+  each hop unless you add the snippet to the remote's rc yourself.
