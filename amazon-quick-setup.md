@@ -143,3 +143,55 @@ cp /mnt/c/Users/<username>/aish/SKILL.md \
 ```
 
 Or ask Quick: *"Install the SKILL.md from my aish repo"* — it knows how to do this.
+
+---
+
+## Optional: Installing aishwin (Windows native session)
+
+**aishwin** gives Quick direct access to a native Windows shell — no WSL terminal needed. It runs as a small GUI window (system tray) and exposes tools like `run_command`, `file_read`/`file_write`, `directory_list`, and `capture_screen` on the Windows host itself.
+
+### Step 1: Build or download aishwin.exe
+
+**Option A — Download prebuilt:**
+
+Grab `aishwin.exe` from the [latest release](https://github.com/mkrzywonski/aish/releases) and place it somewhere permanent (e.g. `C:\Users\<username>\aish\aishwin.exe`).
+
+**Option B — Build from source** (requires Go on Windows):
+
+```powershell
+cd C:\Users\<username>\aish
+go build -ldflags "-H=windowsgui" -o aishwin.exe ./cmd/aishwin
+```
+
+> ⚠️ The `-H=windowsgui` flag is required — without it the binary holds the launching terminal open until it exits.
+
+### Step 2: Run aishwin
+
+Double-click `aishwin.exe` or run it from PowerShell:
+
+```powershell
+.\aishwin.exe
+```
+
+It starts in the background (no console window) and registers itself as an aish session that the MCP proxy can discover.
+
+### Step 3: Verify
+
+Once aishwin is running, the proxy picks it up automatically. In Quick, ask:
+
+> "List my aish sessions"
+
+You should see both your WSL terminal session(s) and the Windows `direct_host` session. The Windows session shows a different tool set — it has `capture_screen` and `read_console` instead of `send_input` and `probe_host`.
+
+### Notes
+
+- **aishwin sessions show as `direct_host` backend** in `list_sessions`, while WSL terminal sessions show as `shared_terminal`
+- **`capture_screen`** takes a screenshot of the Windows desktop — useful for GUI automation or showing Quick what you see
+- **`run_command`** in a direct_host session runs in a native Windows shell (cmd.exe/PowerShell), not WSL
+- **Auto-start**: To have aishwin launch at login, place a shortcut in `shell:startup`:
+  ```powershell
+  $ws = New-Object -ComObject WScript.Shell
+  $s = $ws.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\aishwin.lnk")
+  $s.TargetPath = "C:\Users\$env:USERNAME\aish\aishwin.exe"
+  $s.Save()
+  ```
