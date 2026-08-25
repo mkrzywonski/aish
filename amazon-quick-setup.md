@@ -150,21 +150,26 @@ Or ask Quick: *"Install the SKILL.md from my aish repo"* — it knows how to do 
 
 **aishwin** gives Quick direct access to a native Windows shell — no WSL terminal needed. It runs as a small GUI window (system tray) and exposes tools like `run_command`, `file_read`/`file_write`, `directory_list`, and `capture_screen` on the Windows host itself.
 
-### Step 1: Build or download aishwin.exe
+### Step 1: Install aishwin.exe
 
-**Option A — Download prebuilt:**
+**Option A — One-liner** (downloads prebuilt from GitHub releases):
 
-Grab `aishwin.exe` from the [latest release](https://github.com/mkrzywonski/aish/releases) and place it somewhere permanent (e.g. `C:\Users\<username>\aish\aishwin.exe`).
+```powershell
+iwr https://raw.githubusercontent.com/mkrzywonski/aish/main/install.ps1 | iex
+```
 
-**Option B — Build from source** (requires Go on Windows):
+This installs `aishwin.exe` to `%LOCALAPPDATA%\aishwin\` and adds it to your User PATH.
+
+**Option B — From a cloned repo:**
 
 ```powershell
 cd C:\Users\<username>\aish
-go build -ldflags "-H=windowsgui" -o aishwin.exe ./cmd/aishwin
+.\install.ps1
 ```
 
-> ⚠️ The `-H=windowsgui` flag is required — without it the binary holds the launching terminal open until it exits.
+Pass `-Source` to build from source instead of downloading a prebuilt binary.
 
+> ℹ️ aishwin also needs the Linux half (`aishwnd`) in WSL. The installer reminds you, but if you already ran `install.sh` with default options, it's already there.
 ### Step 2: Run aishwin
 
 Double-click `aishwin.exe` or run it from PowerShell:
