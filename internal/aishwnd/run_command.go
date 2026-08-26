@@ -27,7 +27,7 @@ type runCommandArgs struct {
 }
 
 type runCommandResult struct {
-	Output   string `json:"output,omitempty"`
+	Output   string `json:"output"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Framing     string `json:"framing"`
 	CursorStart int64  `json:"cursor_start"`
@@ -36,7 +36,7 @@ type runCommandResult struct {
 	TimedOut bool   `json:"timed_out,omitempty"`
 	// Truncated says the output was shortened from the middle; both ends are
 	// present, so the command's conclusion is never the part that is cut.
-	Truncated bool `json:"truncated,omitempty"`
+	Truncated bool `json:"truncated"`
 	// OutputPath names a file on the Windows host holding the FULL output, and
 	// OutputBytes its size. Deleted when the next command starts.
 	OutputPath  string `json:"output_path,omitempty"`
