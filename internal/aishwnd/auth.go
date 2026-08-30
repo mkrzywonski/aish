@@ -255,6 +255,7 @@ func authError(message string) *mcp.CallToolResult {
 }
 
 func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolRequest, args authproto.RequestAccessArgs) (*mcp.CallToolResult, authproto.RequestAccessResult, error) {
+	a.sess.debugLog("requestAccess: called, publicKey prefix=%s desc=%q", args.PublicKey[:min(16, len(args.PublicKey))], args.ClientDescription)
 	key, err := decodePublicKey(args.PublicKey)
 	if err != nil {
 		return nil, authproto.RequestAccessResult{}, err
@@ -266,9 +267,11 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 		st.declared = args.ClientDescription
 	}
 	if st.denied {
+		a.sess.debugLog("requestAccess: client was previously denied")
 		return nil, authproto.RequestAccessResult{}, errors.New("the user denied this client access; reconnect to ask again")
 	}
 	if st.grantID != "" {
+		a.sess.debugLog("requestAccess: already has grantID=%s", st.grantID)
 		return nil, authproto.RequestAccessResult{GrantID: st.grantID}, nil
 	}
 
@@ -276,6 +279,7 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 	// This allows PSK-based proxies to reconnect without re-prompting after
 	// process restart, as long as the session is still alive.
 	if grantID, ok := a.lookupPersistedGrant(key); ok {
+		a.sess.debugLog("requestAccess: found persisted grant %s", grantID)
 		a.mu.Lock()
 		a.grants[grantID] = clientGrant{publicKey: key, clientName: clientName(req.Session)}
 		a.mu.Unlock()
@@ -293,13 +297,18 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 	if declared == "" {
 		declared = name
 	}
+	a.sess.debugLog("requestAccess: no persisted grant found, prompting user for %q", declared)
 	ans, ok := a.sess.Prompt(fmt.Sprintf("%q wants to control this session — allow?", declared), "yn", defaultApprovalTimeout)
+	a.sess.debugLog("requestAccess: Prompt returned ans=%q ok=%v", ans, ok)
 	switch {
 	case ok && ans == "y":
+		a.sess.debugLog("requestAccess: user approved")
 	case ok && ans == "n":
 		st.denied = true
+		a.sess.debugLog("requestAccess: user denied")
 		return nil, authproto.RequestAccessResult{}, errors.New("the user denied this client access; reconnect to ask again")
 	default:
+		a.sess.debugLog("requestAccess: no response (timeout or failure)")
 		return nil, authproto.RequestAccessResult{}, errors.New("no response to the authorization prompt; ask the user to approve this client, then retry")
 	}
 
@@ -307,9 +316,11 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 	if err != nil {
 		return nil, authproto.RequestAccessResult{}, err
 	}
+	a.sess.debugLog("requestAccess: generated grantID=%s, storing", grantID)
 	a.mu.Lock()
 	if a.conns[req.Session] != st {
 		a.mu.Unlock()
+		a.sess.debugLog("requestAccess: connection was revoked during approval")
 		return nil, authproto.RequestAccessResult{}, errors.New("the connection was revoked or closed during approval; reconnect to request again")
 	}
 	a.grants[grantID] = clientGrant{publicKey: key, clientName: name}
@@ -318,7 +329,9 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 
 	// Persist the grant so the same public key (PSK-derived or otherwise) can
 	// reconnect without prompting after the proxy process restarts.
+	a.sess.debugLog("requestAccess: persisting grant to disk")
 	a.persistGrant(grantID, key)
+	a.sess.debugLog("requestAccess: done, returning grantID=%s", grantID)
 
 	return nil, authproto.RequestAccessResult{GrantID: grantID}, nil
 }

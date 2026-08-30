@@ -59,10 +59,11 @@ var dialogTimeoutMs uint32
 // timeoutSeconds elapses, in which case it returns false (deny), matching
 // the wire protocol's fail-closed contract for an unanswered prompt.
 func AskYesNo(question string, timeoutSeconds int) bool {
+	debugLog("AskYesNo: question=%q timeout=%ds", question, timeoutSeconds)
 	// devBuild is a compile-time fact (aishwindev build tag), never a
 	// runtime flag: an ordinary aishwin.exe can never accidentally skip
-	// this gate. Auto-approval is still logged loudly to the visible log
-	// view so a human watching a dev build always knows it happened.
+	// this gate. Auto-approval is still logged loudly to the visible
+	// log view so a human watching a dev build always knows it happened.
 	if devBuild {
 		AppendLog(fmt.Sprintf("aishwin [dev build]: auto-approved prompt: %s", question))
 		return true
@@ -79,8 +80,10 @@ func AskYesNo(question string, timeoutSeconds int) bool {
 	tmpl := buildYesNoDialogTemplate("aishwin", question)
 
 	result := make(chan bool, 1)
+	debugLog("AskYesNo: posting dialog to UI thread")
 	RunOnUIThread(func() {
 		inst := getModuleHandle()
+		debugLog("AskYesNo: DialogBoxIndirectParamW starting (modal)")
 		r, _, _ := procDialogBoxIndirectParamW.Call(
 			uintptr(inst),
 			uintptr(unsafe.Pointer(&tmpl[0])),
@@ -90,7 +93,9 @@ func AskYesNo(question string, timeoutSeconds int) bool {
 		)
 		result <- r == 1
 	})
-	return <-result
+	ans := <-result
+	debugLog("AskYesNo: dialog returned, answer=%v", ans)
+	return ans
 }
 
 func yesNoDialogProc(hwndDlg syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {

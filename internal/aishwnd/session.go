@@ -43,30 +43,50 @@ func (s *aishwndSession) displayHost() string {
 	return "windows"
 }
 
+// debugLog sends a debug message both to stderr (for console-attached
+// launches) and over the wire as a notify frame (so it appears in the
+// aishwin GUI log even when there is no console). Cheap enough to leave
+// unconditionally -- the aishwin side only sees it when --debug is off
+// as a regular notify, which is fine for troubleshooting.
+func (s *aishwndSession) debugLog(format string, args ...any) {
+	// Uncomment for wire-level debugging. Each call sends a notify frame
+	// over the wire to the Windows peer's log view, which has a small
+	// cost even when nobody is watching -- so leave disabled in normal builds.
+	// msg := fmt.Sprintf("[aishwnd DEBUG] "+format, args...)
+	// s.Notify("%s", msg)
+}
+
 // Prompt forwards an approval question to the Windows peer's console and
 // blocks for its answer, mirroring internal/session/console.go's Prompt but
 // over the wire link instead of a shared PTY. Returns ("", false) on
 // timeout, send failure, or a malformed answer.
 func (s *aishwndSession) Prompt(question, kind string, timeout time.Duration) (string, bool) {
 	id := randHex(8)
+	s.debugLog("Prompt: id=%s question=%q kind=%s timeout=%s", id, question, kind, timeout)
 	ch := s.wire.Await(id)
 	defer s.wire.CancelAwait(id)
 
 	data, err := json.Marshal(aishwinwire.PromptData{Question: question, Kind: kind, TimeoutSeconds: int(timeout / time.Second)})
 	if err != nil {
+		s.debugLog("Prompt: id=%s marshal error: %v", id, err)
 		return "", false
 	}
 	if err := s.wire.Send(aishwinwire.Frame{Type: "prompt", ID: id, Data: data}); err != nil {
+		s.debugLog("Prompt: id=%s send error: %v", id, err)
 		return "", false
 	}
+	s.debugLog("Prompt: id=%s prompt frame sent, waiting for answer...", id)
 	select {
 	case f := <-ch:
 		var pa aishwinwire.PromptAnswerData
 		if err := json.Unmarshal(f.Data, &pa); err != nil || pa.Answer == "" {
+			s.debugLog("Prompt: id=%s unmarshal failed or empty: err=%v", id, err)
 			return "", false
 		}
+		s.debugLog("Prompt: id=%s got answer=%q", id, pa.Answer)
 		return pa.Answer, true
 	case <-time.After(timeout):
+		s.debugLog("Prompt: id=%s timed out after %s", id, timeout)
 		return "", false
 	}
 }
@@ -79,15 +99,20 @@ func (s *aishwndSession) Prompt(question, kind string, timeout time.Duration) (s
 // call site), so it stays its own method.
 func (s *aishwndSession) roundTrip(frameType string, data json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	id := randHex(8)
+	s.debugLog("roundTrip: id=%s type=%s timeout=%s", id, frameType, timeout)
 	ch := s.wire.Await(id)
 	defer s.wire.CancelAwait(id)
 	if err := s.wire.Send(aishwinwire.Frame{Type: frameType, ID: id, Data: data}); err != nil {
+		s.debugLog("roundTrip: id=%s send error: %v", id, err)
 		return nil, fmt.Errorf("sending %s request to the Windows peer: %w", frameType, err)
 	}
+	s.debugLog("roundTrip: id=%s frame sent, waiting for response...", id)
 	select {
 	case f := <-ch:
+		s.debugLog("roundTrip: id=%s got response, dataLen=%d", id, len(f.Data))
 		return f.Data, nil
 	case <-time.After(timeout):
+		s.debugLog("roundTrip: id=%s timed out", id)
 		return nil, fmt.Errorf("no response from the Windows peer for %s", frameType)
 	}
 }
@@ -185,6 +210,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	// and "disconnect_client" (all from the Windows console's menu) are
 	// the only frame types this side needs to act on beyond that.
 	return wc.ReadLoop(func(f aishwinwire.Frame) {
+		sess.debugLog("wire ReadLoop callback: type=%q id=%q dataLen=%d", f.Type, f.ID, len(f.Data))
 		switch f.Type {
 		case "rename":
 			sess.handleRename(f)
@@ -192,6 +218,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 			sess.handleListClients(f)
 		case "disconnect_client":
 			sess.handleDisconnectClient(f)
+		default:
+			sess.debugLog("wire ReadLoop callback: unhandled frame type=%q id=%q", f.Type, f.ID)
 		}
 	})
 }

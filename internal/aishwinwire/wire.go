@@ -352,7 +352,11 @@ type SearchResultData struct {
 // Conn is one side of the private wire protocol: JSON-line framing over a
 // reader/writer pair (normally a child process's stdio pipes), with
 // request/response correlation by ID for frame types that expect an answer
-// (currently just prompt/prompt_answer).
+
+// DebugLog is an optional hook for wire-level tracing. Set it before
+// calling ReadLoop to see Await matching decisions. Nil by default.
+var DebugLog func(format string, args ...any)
+
 type Conn struct {
 	sc *bufio.Scanner
 
@@ -429,6 +433,9 @@ func (c *Conn) ReadLoop(fn func(Frame)) error {
 	for c.sc.Scan() {
 		var f Frame
 		if err := json.Unmarshal(c.sc.Bytes(), &f); err != nil {
+			if DebugLog != nil {
+				DebugLog("wire.ReadLoop: malformed frame, skipping: %v", err)
+			}
 			continue
 		}
 		if f.ID != "" {
@@ -438,10 +445,19 @@ func (c *Conn) ReadLoop(fn func(Frame)) error {
 				delete(c.pending, f.ID)
 			}
 			c.pendingMu.Unlock()
+			if DebugLog != nil {
+				c.pendingMu.Lock()
+				pendingCount := len(c.pending)
+				c.pendingMu.Unlock()
+				DebugLog("wire.ReadLoop: frame type=%q id=%q awaitMatch=%v pendingRemaining=%d", f.Type, f.ID, ok, pendingCount)
+			}
 			if ok {
 				ch <- f
 				continue
 			}
+		}
+		if DebugLog != nil && f.Type != "list_clients" {
+			DebugLog("wire.ReadLoop: dispatching to callback type=%q id=%q", f.Type, f.ID)
 		}
 		fn(f)
 	}

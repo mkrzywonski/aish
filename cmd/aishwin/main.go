@@ -60,11 +60,16 @@ func main() {
 	}
 	showVersion := fs.Bool("version", false, "print version and exit")
 	guiSmokeTest := fs.Bool("gui-smoke-test", false, "TEMPORARY: show the GUI with fake data and exit, no wire connection")
+	debugFlag := fs.Bool("debug", false, "enable verbose debug logging in the GUI log view")
 	_ = fs.Parse(os.Args[1:])
 
 	if *showVersion {
 		fmt.Fprintln(stdout, "aishwin", version)
 		return
+	}
+
+	if *debugFlag {
+		debugEnabled.Store(true)
 	}
 
 	startDevControlWatcher()

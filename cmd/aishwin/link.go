@@ -28,6 +28,7 @@ var cmdD *commandDispatcher
 func run(ctx context.Context, spawn spawnFunc) error {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
+	debugLog("run: starting connection loop")
 
 	for ctx.Err() == nil {
 		err := runOnce(ctx, spawn)
@@ -51,10 +52,12 @@ func run(ctx context.Context, spawn spawnFunc) error {
 // runOnce spawns one instance of the Linux half, completes the hello
 // handshake, and serves frames from it until the link drops.
 func runOnce(ctx context.Context, spawn spawnFunc) error {
+	debugLog("runOnce: spawning linux half")
 	cmd, stdin, childOut, err := spawn(ctx)
 	if err != nil {
 		return fmt.Errorf("launching linux half: %w", err)
 	}
+	debugLog("runOnce: linux half spawned, pid=%d", cmd.Process.Pid)
 	defer stdin.Close()
 
 	wc := aishwinwire.NewConn(childOut, stdin)
@@ -68,21 +71,31 @@ func runOnce(ctx context.Context, spawn spawnFunc) error {
 	if err != nil {
 		return err
 	}
+	debugLog("runOnce: sending hello frame (name=%q, shells=%v)", CurrentSessionName(), shellKindStrings(cmdD.available))
+	if debugEnabled.Load() {
+		aishwinwire.DebugLog = func(format string, args ...any) {
+			debugLog(format, args...)
+		}
+	}
 	if err := wc.Send(aishwinwire.Frame{Type: "hello", Data: hello}); err != nil {
 		return fmt.Errorf("sending hello: %w", err)
 	}
 
+	debugLog("runOnce: waiting for hello_ack...")
 	ackFrame, err := wc.ReadOne()
 	if err != nil {
+		debugLog("runOnce: hello_ack read error: %v", err)
 		return fmt.Errorf("waiting for hello_ack: %w", err)
 	}
 	if ackFrame.Type != "hello_ack" {
+		debugLog("runOnce: expected hello_ack, got %q", ackFrame.Type)
 		return fmt.Errorf("expected hello_ack, got %q", ackFrame.Type)
 	}
 	var ack aishwinwire.HelloAckData
 	if err := json.Unmarshal(ackFrame.Data, &ack); err != nil {
 		return fmt.Errorf("malformed hello_ack: %w", err)
 	}
+	debugLog("runOnce: got hello_ack session_id=%s name=%q version=%s", ack.SessionID, ack.Name, ack.Version)
 	rt.setConnected(wc, ack)
 
 	AppendLog(fmt.Sprintf("aishwin: connected — session %s is now visible to the AI", sessionLabel(ack)))
@@ -91,6 +104,7 @@ func runOnce(ctx context.Context, spawn spawnFunc) error {
 		handleFrame(wc, f)
 	})
 
+	debugLog("runOnce: readLoop exited, readErr=%v", readErr)
 	waitErr := cmd.Wait()
 	if readErr != nil {
 		return readErr
@@ -109,8 +123,10 @@ func sessionLabel(ack aishwinwire.HelloAckData) string {
 }
 
 func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
+	debugLog("handleFrame: type=%q id=%q dataLen=%d", f.Type, f.ID, len(f.Data))
 	switch f.Type {
 	case "prompt":
+		debugLog("handleFrame: dispatching prompt id=%q", f.ID)
 		handlePrompt(wc, f)
 	case "notify":
 		handleNotify(f)
@@ -141,6 +157,8 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		go handleCaptureScreen(wc, f)
 	case "console_read":
 		go handleConsoleRead(wc, f)
+	default:
+		debugLog("handleFrame: unrecognized frame type=%q id=%q", f.Type, f.ID)
 	}
 }
 
@@ -157,13 +175,21 @@ func handlePrompt(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	if err := json.Unmarshal(f.Data, &p); err != nil {
 		return
 	}
+	debugLog("handlePrompt: id=%q question=%q timeout=%ds -- showing dialog", f.ID, p.Question, p.TimeoutSeconds)
 	answer := "n"
 	if AskYesNo(p.Question, p.TimeoutSeconds) {
 		answer = "y"
 	}
+	debugLog("handlePrompt: id=%q user answered %q -- sending prompt_answer", f.ID, answer)
 	data, err := json.Marshal(aishwinwire.PromptAnswerData{Answer: answer})
 	if err != nil {
+		debugLog("handlePrompt: id=%q marshal error: %v", f.ID, err)
 		return
 	}
-	_ = wc.Send(aishwinwire.Frame{Type: "prompt_answer", ID: f.ID, Data: data})
+	debugLog("handlePrompt: id=%q about to Send frame bytes: %s", f.ID, string(mustMarshal(aishwinwire.Frame{Type: "prompt_answer", ID: f.ID, Data: data})))
+	if err := wc.Send(aishwinwire.Frame{Type: "prompt_answer", ID: f.ID, Data: data}); err != nil {
+		debugLog("handlePrompt: id=%q send error: %v", f.ID, err)
+	} else {
+		debugLog("handlePrompt: id=%q prompt_answer sent successfully", f.ID)
+	}
 }

@@ -111,6 +111,7 @@ func InitConnectionContext(ctx context.Context) {
 // first connection) -- see connDescriptor's own doc comment.
 func StartConnection(spawn spawnFunc, desc connDescriptor) {
 	rt.setConnDescriptor(desc)
+	debugLog("StartConnection: mode=%s target=%q", desc.mode, desc.target)
 	connMu.Lock()
 	if connCancel != nil {
 		connCancel()
@@ -120,6 +121,7 @@ func StartConnection(spawn spawnFunc, desc connDescriptor) {
 	connMu.Unlock()
 
 	go func() {
+		debugLog("StartConnection: goroutine started, calling run()")
 		if err := run(ctx, spawn); err != nil {
 			AppendLog("aishwin: " + err.Error())
 		}
