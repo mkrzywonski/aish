@@ -251,6 +251,10 @@ type FileReadData struct {
 	Path     string `json:"path"`
 	MaxBytes int    `json:"max_bytes,omitempty"`
 	Offset   int64  `json:"offset,omitempty"`
+	// StartLine selects a 1-based source line instead of a byte offset.
+	// A peer supporting this extension must echo it in the result, so an old
+	// peer cannot silently return the wrong part of the file.
+	StartLine int64 `json:"start_line,omitempty"`
 }
 
 // FileReadResultData answers a FileReadData request. Content is always
@@ -258,9 +262,11 @@ type FileReadData struct {
 // asked for — aishwnd decides utf8-vs-base64 presentation after decoding,
 // exactly like aish's own fileRead does for its "local" route.
 type FileReadResultData struct {
-	Content string `json:"content,omitempty"`
-	Eof     bool   `json:"eof"`
-	Error   string `json:"error,omitempty"`
+	Content      string `json:"content,omitempty"`
+	Eof          bool   `json:"eof"`
+	Error        string `json:"error,omitempty"`
+	StartLine    int64  `json:"start_line,omitempty"`
+	SourceOffset int64  `json:"source_offset,omitempty"`
 }
 
 // FileWriteData requests an atomic (or, if Append, non-atomic appending)

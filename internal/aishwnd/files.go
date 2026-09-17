@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -24,16 +23,25 @@ import (
 
 type fileReadArgs struct {
 	Path        string `json:"path" jsonschema:"absolute path on the Windows host"`
-	MaxBytes    int    `json:"max_bytes,omitempty" jsonschema:"cap returned content (default 262144)"`
-	Offset      int64  `json:"offset,omitempty" jsonschema:"byte offset to start reading from"`
-	LineNumbers bool   `json:"line_numbers,omitempty" jsonschema:"also return numbered_content (line-numbered, from offset 0 only); content stays raw for file_edit"`
+	MaxBytes    *int   `json:"max_bytes,omitempty" jsonschema:"maximum source bytes (default 16384, maximum 262144); serialized result budget may shorten the page"`
+	Offset      *int64 `json:"offset,omitempty" jsonschema:"zero-based byte offset; cannot be combined with start_line or limit"`
+	StartLine   *int64 `json:"start_line,omitempty" jsonschema:"one-based first line; selects complete-line pagination, default 1 when limit is supplied"`
+	Limit       *int   `json:"limit,omitempty" jsonschema:"maximum lines to return with start_line (default 200, maximum 10000); cannot be combined with byte offset"`
+	LineNumbers bool   `json:"line_numbers,omitempty" jsonschema:"return only numbered_content instead of raw content; requires start_line or byte offset 0"`
 }
 
 type fileReadResult struct {
-	Content         string `json:"content"`
-	Encoding        string `json:"encoding"` // utf8 | base64
-	Eof             bool   `json:"eof"`
-	NumberedContent string `json:"numbered_content,omitempty"`
+	Content          *string `json:"content,omitempty"`
+	Encoding         string  `json:"encoding"` // utf8 | base64
+	Eof              bool    `json:"eof"`
+	NumberedContent  *string `json:"numbered_content,omitempty"`
+	NextOffset       int64   `json:"next_offset"`
+	BytesRead        int     `json:"bytes_read"`
+	StartLine        int64   `json:"start_line,omitempty"`
+	EndLine          int64   `json:"end_line,omitempty"`
+	NextLine         int64   `json:"next_line,omitempty"`
+	Truncated        bool    `json:"truncated"`
+	TruncationReason string  `json:"truncation_reason,omitempty"`
 	// Version is a whole-file token (only set when the entire file was read
 	// in one call); pass it as file_write's if_match to write only if the
 	// file hasn't changed since.
@@ -102,7 +110,10 @@ func registerFileTools(s *mcp.Server, sess *aishwndSession) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "file_read",
 		Annotations: readOnlyTool("Read file on Windows host"),
-		Description: "Read a file from the Windows host. Non-UTF-8 content is returned base64 (see encoding)." +
+		Description: "Read a file from the Windows host. Use start_line=241,limit=160 for lines 241-400, or offset/max_bytes for zero-based byte pagination. " +
+			"Never combine offset with start_line/limit. line_numbers=true returns only numbered_content; omit it for raw content suitable for editing. " +
+			"Pages default to 16 KiB source bytes and fit a 64 KiB serialized response budget. Continue with next_line or next_offset. " +
+			"Non-UTF-8 byte reads return base64 (see encoding); line reads require UTF-8. " +
 			"Every operation on this session is mirrored to the human's console as it happens, and the " +
 			"result says so in its visibility field. Do not carry that assumption to a shared-terminal " +
 			"session: file_read there is silent when an out-of-band route is authorized, but otherwise " +
@@ -130,32 +141,6 @@ func registerFileTools(s *mcp.Server, sess *aishwndSession) {
 			"equivalent of your Bash `ls -la`. Sorted by name, with type, size, and modification time. " +
 			"Symlinks are reported as symlinks and are not followed; hidden files are included.",
 	}, sess.directoryList)
-}
-
-func (s *aishwndSession) fileRead(ctx context.Context, req *mcp.CallToolRequest, args fileReadArgs) (*mcp.CallToolResult, fileReadResult, error) {
-	if args.Path == "" {
-		return nil, fileReadResult{}, errors.New("path must not be empty")
-	}
-	raw, eof, err := s.readRemoteFile(args.Path, args.Offset, args.MaxBytes)
-	if err != nil {
-		return nil, fileReadResult{}, err
-	}
-
-	out := fileReadResult{Eof: eof, Via: "aishwin", Host: s.displayHost()}
-	if args.Offset == 0 && eof {
-		// The whole file is in hand: a sha256 over these exact bytes is a
-		// TOCTOU-correct version token for a later if_match write.
-		out.Version, out.VersionKind = aishwinwire.SHA256Version(raw), "sha256"
-	}
-	if utf8.Valid(raw) {
-		out.Content, out.Encoding = string(raw), "utf8"
-		if args.LineNumbers && args.Offset == 0 {
-			out.NumberedContent = numberLines(raw)
-		}
-	} else {
-		out.Content, out.Encoding = base64.StdEncoding.EncodeToString(raw), "base64"
-	}
-	return nil, out, nil
 }
 
 // readRemoteFile sends a file_read wire request and returns the decoded raw

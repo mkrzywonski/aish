@@ -74,8 +74,8 @@ func TestFileReadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fileRead: %v", err)
 	}
-	if res.Content != "hello" || res.Encoding != "utf8" {
-		t.Errorf("Content/Encoding = %q/%q, want %q/%q", res.Content, res.Encoding, "hello", "utf8")
+	if res.Content == nil || *res.Content != "hello" || res.Encoding != "utf8" {
+		t.Errorf("Content/Encoding = %v/%q, want %q/%q", res.Content, res.Encoding, "hello", "utf8")
 	}
 	if res.VersionKind != "sha256" || res.Version == "" {
 		t.Errorf("expected a sha256 version token for a full-file read, got kind=%q version=%q", res.VersionKind, res.Version)

@@ -1,6 +1,7 @@
-﻿package main
+package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,9 @@ type dirEntry struct {
 // file. Go's os package is already cross-platform, so this algorithm needs
 // no Windows-specific handling.
 func readFile(path string, offset int64, max int) (data []byte, eof bool, err error) {
+	if offset < 0 || max <= 0 || max > 32<<20 {
+		return nil, false, errors.New("offset must be nonnegative and max_bytes must be between 1 and 33554432")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, false, err
@@ -59,6 +63,49 @@ func readFile(path string, offset int64, max int) (data []byte, eof bool, err er
 		n = max
 	}
 	return buf[:n], eof, nil
+}
+
+// readFileLinePage skips the prefix on the Windows host with bounded memory,
+// including files whose individual lines exceed bufio's buffer. The daemon
+// selects complete lines and formats the bounded page after decoding it.
+func readFileLinePage(path string, startLine int64, max int) (data []byte, offset int64, eof bool, err error) {
+	if startLine < 1 || max <= 0 || max > 256<<10 {
+		return nil, 0, false, errors.New("start_line must be positive and max_bytes must be between 1 and 262144")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if info.IsDir() {
+		return nil, 0, false, fmt.Errorf("%s is a directory, not a file; use directory_list to see what it contains", path)
+	}
+	r := bufio.NewReader(f)
+	for line := int64(1); line < startLine; {
+		part, readErr := r.ReadSlice('\n')
+		offset += int64(len(part))
+		if readErr == nil {
+			line++
+			continue
+		}
+		if errors.Is(readErr, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil, offset, true, nil
+		}
+		return nil, offset, false, readErr
+	}
+	buf := make([]byte, max+1)
+	n, readErr := io.ReadFull(r, buf)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return nil, offset, false, readErr
+	}
+	return buf[:min(n, max)], offset, n <= max, nil
 }
 
 func readFullBuf(f *os.File, buf []byte) (int, error) {

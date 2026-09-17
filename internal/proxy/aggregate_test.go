@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -10,6 +11,22 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestEmptySessionListArray(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	p := &aggProxy{}
+	_, out, err := p.listSessions(context.Background(), nil, listSessionsArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"sessions":[]}` {
+		t.Fatalf("empty session result: %s", raw)
+	}
+}
 
 // schema builds a mirrored (JSON-decoded) input schema with the given property
 // names, matching the shape ListTools hands back over the wire.
@@ -79,20 +96,22 @@ func TestMergeToolSpecsInjectsSessionArg(t *testing.T) {
 	if !ok {
 		t.Fatal("merged schema has no properties map")
 	}
-	if _, exists := props["session"]; !exists {
+	if session, exists := props["session"].(map[string]any); !exists {
 		t.Fatal("session argument was not injected into a schema that lacked it")
+	} else if session["description"] != sessionArgDescription {
+		t.Fatalf("session routing description = %v", session["description"])
 	}
 }
 
-func TestEnsureSessionArgLeavesAnExistingOneAlone(t *testing.T) {
+func TestEnsureSessionArgUpdatesOnlyExistingDescription(t *testing.T) {
 	tool := &mcp.Tool{Name: "exec", InputSchema: schema("command", "session")}
 	props, _ := schemaProperties(tool.InputSchema)
 	props["session"] = map[string]any{"type": "string", "description": "original wording"}
 	ensureSessionArg(tool)
 	got, _ := schemaProperties(tool.InputSchema)
 	sessionProp, _ := got["session"].(map[string]any)
-	if sessionProp["description"] != "original wording" {
-		t.Errorf("existing session property was overwritten: %v", sessionProp)
+	if sessionProp["description"] != sessionArgDescription || sessionProp["type"] != "string" {
+		t.Errorf("existing session property was not adapted: %v", sessionProp)
 	}
 }
 

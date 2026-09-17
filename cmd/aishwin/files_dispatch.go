@@ -11,7 +11,7 @@ import (
 	"ai-ssh/internal/aishwinwire"
 )
 
-const defaultMaxFileRead = 256 << 10 // matches aish's own default (internal/mcpserver/tools_remote.go's maxFileRead)
+const defaultMaxFileRead = 16 << 10
 
 func handleFileRead(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	var req aishwinwire.FileReadData
@@ -23,14 +23,26 @@ func handleFileRead(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 		max = defaultMaxFileRead
 	}
 	AppendLogColor("Reading "+req.Path, colorFileOp)
-	data, eof, err := readFile(req.Path, req.Offset, max)
+	var data []byte
+	var eof bool
+	var err error
+	offset := req.Offset
+	if req.StartLine < 0 || (req.StartLine > 0 && req.Offset != 0) {
+		err = fmt.Errorf("start_line must be positive and cannot be combined with offset")
+	} else if req.StartLine > 0 {
+		data, offset, eof, err = readFileLinePage(req.Path, req.StartLine, max)
+	} else {
+		data, eof, err = readFile(req.Path, req.Offset, max)
+	}
 	if err != nil {
 		send(wc, "file_read_result", f.ID, aishwinwire.FileReadResultData{Error: err.Error()})
 		return
 	}
 	send(wc, "file_read_result", f.ID, aishwinwire.FileReadResultData{
-		Content: base64.StdEncoding.EncodeToString(data),
-		Eof:     eof,
+		Content:      base64.StdEncoding.EncodeToString(data),
+		Eof:          eof,
+		StartLine:    req.StartLine,
+		SourceOffset: offset,
 	})
 }
 

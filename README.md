@@ -162,6 +162,27 @@ link-time property with no source-level equivalent in Go, so every build
 command carries the flag (`make aishwin`, the release build and `install.ps1`
 all do). A binary built without it says so at startup.
 
+Native Windows `file_read` supports one-based `start_line` and line-count `limit`
+for reading text ranges, for example `start_line: 241, limit: 160`. `limit` alone
+starts at line 1; the default is 200 lines and the maximum is 10000. Existing
+`offset` remains a zero-based **byte** offset and cannot be mixed with line
+parameters. Source pages default to 16 KiB (`max_bytes` accepts 1–262144); the
+serialized response budget may shorten them further. Follow `next_line` or
+`next_offset` until `eof`; `bytes_read` counts original file bytes.
+
+`line_numbers: true` now returns only `numbered_content`. Omit numbering to get
+raw `content` for exact edits. Line pages keep complete UTF-8 lines; an oversized
+line returns an error with its byte offset for byte-mode reading. Whole-file
+version tokens are returned only when the entire file fits in one response.
+Reads observe live files, so concurrent edits can change later page positions.
+
+Update both `aishwin.exe` and `aishwnd`, then reconnect the Windows session and
+MCP client to refresh schemas. An older Windows peer still supports byte reads;
+line requests fail with an update message instead of silently reading the wrong
+range. Native Windows search uses Go regex, including `foo|bar` alternation;
+successful empty search/list results are arrays. When multiple sessions are
+live, pass `session` explicitly through the proxy.
+
 ## Running AISH
 
 ### Install the MCP Server in your AI TUI
