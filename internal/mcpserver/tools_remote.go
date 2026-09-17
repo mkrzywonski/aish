@@ -33,10 +33,12 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Name:        "file_read",
 		Annotations: readOnlyTool("Read file on session host"),
 		Description: "Read a file from the host the shared session is currently on (remote when ssh'd, local otherwise). " +
-			"Out-of-band (invisible) when authorized and a route is available; remote reads prefer the persistent shell " +
-			"channel and may use a retained SFTP client when that shell is conclusively unavailable. " +
-			"Otherwise it works by typing through the shared terminal (visible to the user, size-limited). " +
-			"Non-UTF-8 content is returned base64 (see encoding).",
+			"Out-of-band (invisible) when authorized; remote reads prefer the shell channel, with retained SFTP fallback; " +
+			"otherwise it works by typing through the shared terminal (visible to the user, size-limited). " +
+			"Use start_line (1-based) and limit (line count) for text pages; line mode requires local or POSIX-shell OOB, not SFTP. " +
+			"offset is a 0-based BYTE offset and cannot be combined with line parameters. max_bytes defaults to 16384. " +
+			"Results are bounded; follow next_line or next_offset until eof. line_numbers returns numbered_content " +
+			"instead of raw content; request raw content for exact edits. Non-UTF-8 byte reads return base64.",
 	}, c.fileRead)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -799,153 +801,10 @@ func (c *Core) downgrade(cap route) route {
 }
 
 const (
-	maxFileRead   = 256 << 10 // default cap for file_read content
-	maxFileEdit   = 1 << 20   // exact-match edits intentionally stay bounded
-	maxInBand     = 48 << 10  // in-band transfers are size-limited
+	maxFileEdit   = 1 << 20  // exact-match edits intentionally stay bounded
+	maxInBand     = 48 << 10 // in-band transfers are size-limited
 	execOutputCap = 64 << 10
 )
-
-// ---- file_read ----
-
-type fileReadArgs struct {
-	SessionArg
-	Path        string `json:"path" jsonschema:"absolute or ~-relative path on the current host"`
-	MaxBytes    int    `json:"max_bytes,omitempty" jsonschema:"cap returned content (default 262144)"`
-	Offset      int64  `json:"offset,omitempty" jsonschema:"byte offset to start reading from"`
-	LineNumbers bool   `json:"line_numbers,omitempty" jsonschema:"also return numbered_content (line-numbered, from offset 0 only); content stays raw for file_edit"`
-}
-
-type fileReadResult struct {
-	Content  string `json:"content"`
-	Encoding string `json:"encoding"` // utf8 | base64
-	Eof      bool   `json:"eof"`
-	// NumberedContent is content with 1-based line numbers, provided only when
-	// line_numbers is set and the read started at offset 0. It is for reading
-	// and citing lines — never feed it to file_edit/file_patch; use content.
-	NumberedContent string `json:"numbered_content,omitempty"`
-	// Version is a token for the whole file's current contents (only when the
-	// entire file was read); pass it as file_write's if_match to write only if
-	// the file hasn't changed since. VersionKind is "sha256".
-	Version     string `json:"version,omitempty"`
-	VersionKind string `json:"version_kind,omitempty"`
-	Via         string `json:"via"`
-	Host        string `json:"host"`
-	Warning     string `json:"warning,omitempty"`
-}
-
-func (c *Core) fileRead(ctx context.Context, req *mcp.CallToolRequest, args fileReadArgs) (*mcp.CallToolResult, fileReadResult, error) {
-	max := args.MaxBytes
-	if max <= 0 {
-		max = maxFileRead
-	}
-	rt, err := c.fileFallbackRoute(ctx, "file_read")
-	if err != nil {
-		return nil, fileReadResult{}, err
-	}
-	warning, _ := c.guardTarget(rt, opRead)
-	var data []byte
-	var eof bool
-
-	switch rt.via {
-	case "local":
-		f, err := os.Open(expandLocal(args.Path))
-		if err != nil {
-			return nil, fileReadResult{}, err
-		}
-		defer f.Close()
-		if args.Offset > 0 {
-			if _, err := f.Seek(args.Offset, 0); err != nil {
-				return nil, fileReadResult{}, err
-			}
-		}
-		buf := make([]byte, max+1)
-		n, _ := readFull(f, buf)
-		eof = n <= max
-		if n > max {
-			n = max
-		}
-		data = buf[:n]
-
-	case "controlmaster":
-		// Over the persistent channel; base64 keeps the line-oriented
-		// framing binary-safe. tail/head/base64 are portable.
-		cmd := fmt.Sprintf("tail -c +%d %s | head -c %d | base64", args.Offset+1, sshmux.Quote(args.Path), max+1)
-		out, err := c.channelOutput(rt.ci, cmd, 60*time.Second)
-		if err != nil {
-			return nil, fileReadResult{}, err
-		}
-		dec, derr := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(out)), ""))
-		if derr != nil {
-			return nil, fileReadResult{}, fmt.Errorf("oob channel read failed (output: %.200s)", out)
-		}
-		eof = len(dec) <= max
-		if len(dec) > max {
-			dec = dec[:max]
-		}
-		data = dec
-
-	case "sftp":
-		read, err := c.Mux.SFTPRead(ctx, rt.ci, args.Path, args.Offset, max)
-		if err != nil {
-			return nil, fileReadResult{}, err
-		}
-		data, eof = read.Data, read.EOF
-
-	case "in_band":
-		if max > maxInBand {
-			max = maxInBand
-		}
-		cmd := fmt.Sprintf("tail -c +%d %s | head -c %d | base64", args.Offset+1, sshmux.Quote(args.Path), max+1)
-		res, err := c.Engine.RunSentinel(cmd, 30*time.Second)
-		if err != nil {
-			return nil, fileReadResult{}, err
-		}
-		out, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(res.Output), ""))
-		if err != nil {
-			return nil, fileReadResult{}, fmt.Errorf("in-band read failed (output: %.200s)", res.Output)
-		}
-		eof = len(out) <= max
-		if len(out) > max {
-			out = out[:max]
-		}
-		data = out
-	}
-
-	via := rt.via
-	if via == "controlmaster" {
-		via = "channel" // shared persistent channel, not a fresh one per op
-	}
-	res := fileReadResult{Eof: eof, Via: via, Host: rt.host, Warning: warning}
-	if args.Offset == 0 && eof {
-		// The whole file is in hand: a sha256 over these exact bytes is a
-		// TOCTOU-correct version token for a later if_match write.
-		res.Version, res.VersionKind = sha256Version(data), "sha256"
-	}
-	if utf8.Valid(data) {
-		res.Content, res.Encoding = string(data), "utf8"
-		if args.LineNumbers && args.Offset == 0 {
-			res.NumberedContent = numberLines(data)
-		}
-	} else {
-		res.Content, res.Encoding = base64.StdEncoding.EncodeToString(data), "base64"
-	}
-	return nil, res, nil
-}
-
-// numberLines renders content with 1-based line numbers (cat -n style), kept
-// separate from raw content so line numbers never leak into an edit's old_text.
-func numberLines(data []byte) string {
-	lines := strings.Split(string(data), "\n")
-	// A trailing newline yields a final empty element; don't number it.
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	var b strings.Builder
-	for i, line := range lines {
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
-	}
-	return b.String()
-}
 
 // ---- file_write ----
 
@@ -1323,7 +1182,7 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 	}
 	warning, _ := c.guardTarget(rt, opRead)
 
-	res := directoryListResult{Via: resultVia(rt), Host: rt.host, Warning: warning}
+	res := directoryListResult{Entries: []directoryEntry{}, Via: resultVia(rt), Host: rt.host, Warning: warning}
 	if rt.via == "local" {
 		entries, err := os.ReadDir(args.Path)
 		if err != nil {
@@ -1374,7 +1233,9 @@ func (c *Core) directoryList(ctx context.Context, req *mcp.CallToolRequest, args
 	if len(entries) > max {
 		entries = entries[:max]
 	}
-	res.Entries = entries
+	if entries != nil {
+		res.Entries = entries
+	}
 	return nil, res, nil
 }
 

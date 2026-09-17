@@ -222,11 +222,13 @@ aish --name myproject      # ... with a meaningful name
 aish --oob                 # ... authorizing invisible out-of-band ops
 ```
 
-You can run multiple sessions and share them with the AI. Every MCP tool accepts
-a `session` argument (id or name); `list_sessions` enumerates them with their
-backend and tool list. The proxy attaches to one session by default, but that is
-only the default target, not a boundary. Use `AISH_SESSION=<id|name>` or
-`--session <id|name>` in the proxy args to pick a default explicitly.
+You can run multiple sessions and share them with the AI.
+Every session tool accepts a `session` argument (id or name). Call `list_sessions`
+to choose a target. The aggregate proxy can serve several sessions at once:
+omit `session` only when exactly one is live. It does not choose a default from
+`AISH_SESSION` or `--session`; legacy proxy `--session` arguments are ignored
+with a warning. The debug client still supports `--session` and `AISH_SESSION`.
+A client connected directly to a session socket defaults to that session.
 
 The proxy advertises the **union** of the tools across every live session, so a
 tool belonging to only one backend is still reachable, and it re-derives that set
@@ -260,7 +262,7 @@ aish client --session <id|name> session_status   # pick among several sessions
 | `session_status` | mode, host, cwd, foreground process, echo-off, routing, session id/name, other live sessions, the MCP `clients` currently sharing the session, plus explicit remote identity status (`unknown`/`advisory`/`authoritative`), the three host fields (`interactive_host`, `oob_host`, `remote_hostname`), target confidence, cached SFTP status, and per-tool `oob_tools` availability (`unknown` until probed; never opens a channel) |
 | `probe_host` | Initialize the OOB shell toolset, or explicitly diagnose identity (`deep=true`) or SFTP (`sftp=true`). Each fresh probe may prompt for OOB consent/MFA and caches its outcome; selectors are independent and `force=true` retries only the selected axis. After a conclusive shell failure, a retained SFTP client can serve file reads and atomic writes |
 | `set_session_name` | Label the session after its purpose; shows in prompt badge and title, selectable by name |
-| `file_read` / `file_write` | Read or replace files on the *current* host (local, remote OOB, or size-capped visible fallback). `file_read` returns a `version` token and optional line numbers; `file_write` takes an optional `if_match` and writes atomically |
+| `file_read` / `file_write` | Read or replace files on the *current* host. Reads support line pages over OOB and byte pages on all routes. Whole-file reads return a `version` token; `file_write` takes an optional `if_match` and writes atomically |
 | `file_edit` | Exact-match UTF-8 text replacement on the current host; rejects missing or ambiguous matches; OOB only. Atomic, with automatic staleness protection |
 | `file_patch` | Apply a unified diff (multi-hunk) to a text file on the current host; applied in AISH, written atomically; OOB only |
 | `file_grep` / `file_search` | Regex content search and name-glob file finding on the current host (ripgrep/grep/find, best-effort); OOB only |
@@ -298,6 +300,45 @@ assuming the tool schema you loaded applies everywhere.
 A tool absent from a session's list is genuinely not there; calling it returns a
 capability error naming the backend and what that session does offer, rather
 than a bare "unknown tool".
+
+### Reading files and searching
+
+For a text range, use `file_read` with one-based `start_line` and a line-count
+`limit`. For example, lines 241–400:
+
+```json
+{"session":"myproject","path":"/opt/project/main.py","start_line":241,"limit":160,"line_numbers":true}
+```
+
+`limit` alone starts at line 1; `start_line` alone defaults to 200 lines
+(maximum `limit`: 10000). Line reads require authorized OOB access. Remote
+`probe_host` reports `remote_capabilities.line_read`; this additionally requires
+working `head`, `tail`, and `wc`. Missing line support does not disable byte reads.
+The retained SFTP fallback supports byte pages only; use `offset` and `max_bytes`.
+
+Existing `offset` remains a **zero-based byte offset**. Do not combine it with
+`start_line` or `limit`. `max_bytes` defaults to 16 KiB and accepts up to 256 KiB;
+the serialized MCP response budget can shorten a page further. Numbered reads
+return only `numbered_content`; omit `line_numbers` for raw `content` suitable
+for exact edits. Numbering from a nonzero byte offset is rejected—use line mode.
+
+Follow `next_line` for line pages or `next_offset` for byte pages until `eof`.
+`bytes_read` counts source bytes, not numbered/encoded output. `truncated` and
+`truncation_reason` explain a limit. Pages preserve complete lines in line mode;
+an oversized first line returns its byte offset for reading in byte mode. Binary
+byte pages return base64; line mode requires UTF-8. Pagination reads a live file,
+not a snapshot, so concurrent edits can change subsequent positions. A SHA-256
+`version` is returned only when the complete file is returned in one call.
+
+`file_grep` accepts ordinary `foo|bar` alternation. Results identify the backend
+and regex dialect: Go locally, ripgrep's default Rust regex, or POSIX extended
+regex for grep. Advanced syntax is backend-dependent; PCRE is not universally
+supported. The last-resort colon-framed grep backend cannot reliably parse a
+colon in a filename. Successful empty collection results are always `[]`.
+
+After upgrading, restart the session and reconnect the MCP proxy/client while
+the updated session is live to refresh cached tool schemas. Upgrade targeted
+sessions together; old sessions do not understand the new line arguments.
 
 Out-of-band (invisible) operation of `exec`/`file_*` requires an OOB grant
 (`--oob`, the Ctrl-] runtime toggle, or an interactive grant). Without one,

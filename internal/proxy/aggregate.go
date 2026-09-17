@@ -628,7 +628,7 @@ func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 		return merged, nil
 	}
 	if tools := loadToolCache(); tools != nil {
-		return filterTools(tools), nil
+		return mirrorTools(tools)
 	}
 	fmt.Fprintln(os.Stderr, "aish mcp-proxy: no aish session is running and no cached tool list is available; exposing list_sessions only until a session exists and the client reconnects")
 	return nil, nil
@@ -1060,6 +1060,26 @@ func ensureSessionArg(t *mcp.Tool) {
 		"type":        "string",
 		"description": sessionArgDescription,
 	}
+}
+
+const proxySessionDescription = sessionArgDescription
+
+// mirrorTools adapts the session socket's schemas to the aggregate proxy's
+// routing rules. Round-trip the filtered tools to clone nested schemas too,
+// whether they came from a live session or the on-disk cache.
+func mirrorTools(tools []*mcp.Tool) ([]*mcp.Tool, error) {
+	data, err := json.Marshal(filterTools(tools))
+	if err != nil {
+		return nil, fmt.Errorf("copying session tool schemas: %w", err)
+	}
+	var mirrored []*mcp.Tool
+	if err := json.Unmarshal(data, &mirrored); err != nil {
+		return nil, fmt.Errorf("copying session tool schemas: %w", err)
+	}
+	for _, tool := range mirrored {
+		ensureSessionArg(tool)
+	}
+	return mirrored, nil
 }
 
 func toolCachePath() string {

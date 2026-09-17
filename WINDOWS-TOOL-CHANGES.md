@@ -1,4 +1,4 @@
-# Windows tool usability changes (unreleased)
+# Windows tool usability changes (v0.5.4)
 
 - `file_read` accepts `start_line` (one-based) and `limit` (line count). Existing
   `offset` still counts bytes; mixing line and byte positions is an error.

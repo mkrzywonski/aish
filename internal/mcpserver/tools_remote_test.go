@@ -279,7 +279,7 @@ func TestNumberLines(t *testing.T) {
 		t.Fatalf("numberLines =\n%q\nwant\n%q", got, want)
 	}
 	// No trailing newline: last line still numbered, no spurious empty line.
-	if got := numberLines([]byte("a\nb")); got != "     1\ta\n     2\tb\n" {
+	if got := numberLines([]byte("a\nb")); got != "     1\ta\n     2\tb" {
 		t.Fatalf("no-final-newline numberLines = %q", got)
 	}
 }

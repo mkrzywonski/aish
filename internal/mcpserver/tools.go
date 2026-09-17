@@ -406,6 +406,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	res := sessionStatusResult{
 		SessionID:        c.Sess.ID,
 		SessionName:      paths.ReadName(c.Sess.ID),
+		OtherSessions:    []sessionRef{},
 		Mode:             string(c.Tracker.Mode(snap.AltScreen)),
 		Host:             rt.host,
 		OobVia:           rt.via,

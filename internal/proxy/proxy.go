@@ -8,6 +8,7 @@ package proxy
 import (
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
@@ -18,11 +19,11 @@ import (
 
 // SessionInfo describes one live session found on this machine.
 type SessionInfo struct {
-	ID    string
-	Name  string // "" when unnamed
+	ID      string
+	Name    string // "" when unnamed
 	Backend string // paths.BackendSharedTerminal / paths.BackendDirectHost; "" on a session that predates the backend file
-	Sock  string
-	MTime int64 // session dir mtime, unix nanos
+	Sock    string
+	MTime   int64 // session dir mtime, unix nanos
 }
 
 // Label renders the session for user-facing listings.
@@ -61,8 +62,8 @@ func List() []SessionInfo {
 			// Read from the session dir, never by connecting: discovery must
 			// stay free of sockets, approval prompts and MFA pushes.
 			Backend: paths.ReadBackend(e.Name()),
-			Sock:  sock,
-			MTime: mt,
+			Sock:    sock,
+			MTime:   mt,
 		})
 	}
 	sort.Slice(live, func(i, j int) bool { return live[i].ID < live[j].ID })
@@ -161,6 +162,7 @@ func ping(sock string) error {
 // When set, the proxy derives a deterministic identity from the PSK so the
 // session can recognize reconnects without re-prompting.
 func Main(version string, args []string) int {
+	warnLegacySessionArgs(os.Stderr, args)
 	var psk []byte
 	if pskHex := os.Getenv("AISH_PSK"); pskHex != "" {
 		var err error
@@ -175,4 +177,13 @@ func Main(version string, args []string) int {
 		}
 	}
 	return Serve(version, psk)
+}
+
+func warnLegacySessionArgs(w io.Writer, args []string) {
+	for _, arg := range args {
+		if arg == "--session" || strings.HasPrefix(arg, "--session=") {
+			fmt.Fprintln(w, "aish mcp-proxy: --session is ignored; select the target with each tool call's session argument (required when several sessions are live)")
+			break
+		}
+	}
 }
