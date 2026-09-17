@@ -359,7 +359,7 @@ type listSessionsResult struct {
 }
 
 func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, args listSessionsArgs) (*mcp.CallToolResult, listSessionsResult, error) {
-	var out listSessionsResult
+	out := listSessionsResult{Sessions: []sessionEntry{}}
 	live := List()
 	for _, s := range live {
 		out.Sessions = append(out.Sessions, sessionEntry{ID: s.ID, Name: s.Name})
@@ -382,11 +382,11 @@ func (p *aggProxy) toolSpecs(ctx context.Context) ([]*mcp.Tool, error) {
 	if live := List(); len(live) > 0 {
 		if tools, err := p.fetchTools(ctx, live[0]); err == nil {
 			saveToolCache(tools)
-			return filterTools(tools), nil
+			return mirrorTools(tools)
 		}
 	}
 	if tools := loadToolCache(); tools != nil {
-		return filterTools(tools), nil
+		return mirrorTools(tools)
 	}
 	fmt.Fprintln(os.Stderr, "aish mcp-proxy: no aish session is running and no cached tool list is available; exposing list_sessions only until a session exists and the client reconnects")
 	return nil, nil
@@ -419,6 +419,30 @@ func filterTools(tools []*mcp.Tool) []*mcp.Tool {
 		out = append(out, t)
 	}
 	return out
+}
+
+const proxySessionDescription = "Session ID or name; may be omitted only when exactly one session is live. Use list_sessions to choose."
+
+// mirrorTools adapts the session socket's schemas to the aggregate proxy's
+// routing rules. Round-trip the filtered tools to clone nested schemas too,
+// whether they came from a live session or the on-disk cache.
+func mirrorTools(tools []*mcp.Tool) ([]*mcp.Tool, error) {
+	data, err := json.Marshal(filterTools(tools))
+	if err != nil {
+		return nil, fmt.Errorf("copying session tool schemas: %w", err)
+	}
+	var mirrored []*mcp.Tool
+	if err := json.Unmarshal(data, &mirrored); err != nil {
+		return nil, fmt.Errorf("copying session tool schemas: %w", err)
+	}
+	for _, tool := range mirrored {
+		schema, _ := tool.InputSchema.(map[string]any)
+		properties, _ := schema["properties"].(map[string]any)
+		if session, ok := properties["session"].(map[string]any); ok {
+			session["description"] = proxySessionDescription
+		}
+	}
+	return mirrored, nil
 }
 
 func toolCachePath() string {

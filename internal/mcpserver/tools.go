@@ -299,16 +299,16 @@ type sessionStatusResult struct {
 	// the human switches user in the shared terminal via su / sudo -i, so a write
 	// lands owned by this user and an op needing other privileges fails — flag the
 	// gap before ownership/privilege-sensitive operations.
-	OOBUser string `json:"oob_user,omitempty"`
-	Cwd              string               `json:"cwd,omitempty"`
-	PromptReady      bool                 `json:"prompt_ready"`
-	EchoOff          bool                 `json:"echo_off"`
-	Foreground       *state.Foreground    `json:"foreground,omitempty"`
-	Rows             int                  `json:"rows"`
-	Cols             int                  `json:"cols"`
-	AltScreen        bool                 `json:"alt_screen"`
-	LastOutputMs     int64                `json:"last_output_ms_ago"`
-	Ended            bool                 `json:"ended"`
+	OOBUser      string            `json:"oob_user,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	PromptReady  bool              `json:"prompt_ready"`
+	EchoOff      bool              `json:"echo_off"`
+	Foreground   *state.Foreground `json:"foreground,omitempty"`
+	Rows         int               `json:"rows"`
+	Cols         int               `json:"cols"`
+	AltScreen    bool              `json:"alt_screen"`
+	LastOutputMs int64             `json:"last_output_ms_ago"`
+	Ended        bool              `json:"ended"`
 }
 
 func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args sessionStatusArgs) (*mcp.CallToolResult, sessionStatusResult, error) {
@@ -323,6 +323,7 @@ func (c *Core) sessionStatus(ctx context.Context, req *mcp.CallToolRequest, args
 	res := sessionStatusResult{
 		SessionID:        c.Sess.ID,
 		SessionName:      paths.ReadName(c.Sess.ID),
+		OtherSessions:    []sessionRef{},
 		Mode:             string(c.Tracker.Mode(snap.AltScreen)),
 		Host:             rt.host,
 		OobVia:           rt.via,

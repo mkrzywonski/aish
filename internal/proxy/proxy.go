@@ -7,6 +7,7 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
@@ -149,7 +150,17 @@ func ping(sock string) error {
 // Main runs the aggregating MCP proxy over stdio. It no longer binds to a
 // single session; it presents one durable endpoint and routes each tool call
 // to the session named in its `session` argument. `--session` is accepted for
-// backward compatibility but ignored (routing is per-call now).
+// backward compatibility but warns because routing is per-call now.
 func Main(version string, args []string) int {
+	warnLegacySessionArgs(os.Stderr, args)
 	return Serve(version)
+}
+
+func warnLegacySessionArgs(w io.Writer, args []string) {
+	for _, arg := range args {
+		if arg == "--session" || strings.HasPrefix(arg, "--session=") {
+			fmt.Fprintln(w, "aish mcp-proxy: --session is ignored; select the target with each tool call's session argument (required when several sessions are live)")
+			break
+		}
+	}
 }

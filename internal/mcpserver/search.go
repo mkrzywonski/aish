@@ -42,7 +42,9 @@ func registerSearchTools(s *mcp.Server, c *Core) {
 		Annotations: readOnlyTool("Search file contents on session host"),
 		Description: "Search file contents for a regular expression on the host the shared session is currently on — the " +
 			"remote-host equivalent of your Grep tool. Uses ripgrep when present, else grep; best-effort and backend-" +
-			"dependent (ripgrep honors .gitignore). Returns path/line/text matches, capped. Requires an authorized local " +
+			"dependent (ripgrep honors .gitignore). Unescaped | means alternation; use \\| for a literal pipe. " +
+			"Uses Go regex locally, Rust regex with ripgrep, or POSIX extended regex with grep; PCRE features are not portable. " +
+			"Returns path/line/text matches, backend and regex_dialect, capped. Requires an authorized local " +
 			"or remote OOB route.",
 	}, c.fileGrep)
 
@@ -73,11 +75,13 @@ type grepMatch struct {
 }
 
 type fileGrepResult struct {
-	Matches   []grepMatch `json:"matches"`
-	Truncated bool        `json:"truncated"`
-	Via       string      `json:"via"`
-	Host      string      `json:"host"`
-	Warning   string      `json:"warning,omitempty"`
+	Matches      []grepMatch `json:"matches"`
+	Truncated    bool        `json:"truncated"`
+	Via          string      `json:"via"`
+	Host         string      `json:"host"`
+	Warning      string      `json:"warning,omitempty"`
+	Backend      string      `json:"backend"`
+	RegexDialect string      `json:"regex_dialect"`
 }
 
 func (c *Core) fileGrep(ctx context.Context, req *mcp.CallToolRequest, args fileGrepArgs) (*mcp.CallToolResult, fileGrepResult, error) {
@@ -102,30 +106,40 @@ func (c *Core) fileGrep(ctx context.Context, req *mcp.CallToolRequest, args file
 		truncated bool
 		err       error
 	)
+	backend, dialect := "go", "go"
 	if rt.via == "local" {
 		matches, truncated, err = grepLocal(expandLocal(args.Path), args.Pattern, args.Include, args.IgnoreCase, max)
 	} else {
-		matches, truncated, err = c.grepRemote(rt, args, max)
+		caps, _ := c.Mux.CachedCapabilities(rt.ci)
+		backend, dialect = grepBackend(caps)
+		var searchWarning string
+		matches, truncated, searchWarning, err = c.grepRemote(rt, args, max)
+		warning = joinSearchWarnings(warning, searchWarning)
 	}
 	if err != nil {
 		return nil, fileGrepResult{}, err
 	}
-	return nil, fileGrepResult{Matches: matches, Truncated: truncated, Via: resultVia(rt), Host: rt.host, Warning: warning}, nil
+	return nil, fileGrepResult{Matches: matches, Truncated: truncated, Via: resultVia(rt), Host: rt.host, Warning: warning, Backend: backend, RegexDialect: dialect}, nil
 }
 
 // grepRemote runs ripgrep (preferred), grep --null, or plain grep over the OOB
 // channel, chosen from the probe. It classifies the producer's real exit —
 // 0 (matches) / 1 (none) are fine; ≥2 is a tool error surfaced to the model —
 // so a missing/incompatible grep never reads as a silent "no matches".
-func (c *Core) grepRemote(rt route, args fileGrepArgs, max int) ([]grepMatch, bool, error) {
+func (c *Core) grepRemote(rt route, args fileGrepArgs, max int) ([]grepMatch, bool, string, error) {
 	caps, _ := c.Mux.CachedCapabilities(rt.ci)
 	producer, nullFramed := grepCommand(caps, args)
 	out, exit, capped, err := c.channelClassified(rt.ci, producer, grepScanCap, 60*time.Second)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if exit >= 2 { // grep/rg: 0 = matches, 1 = none, ≥2 = error
-		return nil, false, fmt.Errorf("file_grep failed on %s (exit %d): %.200s", rt.host, exit, out)
+		return nil, false, "", fmt.Errorf("file_grep failed on %s (exit %d): %.200s", rt.host, exit, out)
+	}
+	warning := ""
+	if capped || exit < 0 {
+		warning = "Search output is partial; the producer's exit status could not be verified. Narrow the path or pattern and retry."
+		out = completeSearchRecords(out, '\n')
 	}
 	var matches []grepMatch
 	var truncated bool
@@ -134,7 +148,14 @@ func (c *Core) grepRemote(rt route, args fileGrepArgs, max int) ([]grepMatch, bo
 	} else {
 		matches, truncated = parseGrepColon(out, max)
 	}
-	return matches, truncated || capped, nil
+	return matches, truncated || capped || exit < 0, warning, nil
+}
+
+func grepBackend(caps sshmux.Capabilities) (string, string) {
+	if caps.HasRg {
+		return "rg", "rust"
+	}
+	return "grep", "posix_ere"
 }
 
 // grepCommand builds the remote grep/ripgrep command and reports whether its
@@ -149,19 +170,19 @@ func grepCommand(caps sshmux.Capabilities, args fileGrepArgs) (string, bool) {
 	}
 	switch {
 	case caps.HasRg:
-		cmd := "rg --no-heading --null -n --color never" + ic
+		cmd := "rg --no-config --no-heading --null -H -n --color never" + ic
 		if args.Include != "" {
 			cmd += " -g " + sshmux.Quote(args.Include)
 		}
 		return cmd + " -e " + pat + " -- " + p, true
 	case caps.GrepNull:
-		cmd := "grep -rnI --null" + ic
+		cmd := "grep -ErnIH --null" + ic
 		if args.Include != "" {
 			cmd += " --include=" + sshmux.Quote(args.Include)
 		}
 		return cmd + " -e " + pat + " -- " + p, true
 	default:
-		cmd := "grep -rnI" + ic
+		cmd := "grep -ErnIH" + ic
 		if args.Include != "" {
 			cmd += " --include=" + sshmux.Quote(args.Include)
 		}
@@ -171,7 +192,7 @@ func grepCommand(caps sshmux.Capabilities, args fileGrepArgs) (string, bool) {
 
 // parseGrep turns "path\0line:text\n" records into matches, capping at max.
 func parseGrep(out []byte, max int) ([]grepMatch, bool, error) {
-	var matches []grepMatch
+	matches := make([]grepMatch, 0)
 	for _, rec := range strings.Split(string(out), "\n") {
 		if rec == "" {
 			continue
@@ -201,7 +222,7 @@ func parseGrep(out []byte, max int) ([]grepMatch, bool, error) {
 // parseGrepColon parses plain "path:line:text" (grep without --null). A colon
 // in the path is ambiguous here — best-effort, as documented for this fallback.
 func parseGrepColon(out []byte, max int) ([]grepMatch, bool) {
-	var matches []grepMatch
+	matches := make([]grepMatch, 0)
 	for _, rec := range strings.Split(string(out), "\n") {
 		if rec == "" {
 			continue
@@ -231,11 +252,15 @@ func grepLocal(root, pattern, include string, ignoreCase bool, max int) ([]grepM
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid pattern: %w", err)
 	}
-	var matches []grepMatch
+	matches := make([]grepMatch, 0)
 	truncated := false
 	scanned := 0
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if p == root {
+				return err
+			}
+			truncated = true
 			return nil // skip unreadable entries
 		}
 		if len(matches) >= max {
@@ -259,6 +284,10 @@ func grepLocal(root, pattern, include string, ignoreCase bool, max int) ([]grepM
 		}
 		data, err := os.ReadFile(p)
 		if err != nil {
+			if p == root {
+				return err
+			}
+			truncated = true
 			return nil
 		}
 		if isBinary(data) {
@@ -324,7 +353,9 @@ func (c *Core) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fi
 	if rt.via == "local" {
 		paths, truncated, err = searchLocal(expandLocal(args.Path), args.Name, args.Type, max)
 	} else {
-		paths, truncated, err = c.searchRemote(rt, args, max)
+		var searchWarning string
+		paths, truncated, searchWarning, err = c.searchRemote(rt, args, max)
+		warning = joinSearchWarnings(warning, searchWarning)
 	}
 	if err != nil {
 		return nil, fileSearchResult{}, err
@@ -332,7 +363,7 @@ func (c *Core) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fi
 	return nil, fileSearchResult{Paths: paths, Truncated: truncated, Via: resultVia(rt), Host: rt.host, Warning: warning}, nil
 }
 
-func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, bool, error) {
+func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, bool, string, error) {
 	caps, _ := c.Mux.CachedCapabilities(rt.ci)
 	// -H follows a symlinked search root (e.g. macOS /etc -> /private/etc) so it
 	// isn't treated as a leaf and skipped by -mindepth; find still doesn't follow
@@ -357,9 +388,14 @@ func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, b
 	}
 	out, exit, capped, err := c.channelClassified(rt.ci, producer, grepScanCap, 60*time.Second)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
-	var paths []string
+	warning := ""
+	if capped || exit < 0 {
+		warning = "Search output is partial; the producer's exit status could not be verified. Narrow the path or name and retry."
+		out = completeSearchRecords(out, sep[0])
+	}
+	paths := make([]string, 0)
 	truncated := capped
 	for _, rec := range strings.Split(string(out), sep) {
 		if rec == "" {
@@ -375,17 +411,32 @@ func (c *Core) searchRemote(rt route, args fileSearchArgs, max int) ([]string, b
 	// the matches it already printed are valid. Only treat nonzero as failure
 	// when nothing matched at all (then the path likely doesn't exist / isn't
 	// readable) — otherwise return the valid partial results.
-	if exit != 0 && len(paths) == 0 {
-		return nil, false, fmt.Errorf("file_search found nothing on %s and find exited %d (the path may not exist or be inaccessible)", rt.host, exit)
+	if exit > 0 && len(paths) == 0 {
+		return nil, false, "", fmt.Errorf("file_search found nothing on %s and find exited %d (the path may not exist or be inaccessible)", rt.host, exit)
 	}
-	return paths, truncated, nil
+	if exit > 0 {
+		truncated = true
+		warning = fmt.Sprintf("Search results are partial: find exited %d; some paths may be inaccessible.", exit)
+	}
+	return paths, truncated || exit < 0, warning, nil
 }
 
 func searchLocal(root, name, typ string, max int) ([]string, bool, error) {
-	var paths []string
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.IsDir() {
+		return nil, false, fmt.Errorf("search root %q is not a directory", root)
+	}
+	paths := make([]string, 0)
 	truncated := false
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if p == root {
+				return err
+			}
+			truncated = true
 			return nil
 		}
 		if p == root {
@@ -419,7 +470,7 @@ func searchLocal(root, name, typ string, max int) ([]string, bool, error) {
 // byte cap truncated the output. The producer's exit is carried by a trailing
 // "@AISHRC@<code>" marker (emitted before the byte cap), so a producer failure
 // is never masked by the trailing head the way channelPipe/head pipelines are.
-// If the marker is missing, a large *successful* output was byte-capped.
+// A missing or invalid marker means the exit status is unknown, not success.
 func (c *Core) channelClassified(ci *sshmux.ConnInfo, producer string, byteCap int, timeout time.Duration) (out []byte, exit int, capped bool, err error) {
 	cmd := fmt.Sprintf("{ %s\necho '@AISHRC@'$?; } </dev/null 2>&1 | head -c %d", producer, byteCap)
 	res, err := c.Mux.ChannelRun(ci, cmd, timeout)
@@ -429,17 +480,32 @@ func (c *Core) channelClassified(ci *sshmux.ConnInfo, producer string, byteCap i
 	if res.TimedOut {
 		return nil, 0, false, errors.New("oob channel search timed out")
 	}
-	data := res.Output
+	out, exit, capped = classifySearchOutput(res.Output)
+	return out, exit, capped, nil
+}
+
+func classifySearchOutput(data []byte) (out []byte, exit int, capped bool) {
 	i := bytes.LastIndex(data, []byte("@AISHRC@"))
 	if i < 0 {
-		return data, 0, true, nil // marker lost → byte cap truncated a big result
+		return data, -1, true // marker lost; producer may have succeeded or failed
+	}
+	if !bytes.HasSuffix(data, []byte("\n")) {
+		return data[:i], -1, true // even a numeric status may have been cut short
 	}
 	code := strings.TrimRight(string(data[i+len("@AISHRC@"):]), "\r\n")
 	exit, convErr := strconv.Atoi(code)
-	if convErr != nil {
-		exit = 0
+	if convErr != nil || exit < 0 || exit > 255 {
+		return data[:i], -1, true
 	}
-	return data[:i], exit, false, nil
+	return data[:i], exit, false
+}
+
+func completeSearchRecords(data []byte, separator byte) []byte {
+	return data[:bytes.LastIndexByte(data, separator)+1]
+}
+
+func joinSearchWarnings(first, second string) string {
+	return strings.TrimSpace(first + " " + second)
 }
 
 func findTypeFlag(typ string) string {

@@ -34,6 +34,7 @@ type Capabilities struct {
 	FindPrint bool `json:"find_printf"`
 	HeadZ     bool `json:"head_z"`
 	GrepNull  bool `json:"grep_null"`
+	LineRead  bool `json:"line_read"` // head -n, wc -c, tail -c +N, and head -c work
 
 	// Unsupported marks a host that can't run the native file tools at all. A
 	// non-POSIX shell is normally caught earlier (the probe sentinel never
@@ -58,6 +59,19 @@ func (c Capabilities) Base64Decode() string {
 	}
 }
 
+// lineReadProbe verifies both exit status and output. A command's presence (or
+// acceptance of an option it ignores) is not enough for correct line offsets.
+// Keep this independent of base64: a missing line-selection utility must not
+// disable the existing byte-read path.
+const lineReadProbe = `aish_line_probe=$(printf 'ab\ncd\n' | head -n 1 2>/dev/null) &&
+test "$aish_line_probe" = ab &&
+aish_line_probe=$(printf abc | wc -c 2>/dev/null) &&
+test "$aish_line_probe" -eq 3 2>/dev/null &&
+aish_line_probe=$(printf abc | tail -c +2 2>/dev/null) &&
+test "$aish_line_probe" = bc &&
+aish_line_probe=$(printf abc | head -c 2 2>/dev/null) &&
+test "$aish_line_probe" = ab && printf 1`
+
 // probeScript emits one labeled key=value line per fact. Labels (not position)
 // keep parsing stable when a command is missing: an absent tool yields an empty
 // value, never a dropped line that shifts everything after it. Each behavioral
@@ -80,7 +94,8 @@ printf 'statc=%s\n' "$(stat -c %s / >/dev/null 2>&1 && echo 1)"
 printf 'statf=%s\n' "$(stat -f %z / >/dev/null 2>&1 && echo 1)"
 printf 'findprintf=%s\n' "$(find / -maxdepth 0 -printf '' >/dev/null 2>&1 && echo 1)"
 printf 'headz=%s\n' "$(printf 'a\n' | head -z -n1 >/dev/null 2>&1 && echo 1)"
-printf 'grepnull=%s\n' "$(printf x | grep --null -o x >/dev/null 2>&1 && echo 1)"`
+printf 'grepnull=%s\n' "$(printf x | grep --null -o x >/dev/null 2>&1 && echo 1)"
+printf 'lineread=%s\n' "$( ` + lineReadProbe + ` )"`
 
 func parseCapabilities(out []byte) Capabilities {
 	kv := map[string]string{}
@@ -120,6 +135,7 @@ func parseCapabilities(out []byte) Capabilities {
 	c.FindPrint = kv["findprintf"] == "1"
 	c.HeadZ = kv["headz"] == "1"
 	c.GrepNull = kv["grepnull"] == "1"
+	c.LineRead = kv["lineread"] == "1"
 	return c
 }
 
