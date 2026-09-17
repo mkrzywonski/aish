@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -40,11 +40,14 @@ func grepLocal(root, pattern, include string, ignoreCase bool, max int) ([]grepM
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid pattern: %w", err)
 	}
-	var matches []grepMatch
+	matches := []grepMatch{}
 	truncated := false
 	scanned := 0
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if p == root {
+				return err
+			}
 			return nil // skip unreadable entries
 		}
 		if len(matches) >= max {
@@ -68,6 +71,9 @@ func grepLocal(root, pattern, include string, ignoreCase bool, max int) ([]grepM
 		}
 		data, err := os.ReadFile(p)
 		if err != nil {
+			if p == root {
+				return err
+			}
 			return nil
 		}
 		if isBinary(data) {
@@ -91,10 +97,13 @@ func grepLocal(root, pattern, include string, ignoreCase bool, max int) ([]grepM
 }
 
 func searchLocal(root, name, typ string, max int) ([]string, bool, error) {
-	var paths []string
+	paths := []string{}
 	truncated := false
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if p == root {
+				return err
+			}
 			return nil
 		}
 		if p == root {

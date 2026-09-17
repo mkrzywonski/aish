@@ -495,7 +495,7 @@ func (p *aggProxy) listSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	// that has no handler would be worse than not reporting it at all.
 	p.refreshTools(ctx)
 
-	var out listSessionsResult
+	out := listSessionsResult{Sessions: []sessionEntry{}}
 	live := List()
 	for _, s := range live {
 		out.Sessions = append(out.Sessions, sessionEntry{
@@ -1029,8 +1029,8 @@ func schemaDeclaresSession(schema any) bool {
 	return ok
 }
 
-// sessionArgDescription mirrors the wording of internal/mcpserver's SessionArg.
-const sessionArgDescription = "run this call in another live session, addressed by id or name (see list_sessions); default: the session this connection is attached to"
+// sessionArgDescription describes the aggregate proxy's per-call routing.
+const sessionArgDescription = "Session ID or name; may be omitted only when exactly one session is live. Use list_sessions to choose."
 
 // ensureSessionArg adds the `session` routing property to a mirrored schema
 // that lacks one. A session server serving exactly one session has nothing to
@@ -1051,6 +1051,9 @@ func ensureSessionArg(t *mcp.Tool) {
 		m["properties"] = props
 	}
 	if _, exists := props["session"]; exists {
+		if session, ok := props["session"].(map[string]any); ok {
+			session["description"] = sessionArgDescription
+		}
 		return
 	}
 	props["session"] = map[string]any{

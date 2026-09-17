@@ -20,7 +20,7 @@ import (
 
 type fileGrepArgs struct {
 	Path       string `json:"path" jsonschema:"absolute file or directory to search under, on the Windows host"`
-	Pattern    string `json:"pattern" jsonschema:"regular expression to search for"`
+	Pattern    string `json:"pattern" jsonschema:"Go regular expression (RE2 syntax); | is alternation, while an escaped pipe matches a literal |"`
 	Include    string `json:"include,omitempty" jsonschema:"only search files whose name matches this glob, e.g. *.go"`
 	IgnoreCase bool   `json:"ignore_case,omitempty"`
 	MaxResults int    `json:"max_results,omitempty" jsonschema:"cap matches returned (default 200, max 2000)"`
@@ -33,10 +33,12 @@ type grepMatch struct {
 }
 
 type fileGrepResult struct {
-	Matches   []grepMatch `json:"matches"`
-	Truncated bool        `json:"truncated"`
-	Via       string      `json:"via"`
-	Host      string      `json:"host"`
+	Matches      []grepMatch `json:"matches"`
+	Truncated    bool        `json:"truncated"`
+	Via          string      `json:"via"`
+	Host         string      `json:"host"`
+	Backend      string      `json:"backend"`
+	RegexDialect string      `json:"regex_dialect"`
 }
 
 type fileSearchArgs struct {
@@ -58,10 +60,10 @@ func registerSearchTools(s *mcp.Server, sess *aishwndSession) {
 		Name:        "file_grep",
 		Annotations: readOnlyTool("Search file contents on Windows host"),
 		Description: "Search file contents for a regular expression on the Windows host — the Windows equivalent " +
-			"of your Grep tool. Pure Go walk + regexp (not shelling out to rg/grep/findstr), so results are " +
-			"consistent regardless of what's installed and no path is skipped: unlike a shared-terminal " +
-			"session's file_grep, which may be ripgrep-backed and silently omit .gitignore'd files, an empty " +
-			"result here means the pattern really is absent. Returns path/line/text matches, capped.",
+			"of your Grep tool. Uses Go regexp (RE2 syntax): | means alternation; an escaped pipe is literal. " +
+			"Includes hidden and ignored files; skips symlinks, binary files, files over 8 MiB, and unreadable " +
+			"descendants. Returns path/line/text matches, capped; an empty matches array means no matches " +
+			"were found in the files searched.",
 	}, sess.fileGrep)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -102,7 +104,7 @@ func (s *aishwndSession) fileGrep(ctx context.Context, req *mcp.CallToolRequest,
 	for i, m := range res.Matches {
 		matches[i] = grepMatch{Path: m.Path, Line: m.Line, Text: m.Text}
 	}
-	return nil, fileGrepResult{Matches: matches, Truncated: res.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
+	return nil, fileGrepResult{Matches: matches, Truncated: res.Truncated, Via: "aishwin", Host: s.displayHost(), Backend: "go", RegexDialect: "go"}, nil
 }
 
 func (s *aishwndSession) fileSearch(ctx context.Context, req *mcp.CallToolRequest, args fileSearchArgs) (*mcp.CallToolResult, fileSearchResult, error) {
@@ -127,6 +129,9 @@ func (s *aishwndSession) fileSearch(ctx context.Context, req *mcp.CallToolReques
 	}
 	if res.Error != "" {
 		return nil, fileSearchResult{}, errors.New(res.Error)
+	}
+	if res.Paths == nil {
+		res.Paths = []string{}
 	}
 	return nil, fileSearchResult{Paths: res.Paths, Truncated: res.Truncated, Via: "aishwin", Host: s.displayHost()}, nil
 }

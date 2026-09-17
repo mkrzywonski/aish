@@ -1,8 +1,9 @@
-﻿package main
+package main
 
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -96,5 +97,52 @@ func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGrepRegexSyntax(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "sample.txt"), "alpha\nbeta\nalpha|beta\na.txt\naXtxt\nprefix alpha\n")
+	for _, tc := range []struct {
+		pattern string
+		lines   []int
+	}{
+		{`^alpha$|^beta$`, []int{1, 2}},
+		{`^alpha`, []int{1, 3}},
+		{`^a\.txt$`, []int{4}},
+		{`alpha\|beta`, []int{3}},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			matches, truncated, err := grepLocal(dir, tc.pattern, "", false, 100)
+			if err != nil || truncated {
+				t.Fatalf("grep failed: truncated=%v err=%v", truncated, err)
+			}
+			var lines []int
+			for _, match := range matches {
+				lines = append(lines, match.Line)
+			}
+			if !reflect.DeepEqual(lines, tc.lines) {
+				t.Fatalf("matched lines %v, want %v", lines, tc.lines)
+			}
+		})
+	}
+}
+
+func TestSearchEmptyResultsAndMissingRoot(t *testing.T) {
+	dir := t.TempDir()
+	matches, truncated, err := grepLocal(dir, "absent", "", false, 100)
+	if err != nil || truncated || matches == nil || len(matches) != 0 {
+		t.Fatalf("empty grep = %#v, truncated=%v err=%v", matches, truncated, err)
+	}
+	paths, truncated, err := searchLocal(dir, "*.go", "", 100)
+	if err != nil || truncated || paths == nil || len(paths) != 0 {
+		t.Fatalf("empty search = %#v, truncated=%v err=%v", paths, truncated, err)
+	}
+	missing := filepath.Join(dir, "missing")
+	if _, _, err := grepLocal(missing, "absent", "", false, 100); err == nil {
+		t.Fatal("grep on a missing root succeeded")
+	}
+	if _, _, err := searchLocal(missing, "*.go", "", 100); err == nil {
+		t.Fatal("search on a missing root succeeded")
 	}
 }
