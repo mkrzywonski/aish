@@ -1,195 +1,161 @@
 ---
 name: aish
-description: Drive a human's shared terminal session (aish) or a native Windows shell (aishwin) over MCP: choose the right session and backend, initialize a newly-SSH'd host, decide between visible and out-of-band operations, and avoid the wrong-host, wrong-user and stalled-mode traps. Use whenever aish MCP tools are present, or the user refers to a shared terminal, an aish session, or a host they SSH'd into there.
+description: Use aish MCP tools to inspect or edit files and run commands in a human's shared terminal, including remote hosts reached through SSH, or an aishwin Windows session. Apply when working through aish, choosing its tools, or recovering from its permission, pagination, or connection errors.
 ---
 
-# Driving aish
+# Working through aish
 
-Aish shares one terminal between a human and you. The human types in it, you
-drive it through MCP tools, and both of you see the same screen. When the human
-runs `ssh somewhere` in that terminal, your tools follow onto that host —
-nothing is installed on the remote.
+Aish tools follow the selected session's current host. Your assistant-native
+shell and file tools operate in your own environment, which may be a different
+machine. For work on an aish remote host, use aish tools; a local edit does not
+update the remote file. Tool names below omit client-specific MCP prefixes.
 
-Your own native tools (Bash, Read, Edit, shell, filesystem) stay on YOUR
-machine. That is a different computer from the session. When the user talks
-about "the terminal", "the session", "this host", or a machine they SSH'd into,
-they mean the aish session, so use aish tools.
+Use the running tools' schemas, status, and error details when they differ
+from this guide. Report the discrepancy rather than inventing a workaround.
 
-## First moves
+## Establish the target
 
-1. **`list_sessions`** — ids, names, backend, and the tools each one actually
-   implements. Never assume the tool schema you loaded applies to every session.
-2. **`session_status`** — where that session is right now. Re-run it after any
-   SSH transition; the host changes under you.
-3. **`probe_host`** — once, on a host you have not probed. It turns `oob_tools`
-   from `unknown` into a real plan.
+1. Call `list_sessions` and select the intended session. Inspect its backend
+   and supported tools. Pass `session` explicitly when multiple sessions exist.
+2. Call `session_status` to establish the host, current mode, OOB identity,
+   and tool availability. Refresh after SSH disconnects, reconnects, or host changes.
+3. For a `shared_terminal` session with unknown OOB capabilities, call
+   `probe_host` once when OOB work is needed. Status alone does not initialize
+   the channel. Probing can open an SSH session and trigger MFA.
 
-Every tool takes a `session` argument (id or name). With more than one session
-live, pass it explicitly rather than relying on a default.
+Name the selected session and host before substantial work. Do not assume a
+reconnected session still targets the same host or has the same capabilities.
 
-## Two backends, two tool sets
+- `shared_terminal`: supports the shared PTY and visible commands, plus OOB
+  operations when available.
+- `direct_host` (aishwin): native Windows operations; use its advertised tools.
+  Do not assume it supports `probe_host`, `exec`, or shared-terminal input.
 
-`list_sessions` reports a backend per session, and they do not implement the
-same tools.
+When `target_confidence` is present, respect it: `same` verifies the host;
+`unknown` is not verification even after a write has been authorized;
+`mismatch` blocks mutations and must not be bypassed. Compare the interactive
+host with the probed `remote_hostname`, not the SSH alias in `oob_host`.
+Remote prompt integration (`Ctrl-]`, then `p`) can help establish confidence.
+If status includes `mode_note`, use the screen, recent output, and `wait_idle`
+to assess readiness; `mode: running` may describe SSH rather than a remote job.
 
-- **`shared_terminal`** — an aish PTY the human types into. Full set:
-  `run_command`, `send_input`/`send_keys`, `read_screen`/`read_output`,
-  `wait_idle`, `probe_host`, `oob_log`, `exec`, the `file_*` suite,
-  `directory_list`/`directory_create`, `task_status`.
-- **`direct_host`** — a native Windows shell in its own window (aishwin). No
-  shared PTY. Adds `capture_screen` (a screenshot) and `read_console`
-  (scrollback); has no `probe_host`, `send_input`, `oob_log`, or `exec`.
+## Choose the operation
 
-Plan against the `tools` list, not against habit.
-
-## Visible or invisible
-
-This is the distinction the whole tool exists for, so make it deliberately.
-
-- **`run_command`** types into the shared terminal. The human sees the command
-  and its output; it lands in scrollback. Use it for anything the human should
-  witness, anything needing their shell's identity or privileges, and anything
-  interactive.
-- **`exec` and `file_*`** run out of band over a multiplexed SSH channel.
-  Nothing appears on screen. Use them for the quiet mechanical work — reading,
-  editing, searching — where narrating in the terminal would be noise.
-
-Every result tells you which happened: `visibility` is `visible`, `silent`, or
-`unknown`. Out-of-band work requires the user's authorization; without it,
-tools either fall back to visible in-band operation or refuse with guidance.
-`oob_log` is the record of what happened invisibly — read it when another client
-shares the session, or when the user asks what you did off-screen.
-
-## Five things that waste agents' time
-
-**`oob_tools: unknown` does not mean broken.** It means the host has not been
-probed. `session_status` never opens a channel (so it can never trigger an MFA
-push), which is exactly why it cannot know. Call `probe_host` once and the
-states resolve. Do not work around a tool reading `unknown` — probe, then plan.
-
-**`unavailable` is different, and it is final.** If probe evidence says a tool
-is unavailable, re-probing will not change it. Use `run_command` instead.
-
-**`mode` stalls at `running` for the whole of an SSH session.** Prompt marking
-(OSC 133) comes from the local shell and cannot see past `ssh`, so `mode` stays
-`running` however idle the remote prompt is — correctly, since `ssh` really is
-the running foreground process. `shell_integration: true` describes the LOCAL
-shell. Whenever `session_status` includes `mode_note`, `mode` has stopped
-tracking the shell you are talking to: use `last_output_ms_ago` or `wait_idle`.
-
-**Out-of-band tools run as a different user than the human's shell may be.**
-`oob_user` is the SSH login user, and it does NOT change when the human types
-`su` or `sudo -i`. Check it before ownership- or privilege-sensitive work; if
-their shell has switched users, say so and prefer `run_command`.
-
-**`target_confidence` compares `interactive_host` with `remote_hostname` —
-never `oob_host`.** `oob_host` is the connection target as configured: an alias,
-an FQDN, an IP, a `ProxyJump` expression. It has no obligation to equal any
-hostname, and comparing it against `interactive_host` will invent a
-disagreement that is not there.
-
-## Not being on the wrong machine
-
-Every routed result carries `target_confidence`. It answers one question: do
-invisible commands land on the machine the human is watching?
-
-- **`same`** — verified. Proceed.
-- **`unknown`** — the remote reports no hostname, so aish cannot tell. Reads
-  proceed with a note; the first write asks the human once. **After that one
-  approval, later writes stop prompting but still carry the note — do not read
-  that silence as verification.** Before anything destructive, say which host
-  you believe you are on and check with the user.
-- **`mismatch`** — the hosts genuinely differ. Writes fail closed. Do not try
-  to route around it.
-
-The fix is one keystroke for the human: `Ctrl-]` then `p` installs the aish
-prompt on the remote, after which `target_confidence` becomes `same`. Offer it.
-
-## Rules that are not negotiable
-
-- **Never send passwords, keys, or other secrets** through any tool. If
-  `echo_off` is true the terminal is collecting secret input — stop and let the
-  human type.
-- **`sudo`, `su`, `doas`, `pkexec`, `runuser` must go through `run_command`.**
-  They are refused out of band by design: a privileged command has to be one the
-  human saw, and they type their own password. Do not look for a way around it.
-- **Name the target session and host in chat** before the first substantial or
-  destructive operation, so the human can stop you if you are aimed wrong.
-- **Do not exceed the request.** This is someone's live machine, often a
-  production one, and the terminal is shared with a person who is watching.
-
-## Oversized output
-
-Results carry at most 16 KiB of output inline. Nothing is lost.
-
-- `run_command` output is in the terminal scrollback: page the rest with
-  `read_output` using the cursors in the result.
-- `exec` has no scrollback, so oversized output is trimmed from the middle and
-  the full text is written to a file the result names in `output_path`. Read it
-  with `file_read`, or search it with `file_grep` without reading it. Only one
-  exists at a time — collect it before running another command.
-
-## When aish itself is wrong
-
-Aish is under active development and its authors want the failures you hit.
-Report one only when you can state a **specific, reproducible** fault:
-
-- a tool's own error told you what to do, you did it, and it still failed;
-- `oob_tools` reported a tool `available` and the call failed anyway;
-- documented behaviour did not happen;
-- a message was actively misleading about which host, user, or route was
-  involved.
-
-Being confused is not yet a report. Re-read `list_sessions` and
-`session_status` first — most surprises are one of the five traps above.
-
-When it does qualify: **draft the report and ask the human before filing it.**
-Filing publishes to a public tracker under their identity, so it is theirs to
-approve. If they agree and `gh` is available:
-
-```sh
-gh issue create --repo mkrzywonski/aish --title "<one line>" --body "<report>"
-```
-
-Include what you expected, what happened, the exact tool call and result, and
-the output of `version_info`. Search existing issues first. If `gh` is not
-available or they would rather not file, write it down for them instead.
-
----
-
-## Installing this file on your platform
-
-If the user has pointed you at this file and asked you to install it, they want
-it available in future sessions without pointing at it again.
-
-Everything above this heading is the content. This section is instructions to
-you and should not be copied into what you install.
-
-1. Work out where THIS platform keeps persistent instructions or reusable
-   skills. You know your own harness; aish does not, which is why this asks you
-   rather than guessing.
-2. Confirm the location with the user before writing anything.
-3. Write the content, then say what you wrote and where, so they can find or
-   remove it later.
-
-Conventions worth knowing:
-
-| Platform | Location |
+| Need | Preferred tool |
 |---|---|
-| Claude Code | `~/.claude/skills/aish/SKILL.md` — this file works as-is, frontmatter included |
-| Codex | `~/.codex/AGENTS.md` (global) or `AGENTS.md` in a project |
-| Anything else | Kiro, Amazon Quick, Antigravity, IDE extensions: use that platform's own mechanism |
+| Locate files or matching text | `file_search`, `file_grep`, `directory_list`, when advertised |
+| Read a file or relevant section | `file_read` |
+| Replace one exact passage | `file_edit` |
+| Apply multiple text changes | `file_patch` |
+| Create a file or replace its complete contents | `file_write` |
+| Quiet, noninteractive command | `exec`, when supported and authorized |
+| Interactive command or the visible shell's identity/privileges | `run_command` |
 
-Two things to get right:
+Prefer direct edits at the remote destination when permissions allow. Do not
+habitually download, edit locally, upload to `/tmp`, and ask the human to copy
+files. Staging is appropriate when an actual transfer or privileged installation
+requires it; explain that reason and complete the authorized installation path.
 
-- **Prefer a location that loads automatically or on relevance.** A file nobody
-  reads is worse than no file, because it looks like the problem is solved.
-- **If the file is shared with the user's own instructions**, put this content
-  in a clearly delimited block so it can be updated or removed cleanly.
+OOB operations are normally silent. Inspect `via`, `visibility`, warnings, and
+availability rather than assuming a requested route was used. Without OOB
+access some tools use the visible terminal; others refuse. `oob_log`, when
+available, records invisible work.
 
-Prefer a per-user or global scope: aish sessions are not tied to one project.
+## Read, edit, and verify
 
-This file ships in the aish repository and changes as aish does, so re-copy it
-after upgrading. If anything here contradicts a tool's own description or its
-error message, **trust the tool** — that text is generated from the running
-build — and mention the discrepancy to the user.
+Read the relevant current text before editing. Use raw `content` for exact
+matches; `numbered_content` includes display-only line numbers. If a match is
+missing or ambiguous, reread and choose a unique passage. Use `replace_all`
+only when every occurrence should change. For a full rewrite use `file_write`,
+with `if_match` from a suitable whole-file read or stat when available.
+
+A read page is not the whole file unless `eof` says so:
+
+- Byte mode: `offset` is zero-based bytes. Continue using returned `next_offset`.
+- Line mode: use `start_line` and `limit`, for example `start_line: 241,
+  limit: 160`. Continue using `next_line` when provided.
+- Never combine byte offset with line parameters. If a long line exceeds the
+  page budget, use byte mode as instructed by the error. SFTP reads use byte mode.
+- Default source page size is 16 KiB, requested maximum 256 KiB; the serialized
+  result budget can shorten the page. Truncation does not mean the file is unusable.
+- `file_edit` and `file_patch` currently limit the entire input and resulting
+  file to 1 MiB. A 32 KiB file is not too large for those tools.
+
+If a tool hits a limit, report the exact operation and limit. For larger files,
+use bounded reads/searches and an appropriate host-side transformation through
+an authorized command route. Do not substitute a partially read page for the
+complete file in `file_write`.
+
+After a change, inspect the affected section or diff and run a relevant syntax
+or functional check on the target host when warranted. A successful exact-text
+replacement does not prove the resulting program is correct. If damage is
+suspected, inspect the file and available history before adding more edits or
+claiming that aish corrupted it.
+
+## Identity and permissions
+
+OOB runs as `session_status.oob_user`, normally the SSH login user. A human's
+`su` or `sudo -i` in the visible terminal does not change that identity.
+Use the visible route when the task needs that shell's identity or privileges.
+Never send authentication passwords or private keys through tools. When the
+terminal is collecting a secret (`echo_off`), leave input to the human.
+OOB privilege escalation is refused: use visible `run_command` for `sudo`,
+`su`, and similar operations, without trying to bypass the restriction.
+
+Atomic edits and non-append writes create a temporary file beside the target,
+then rename it. They need write and execute access to the parent directory;
+a writable existing file alone is insufficient. On a `.aishtmp` permission
+error, inspect the OOB identity/groups, parent directory permissions, and file
+permissions before choosing a remedy. Do not keep retrying the same denied write
+or change permissions/ownership beyond the user's authorized scope.
+
+For POSIX hosts:
+
+- `file_write` accepts an octal string `mode`, such as `"0664"` for group-shared
+  writable files or `"0660"` without access for others. Choose according to the
+  project's policy; do not make every file group-writable automatically.
+- Without `mode`, normal atomic writes preserve existing permission bits but
+  default new files to `0644`. A group-friendly umask alone does not override
+  that explicit default. `file_edit`/`file_patch` preserve existing modes.
+- Atomic replacement creates a new inode owned by the writing account. It does
+  not promise original owner, group, ACL, or extended-attribute preservation.
+  A setgid parent directory can provide shared-group inheritance.
+- `mode` does not set owner/group or grant access to the parent directory.
+  Verify important permissions with `file_stat`; a write success alone is not
+  proof that all requested metadata was applied.
+
+Windows `mode` handling is limited to its supported read-only behavior; it is
+not a POSIX group-permission or Windows ACL management interface.
+
+## Connections, retries, and MFA
+
+Ordinary remote OOB file operations and foreground `exec` reuse a persistent
+shell. Foreground means the call waits for completion, not that it runs in the
+visible terminal. Background `exec` opens a separate channel per task; SFTP
+opens a separate retained channel. New channels may cause MFA on strict hosts.
+Use background execution for genuinely asynchronous work, not by default.
+
+On unavailability, read the reason. A missing host capability will not improve
+with repeated probing; a transient lost channel may recover on the next call.
+Follow retry guidance without looping `probe_host`, forcing probes, or opening
+additional SSH connections speculatively.
+
+After a lost channel, refresh status. A retry can reopen the OOB shell, but a
+failed mutation may already have completed. Read the destination or check the
+command's effects before replaying it, especially appends or non-idempotent
+commands. If the interactive SSH session ended, do not continue remote work
+against a route that now points locally. Ask the human to reconnect if needed.
+
+## Command output and reporting
+
+Command output has its own inline budget (normally 16 KiB), separate from
+`file_read` pagination. For visible commands, page available scrollback using
+`read_output` cursors. For oversized `exec` output, use the returned `output_path`
+with `file_read` or `file_grep`; retrieve it before another command can replace
+the spill file. Check warnings: saving full output can fail, and buffers are finite.
+For background tasks, poll `task_status` using the returned task ID.
+
+If behavior contradicts a tool's contract, preserve the exact call, result,
+expected behavior, and `version_info`, with secrets removed. Distinguish a
+reproducible tool fault from permissions, stale state, or an incorrect edit.
+Draft an issue when useful; publish to a tracker only when the user authorizes it.

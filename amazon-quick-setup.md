@@ -134,15 +134,57 @@ Then toggle the MCP connection off/on in Quick settings (or restart Quick) to pi
 
 ## Optional: Install the aish Skill
 
-For better AI behavior when driving sessions, install the aish skill file:
+The repository's [SKILL.md](SKILL.md) is ready to import unchanged. It teaches
+session selection, direct remote editing, file pagination, permissions, and
+connection recovery. Installing the MCP connection alone does not install it.
 
-```bash
-# From WSL, copy into Quick's skills folder:
-cp /mnt/c/Users/<username>/aish/SKILL.md \
-   "/mnt/c/Users/<username>/.quickwork/profiles/<profile-id>/skills/aish/SKILL.md"
-```
+1. In Quick, open **Customize → Skills → Create → From file**.
+2. Select this repository's `SKILL.md`. For a checkout at
+   `/home/mike/aish` in the `Ubuntu` WSL distribution, paste this path into the
+   Windows file picker:
 
-Or ask Quick: *"Install the SKILL.md from my aish repo"* — it knows how to do this.
+   ```text
+   \\wsl.localhost\Ubuntu\home\mike\aish\SKILL.md
+   ```
+
+   Substitute your distro and checkout path if different.
+3. Review the imported name (`aish`), description, and instructions, then save.
+   Ensure the aish MCP connector is enabled and available. If the skill editor
+   offers referenced-tool selection, associate the aish connector's tools.
+4. Choose **Try it** and use the read-only check below.
+5. **Publish** the tested draft and leave the skill **enabled**. Publishing
+   activates the draft; sharing with other people is a separate action.
+
+If an `aish` skill already exists, update its instructions from `SKILL.md`
+instead of leaving two conflicting copies enabled. Test and publish that update.
+Do not rely on editing undocumented Quick profile directories.
+
+### Verify activation and tool use
+
+In **Try it**, send:
+
+> Use the aish skill. List my sessions and report the host, backend, OOB user,
+> and available file tools for the intended session. Use read-only calls only;
+> do not probe, open new channels, run commands, or change files. If capability
+> information is unknown, report that. Explain how you would make a small edit
+> to an existing remote file and diagnose a permission error creating .aishtmp.
+
+Expected behavior: use `list_sessions` and `session_status`, distinguish the
+remote session from Quick's local environment, prefer `file_edit` for a unique
+text replacement, and explain the parent-directory permission requirement.
+There should be no local staging, writes, or speculative MFA-triggering probes.
+If several sessions exist and the target is unclear, Quick should ask which one.
+
+After publishing, start a fresh chat and ask a similar question without naming
+the skill. This checks automatic discovery separately from behavior when loaded.
+A missing skill activation calls for checking its description, enabled state,
+and published version before changing the workflow instructions.
+
+After aish upgrades, review changes to `SKILL.md`, update the imported skill,
+and test/publish again. Importing a file does not establish repository syncing.
+
+See [Amazon Quick's skill documentation](https://docs.aws.amazon.com/quick/latest/userguide/skills-desktop.html)
+for import, activation, draft, and publication behavior.
 
 ---
 
