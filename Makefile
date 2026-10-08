@@ -82,8 +82,13 @@ aishwin-dev:
 # yourself, install as root.
 install:
 	@test -f aish && test -f aishwnd || { echo "missing ./aish or ./aishwnd — run 'make' as your own user first, so the version stamp is right"; exit 1; }
-	@a=$$(./aish version | awk '{print $$2}'); w=$$(./aishwnd version | awk '{print $$2}'); \
-	if [ "$$a" != "$$w" ]; then echo "./aish is $$a but ./aishwnd is $$w — run 'make' to rebuild both from the same tree"; exit 1; fi
+	@# Each binary must run, exit 0 and print "<name> <stamp>": a binary that
+	@# cannot run here (wrong arch, no exec bit) must not pass as matching.
+	@a=$$(./aish version) || { echo "./aish failed to report its version; is it built for this machine?"; exit 1; }; \
+	w=$$(./aishwnd version) || { echo "./aishwnd failed to report its version; is it built for this machine?"; exit 1; }; \
+	set -- $$a; if [ "$$#" -ne 2 ] || [ "$$1" != aish ]; then echo "unexpected ./aish version output: '$$a'"; exit 1; fi; av=$$2; \
+	set -- $$w; if [ "$$#" -ne 2 ] || [ "$$1" != aishwnd ]; then echo "unexpected ./aishwnd version output: '$$w'"; exit 1; fi; wv=$$2; \
+	if [ "$$av" != "$$wv" ]; then echo "./aish is $$av but ./aishwnd is $$wv — run 'make' to rebuild both from the same tree"; exit 1; fi
 	install -m 755 aish $(DESTDIR)$(BINDIR)/aish
 	install -m 755 aishwnd $(DESTDIR)$(BINDIR)/aishwnd
 	@echo "installed $(DESTDIR)$(BINDIR)/aish -> $$($(DESTDIR)$(BINDIR)/aish version)"
