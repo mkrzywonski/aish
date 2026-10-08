@@ -209,15 +209,18 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	// prompt_answer via the pending-request map; "rename", "list_clients",
 	// and "disconnect_client" (all from the Windows console's menu) are
 	// the only frame types this side needs to act on beyond that.
+	// list_clients and disconnect_client take auth locks, so they run off
+	// this loop: anything that blocks here also blocks delivery of the
+	// prompt_answer an in-flight approval is waiting for.
 	return wc.ReadLoop(func(f aishwinwire.Frame) {
 		sess.debugLog("wire ReadLoop callback: type=%q id=%q dataLen=%d", f.Type, f.ID, len(f.Data))
 		switch f.Type {
 		case "rename":
 			sess.handleRename(f)
 		case "list_clients":
-			sess.handleListClients(f)
+			go sess.handleListClients(f)
 		case "disconnect_client":
-			sess.handleDisconnectClient(f)
+			go sess.handleDisconnectClient(f)
 		default:
 			sess.debugLog("wire ReadLoop callback: unhandled frame type=%q id=%q", f.Type, f.ID)
 		}

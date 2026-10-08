@@ -35,6 +35,15 @@ const (
 // (which always present the same public key) can reconnect without re-prompting
 // after the proxy process restarts, as long as the aishwnd session is alive.
 type connAuth struct {
+	// approveMu serializes request_access calls on this connection and is
+	// held across the approval prompt. mu guards the fields below and must
+	// NEVER be held across the prompt: the prompt's answer is delivered by
+	// the wire ReadLoop, and that same loop serves list_clients, which takes
+	// mu -- holding it while waiting deadlocked the link until the prompt
+	// timed out, so approving a client could never succeed while the
+	// Windows console was polling its client count.
+	approveMu sync.Mutex
+
 	mu       sync.Mutex
 	denied   bool
 	grantID  string
@@ -261,18 +270,22 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 		return nil, authproto.RequestAccessResult{}, err
 	}
 	st := a.state(req.Session)
+	st.approveMu.Lock()
+	defer st.approveMu.Unlock()
+
 	st.mu.Lock()
-	defer st.mu.Unlock()
 	if args.ClientDescription != "" {
 		st.declared = args.ClientDescription
 	}
-	if st.denied {
+	denied, existing := st.denied, st.grantID
+	st.mu.Unlock()
+	if denied {
 		a.sess.debugLog("requestAccess: client was previously denied")
 		return nil, authproto.RequestAccessResult{}, errors.New("the user denied this client access; reconnect to ask again")
 	}
-	if st.grantID != "" {
-		a.sess.debugLog("requestAccess: already has grantID=%s", st.grantID)
-		return nil, authproto.RequestAccessResult{GrantID: st.grantID}, nil
+	if existing != "" {
+		a.sess.debugLog("requestAccess: already has grantID=%s", existing)
+		return nil, authproto.RequestAccessResult{GrantID: existing}, nil
 	}
 
 	// Check if this public key has a persisted grant from a prior approval.
@@ -280,10 +293,13 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 	// process restart, as long as the session is still alive.
 	if grantID, ok := a.lookupPersistedGrant(key); ok {
 		a.sess.debugLog("requestAccess: found persisted grant %s", grantID)
+		// Lock order is a.mu then st.mu, matching disconnectClient.
 		a.mu.Lock()
 		a.grants[grantID] = clientGrant{publicKey: key, clientName: clientName(req.Session)}
-		a.mu.Unlock()
+		st.mu.Lock()
 		st.grantID = grantID
+		st.mu.Unlock()
+		a.mu.Unlock()
 		recognized := args.ClientDescription
 		if recognized == "" {
 			recognized = clientName(req.Session)
@@ -304,7 +320,9 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 	case ok && ans == "y":
 		a.sess.debugLog("requestAccess: user approved")
 	case ok && ans == "n":
+		st.mu.Lock()
 		st.denied = true
+		st.mu.Unlock()
 		a.sess.debugLog("requestAccess: user denied")
 		return nil, authproto.RequestAccessResult{}, errors.New("the user denied this client access; reconnect to ask again")
 	default:
@@ -324,8 +342,10 @@ func (a *authManager) requestAccess(ctx context.Context, req *mcp.CallToolReques
 		return nil, authproto.RequestAccessResult{}, errors.New("the connection was revoked or closed during approval; reconnect to request again")
 	}
 	a.grants[grantID] = clientGrant{publicKey: key, clientName: name}
-	a.mu.Unlock()
+	st.mu.Lock()
 	st.grantID = grantID
+	st.mu.Unlock()
+	a.mu.Unlock()
 
 	// Persist the grant so the same public key (PSK-derived or otherwise) can
 	// reconnect without prompting after the proxy process restarts.

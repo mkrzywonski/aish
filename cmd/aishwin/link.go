@@ -127,7 +127,11 @@ func handleFrame(wc *aishwinwire.Conn, f aishwinwire.Frame) {
 	switch f.Type {
 	case "prompt":
 		debugLog("handleFrame: dispatching prompt id=%q", f.ID)
-		handlePrompt(wc, f)
+		// Off the read loop: the dialog is modal and can stay up for the
+		// prompt's full timeout, during which every other frame from the
+		// linux half (responses, notifies, further prompts) would stall.
+		// AskYesNo's dialogMu still shows prompts one at a time.
+		go handlePrompt(wc, f)
 	case "notify":
 		handleNotify(f)
 	case "rename_result":
