@@ -777,8 +777,9 @@ push), this costs exactly one push per host per session instead of one per
 operation. A lost channel is never reopened silently: the failed call says
 so, and your retry is the consent for the reopen. Background `exec` tasks ride
 the same channel: the command is started detached on the host under a small
-supervisor, its output kept in a private directory under `/tmp` (first 16 MiB)
-until the session ends, and every `task_status` poll is another script on the
+supervisor, its output kept in a private directory under `/tmp` (first 16 MiB;
+not yet cleaned up, so the files and any still-running job remain after the
+session ends), and every `task_status` poll is another script on the
 channel, so a task costs no extra push either. Your interactive
 connection becomes the multiplexing master; file and exec tools open extra
 channels over it. If you pass your own `-S`/`-o Control*` options, the shim

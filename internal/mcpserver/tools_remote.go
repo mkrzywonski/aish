@@ -131,7 +131,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"background=true (requires an OOB route) is for work that runs for many minutes: on a remote host it " +
 			"starts the command detached, under POSIX sh, through that same channel, and returns a task_id and state; " +
 			"poll it with task_status. A state of \"uncertain\" means the command may have started -- poll before ever " +
-			"running it again. Remote task output is kept on the host (first 16 MiB) until the aish session ends. " +
+			"running it again. Remote task output (first 16 MiB) is kept in /tmp on the host and is NOT yet cleaned up: " +
+			"its files, and a still-running job, remain after the aish session ends. " +
 			"A remote out-of-band foreground call that reaches " +
 			"timeout_ms closes the shared channel without confirming the command stopped, and the next out-of-band call " +
 			"reopens it: set timeout_ms generously rather than relying on the 30s default. Set cwd to an absolute " +
@@ -158,7 +159,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"exec with background=true on a shared-terminal session, and by run_command with background=true " +
 			"on a direct-host session, which has no exec. Errors if the task_id is unrecognized. " +
 			"state is one of running, done, and for remote tasks also uncertain (launch unconfirmed; may still start), " +
-			"starting, draining (command exited, a child still holds its output), capture_failed, lost (supervisor gone " +
+			"starting, start_failed (the command never ran), draining (command exited, a child still holds its output), " +
+			"capture_failed, lost (supervisor gone " +
 			"without a result; outcome unknown) and expired. Only done and capture_failed carry the command's exit code; " +
 			"no other state means the command did not run, so never re-run on running=false alone. Polling a remote " +
 			"task is itself an out-of-band read on its host over the shared channel, and works only while the session's " +
@@ -1708,6 +1710,13 @@ func (c *Core) pollChannelTask(task *sshmux.Task, cursor int64) (*mcp.CallToolRe
 			"remote (for example a full disk); output and exit_code may be incomplete")
 	case sshmux.TaskExpired:
 		res.Warning = joinWarnings(res.Warning, "the task's directory no longer exists on the remote; its output and outcome are gone")
+	case sshmux.TaskStartFailed:
+		res.Warning = joinWarnings(res.Warning, fmt.Sprintf("the command never ran: starting its detached supervisor "+
+			"(setsid or nohup) failed with exit status %s on the remote", st.StartFailure))
+	}
+	if st.OutputMissing {
+		res.Warning = joinWarnings(res.Warning, "the task finished but its output file has since been removed from the remote; "+
+			"the output is lost (exit_code is still the command's)")
 	}
 	if st.CwdFailed {
 		res.Warning = joinWarnings(res.Warning, "the command did not run: its working directory could not be entered")

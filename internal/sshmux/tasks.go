@@ -47,7 +47,7 @@ func (tb *Table) NewChannelTask(ci *ConnInfo, sessionID string) (*Task, error) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 	if tb.remotes >= MaxChannelTasks {
-		return nil, fmt.Errorf("this session already has %d remote background tasks, the limit (their output is kept on the remote until the session ends); run further work in the foreground", MaxChannelTasks)
+		return nil, fmt.Errorf("this session already has %d remote background tasks, the limit (their output stays on the remote, which is not yet cleaned up); run further work in the foreground", MaxChannelTasks)
 	}
 	id := fmt.Sprintf("task-%d", tb.next+1)
 	dir, err := newChannelTaskDir(sessionID, id)

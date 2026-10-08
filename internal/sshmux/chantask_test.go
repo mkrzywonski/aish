@@ -26,11 +26,21 @@ type channelTaskHarness struct {
 var harnessSeq atomic.Int64
 
 func newChannelTaskHarness(t *testing.T) *channelTaskHarness {
+	return newChannelTaskHarnessWithPath(t, "")
+}
+
+// newChannelTaskHarnessWithPath puts binDir first on the channel shell's
+// PATH, so tests can substitute broken utilities (e.g. setsid).
+func newChannelTaskHarnessWithPath(t *testing.T, binDir string) *channelTaskHarness {
 	t.Helper()
 	dir := t.TempDir()
 	opens := filepath.Join(dir, "opens")
 	fake := filepath.Join(dir, "fake-ssh")
-	script := fmt.Sprintf("#!/bin/sh\necho open >> %s\nexec sh -s\n", Quote(opens))
+	pathSetup := ""
+	if binDir != "" {
+		pathSetup = "PATH=" + Quote(binDir) + ":$PATH; export PATH\n"
+	}
+	script := fmt.Sprintf("#!/bin/sh\necho open >> %s\n%sexec sh -s\n", Quote(opens), pathSetup)
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -322,5 +332,84 @@ func TestParseChannelTaskPollUncertainAndMalformed(t *testing.T) {
 	st, err := parseChannelTaskPoll([]byte("AISHPOLL ok pid=1 alive=- rc=0 cdf=0 size=0 start=0 count=0 exit=0,1,0\n"), true)
 	if err != nil || st.State != TaskCaptureFailed || st.ExitCode == nil || *st.ExitCode != 0 {
 		t.Errorf("capture failure: %+v %v", st, err)
+	}
+}
+
+// A task with no cwd must run where foreground exec does (the channel
+// shell's directory), not wherever the supervisor happens to be.
+func TestChannelTaskDefaultCwdMatchesForeground(t *testing.T) {
+	h := newChannelTaskHarness(t)
+	fg, err := h.m.ChannelRun(h.ci, "pwd -P", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := h.launch("task-1", "pwd -P", "")
+	out, st := h.drain(ct, 1024)
+	if st.State != TaskDone || strings.TrimSpace(string(out)) != strings.TrimSpace(string(fg.Output)) {
+		t.Errorf("background cwd %q, foreground cwd %q (status %+v)", out, fg.Output, st)
+	}
+}
+
+// cwd must reach cd byte-for-byte: a trailing newline is part of the path.
+func TestChannelTaskCwdWithTrailingNewline(t *testing.T) {
+	h := newChannelTaskHarness(t)
+	base := filepath.Join(t.TempDir(), "job")
+	for _, d := range []string{base, base + "\n"} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ct := h.launch("task-1", `printf '[%s]' "$PWD"`, base+"\n")
+	out, st := h.drain(ct, 1024)
+	if st.State != TaskDone || string(out) != "["+base+"\n]" {
+		t.Errorf("ran in %q, want %q (status %+v)", out, "["+base+"\n]", st)
+	}
+}
+
+// A detacher that fails before the supervisor starts must surface as
+// start_failed, not sit in "starting" forever.
+func TestChannelTaskDetacherFailureIsReported(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "setsid"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := newChannelTaskHarnessWithPath(t, bin)
+	ct := h.launch("task-1", "echo should-not-run", "")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := h.m.PollChannelTask(ct, 0, 1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.State == TaskStartFailed {
+			if st.StartFailure != "1" || len(st.Output) != 0 {
+				t.Errorf("start failure status %+v", st)
+			}
+			return
+		}
+		if st.State != TaskStarting || time.Now().After(deadline) {
+			t.Fatalf("broken setsid reported %q, want start_failed", st.State)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Output removed after completion must not read as a successful empty
+// capture, and must not rewind the caller's cursor.
+func TestChannelTaskMissingOutputAfterCompletion(t *testing.T) {
+	h := newChannelTaskHarness(t)
+	ct := h.launch("task-1", "echo hello world", "")
+	if out, st := h.drain(ct, 1024); string(out) != "hello world\n" || st.State != TaskDone {
+		t.Fatalf("output %q, status %+v", out, st)
+	}
+	if err := os.Remove(filepath.Join(ct.Dir, "out")); err != nil {
+		t.Fatal(err)
+	}
+	st, err := h.m.PollChannelTask(ct, 5, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != TaskCaptureFailed || !st.OutputMissing || st.Next != 5 || st.ExitCode == nil || *st.ExitCode != 0 {
+		t.Errorf("missing output reported as %+v", st)
 	}
 }

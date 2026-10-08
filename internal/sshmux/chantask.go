@@ -13,9 +13,10 @@
 //
 //	cmd      the command text, run as `sh cmd` so `exit`/`exec` in it cannot
 //	         skip the supervisor's completion record
-//	cwd      working directory (empty = none); limit: output cap in bytes
-//	run      the supervisor script
+//	limit    output cap in bytes; run: the supervisor script (cwd is
+//	         passed to it as an argument)
 //	started  supervisor pid, published atomically before the command runs
+//	spawnfail  the detacher's exit status when it failed before started
 //	out      the first limit+1 bytes of combined output (the extra byte only
 //	         flags that output was limited; polls expose at most limit)
 //	rc       the command's exit status; headrc/drainrc: capture statuses
@@ -65,6 +66,7 @@ const (
 	TaskCaptureFailed = "capture_failed" // finished, but output capture or status recording failed
 	TaskLost          = "lost"           // supervisor gone without a completion record
 	TaskExpired       = "expired"        // task directory no longer exists
+	TaskStartFailed   = "start_failed"   // setsid/nohup failed; the command never ran
 )
 
 // ChannelTask is a background command on a remote, bound to the
@@ -95,14 +97,16 @@ func newChannelTaskDir(sessionID, taskID string) (string, error) {
 }
 
 // supervisorScript is written to <dir>/run and executed by a fresh shell as
-// `sh run <dir>`. It must stay POSIX: it runs on whatever /bin/sh the remote
-// has.
+// `sh run <dir> <cwd>`. It must stay POSIX: it runs on whatever /bin/sh the
+// remote has. It inherits the channel shell's directory, so a command with
+// no cwd runs where a foreground exec would. cwd arrives as an argument, not
+// via $(cat file), because command substitution strips trailing newlines
+// and would silently change a path that ends in one.
 const supervisorScript = `d=$1
+cwd=$2
 trap '' HUP
-cd / || exit 1
 printf '%s\n' "$$" > "$d/started.tmp" && mv -f "$d/started.tmp" "$d/started" || exit 1
 lim=$(cat "$d/limit")
-cwd=$(cat "$d/cwd")
 {
   ok=1
   if [ -n "$cwd" ]; then cd "$cwd" || ok=0; fi
@@ -126,22 +130,30 @@ printf '%s,%s,%s\n' "$(r "$d/rc")" "$(r "$d/headrc")" "$(r "$d/drainrc")" > "$d/
 
 // channelTaskLaunchScript builds the launcher. It runs entirely inside a
 // subshell so a failure can never exit the shared channel shell or leak its
-// cwd/umask, and reports one AISHTASK line.
+// cwd/umask, and reports one AISHTASK line. The detacher runs inside a
+// background watcher (fds redirected, HUP ignored, so it never holds the
+// channel) that records spawnfail when setsid/nohup itself fails before the
+// supervisor publishes started -- otherwise such a task would sit in
+// "starting" forever. A zero exit is not treated as failure: some setsid
+// implementations fork and return 0 at once.
 func channelTaskLaunchScript(dir, command, cwd string, limit int) string {
 	return fmt.Sprintf(`( umask 077
 d=%s
 mkdir -m 700 "$d" || { echo 'AISHTASK mkdir-failed'; exit 0; }
 { printf '%%s\n' %s > "$d/cmd" &&
-  printf '%%s' %s > "$d/cwd" &&
   printf '%%s\n' %d > "$d/limit" &&
   printf '%%s' %s > "$d/run"; } || { rm -rf "$d"; echo 'AISHTASK setup-failed'; exit 0; }
-if command -v setsid >/dev/null 2>&1; then
-  setsid sh "$d/run" "$d" </dev/null >/dev/null 2>&1 &
-else
-  nohup sh "$d/run" "$d" </dev/null >/dev/null 2>&1 &
-fi
+( trap '' HUP
+  if command -v setsid >/dev/null 2>&1; then
+    setsid sh "$d/run" "$d" %s
+  else
+    nohup sh "$d/run" "$d" %s
+  fi
+  rc=$?
+  [ "$rc" -ne 0 ] && [ ! -f "$d/started" ] && echo "$rc" > "$d/spawnfail"
+) </dev/null >/dev/null 2>&1 &
 echo 'AISHTASK submitted'
-) </dev/null 2>&1`, Quote(dir), Quote(command), Quote(cwd), limit, Quote(supervisorScript))
+) </dev/null 2>&1`, Quote(dir), Quote(command), limit, Quote(supervisorScript), Quote(cwd), Quote(cwd))
 }
 
 // ErrTaskLaunchUncertain means the launch script was sent but its outcome
@@ -201,6 +213,8 @@ type ChannelTaskStatus struct {
 	ExitCode      *int
 	OutputLimited bool // output passed ChannelTaskOutputLimit; the rest was discarded
 	CwdFailed     bool
+	OutputMissing bool   // completed, but its output file no longer exists
+	StartFailure  string // detacher exit status when State is TaskStartFailed
 }
 
 // channelTaskPollScript reports the task's state on one metadata line,
@@ -219,11 +233,12 @@ if [ -n "$pid" ] && [ -z "$fin" ]; then
 fi
 rc=; [ -f "$d/rc" ] && rc=$(cat "$d/rc")
 cdf=0; [ -f "$d/cdfail" ] && cdf=1
-size=0; [ -f "$d/out" ] && size=$(wc -c < "$d/out" | tr -d ' ')
+sf=; [ -z "$pid" ] && [ -f "$d/spawnfail" ] && sf=$(cat "$d/spawnfail")
+of=0; size=0; [ -f "$d/out" ] && { of=1; size=$(wc -c < "$d/out" | tr -d ' '); }
 vis=$size; [ "$vis" -gt "$lim" ] && vis=$lim
 if [ "$c" -lt 0 ]; then s=$((vis - n)); [ "$s" -lt 0 ] && s=0; else s=$c; [ "$s" -gt "$vis" ] && s=$vis; fi
 k=$((vis - s)); [ "$k" -gt "$n" ] && k=$n
-printf 'AISHPOLL ok pid=%%s alive=%%s rc=%%s cdf=%%s size=%%s start=%%s count=%%s exit=%%s\n' "${pid:--}" "$alive" "${rc:--}" "$cdf" "$size" "$s" "$k" "${fin:--}"
+printf 'AISHPOLL ok pid=%%s alive=%%s rc=%%s cdf=%%s sf=%%s out=%%s size=%%s start=%%s count=%%s exit=%%s\n' "${pid:--}" "$alive" "${rc:--}" "$cdf" "${sf:--}" "$of" "$size" "$s" "$k" "${fin:--}"
 if [ "$k" -gt 0 ]; then tail -c +$((s + 1)) "$d/out" | head -c "$k" | base64; fi
 ) </dev/null 2>/dev/null`, Quote(dir), cursor, n, limit)
 }
@@ -245,7 +260,12 @@ func (m *Mux) PollChannelTask(t *ChannelTask, cursor int64, max int) (ChannelTas
 	if res.TimedOut {
 		return ChannelTaskStatus{}, errors.New("polling the task timed out and the shared channel was closed; the task itself is unaffected")
 	}
-	return parseChannelTaskPoll(res.Output, t.submitted.Load())
+	st, err := parseChannelTaskPoll(res.Output, t.submitted.Load())
+	if err == nil && st.OutputMissing && cursor >= 0 {
+		// Don't rewind the caller to 0 as though the output had never existed.
+		st.Next = cursor
+	}
+	return st, err
 }
 
 func parseChannelTaskPoll(out []byte, submitted bool) (ChannelTaskStatus, error) {
@@ -317,6 +337,13 @@ func parseChannelTaskPoll(out []byte, submitted bool) (ChannelTaskStatus, error)
 		if parts[1] != "0" || parts[2] != "0" {
 			st.State = TaskCaptureFailed
 		}
+		// The supervisor always creates out before publishing exit, so a
+		// completed task without it lost its output afterwards (e.g. a /tmp
+		// cleaner). Never present that as a successful empty capture.
+		if kv["out"] != "1" {
+			st.State = TaskCaptureFailed
+			st.OutputMissing = true
+		}
 		return st, nil
 	}
 	// Liveness comes from kill -0 on the recorded pid, which pid reuse can
@@ -331,6 +358,10 @@ func parseChannelTaskPoll(out []byte, submitted bool) (ChannelTaskStatus, error)
 		st.State = TaskLost
 	default: // no started record yet
 		st.State = TaskStarting
+		if sf := kv["sf"]; sf != "-" && sf != "" {
+			st.State = TaskStartFailed
+			st.StartFailure = sf
+		}
 	}
 	return st, nil
 }
