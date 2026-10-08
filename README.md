@@ -712,7 +712,7 @@ by pressing it twice.
 - **`m` — block new SSH sessions.** A stop button for MFA prompts. AISH opens
   one shared channel per host, so a protected host normally costs a single
   push — but a confused AI can keep paying it: a forced re-probe on a host with
-  no channel, a deep or SFTP probe, a background command, or reopening a channel
+  no channel, a deep or SFTP probe, or reopening a channel
   that timed out each start a new SSH session. Turn this on and AISH opens no
   more of them.
 
@@ -775,8 +775,12 @@ none of that framing is typed into the shared terminal (results say
 hosts where each new ssh channel re-triggers MFA (Duo-style per-session
 push), this costs exactly one push per host per session instead of one per
 operation. A lost channel is never reopened silently: the failed call says
-so, and your retry is the consent for the reopen. Background `exec` tasks need
-a concurrent stream and use a dedicated channel each. Your interactive
+so, and your retry is the consent for the reopen. Background `exec` tasks ride
+the same channel: the command is started detached on the host under a small
+supervisor, its output kept in a private directory under `/tmp` (first 16 MiB;
+not yet cleaned up, so the files and any still-running job remain after the
+session ends), and every `task_status` poll is another script on the
+channel, so a task costs no extra push either. Your interactive
 connection becomes the multiplexing master; file and exec tools open extra
 channels over it. If you pass your own `-S`/`-o Control*` options, the shim
 backs off entirely. Hosts without a usable channel can use in-band operation

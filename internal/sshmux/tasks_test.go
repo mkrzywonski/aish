@@ -1,58 +1,18 @@
 package sshmux
 
 import (
-	"bytes"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestMarkerWriterFiltersSplitMarker(t *testing.T) {
-	var out bytes.Buffer
-	ready := make(chan struct{})
-	w := &markerWriter{dst: &out, marker: []byte("@READY@\n"), ready: func() { close(ready) }}
-	for _, part := range []string{"before\n@RE", "ADY", "@\nafter\n"} {
-		if _, err := w.Write([]byte(part)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	select {
-	case <-ready:
-	default:
-		t.Fatal("marker did not signal readiness")
-	}
-	w.Close()
-	if got := out.String(); got != "before\nafter\n" {
-		t.Fatalf("filtered output = %q", got)
-	}
-}
-
-func TestBackgroundCommandAndTaskReadiness(t *testing.T) {
-	command, marker, err := BackgroundCommand("sleep 0.2; printf done")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(command, "sleep 0.2") || !strings.HasPrefix(string(marker), "@AISHSTART@") {
-		t.Fatalf("wrapped command = %q marker=%q", command, marker)
-	}
-
-	ready := make(chan struct{})
+func TestLocalTaskCompletes(t *testing.T) {
 	table := NewTable()
-	task, err := table.StartAfterMarker(exec.Command("sh", "-c", command), marker, func() { close(ready) })
+	task, err := table.Start(exec.Command("sh", "-c", "sleep 0.1; printf done"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-ready:
-	case <-time.After(time.Second):
-		t.Fatal("startup marker was not observed")
-	}
-	if running, _ := task.Status(); !running {
-		t.Fatal("task completed before readiness was signaled")
-	}
-
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if running, _ := task.Status(); !running {
 			break
@@ -68,48 +28,39 @@ func TestBackgroundCommandAndTaskReadiness(t *testing.T) {
 	}
 }
 
-func TestTaskWithoutMarkerStillClearsReadiness(t *testing.T) {
-	ready := make(chan struct{})
-	table := NewTable()
-	_, err := table.StartAfterMarker(exec.Command("sh", "-c", "printf failure >&2"), []byte("missing"), func() { close(ready) })
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-ready:
-	case <-time.After(time.Second):
-		t.Fatal("process exit did not clear readiness")
-	}
-}
-
 // TestTaskCapturesASingleStream guards the merge. os/exec reuses one pipe and
 // one copying goroutine only while Stdout and Stderr compare equal; give them
 // separate writers and the two streams are spliced together in whatever order
 // the copying goroutines happen to run, not the order the remote wrote them.
 func TestTaskCapturesASingleStream(t *testing.T) {
-	cases := []struct {
-		name   string
-		marker []byte
-	}{
-		{"plain", nil},
-		{"with startup marker", []byte("@READY@\n")},
+	cmd := exec.Command("sh", "-c", "true")
+	if _, err := NewTable().Start(cmd); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			table := NewTable()
-			cmd := exec.Command("sh", "-c", "true")
-			var err error
-			if tc.marker == nil {
-				_, err = table.Start(cmd)
-			} else {
-				_, err = table.StartAfterMarker(cmd, tc.marker, func() {})
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cmd.Stdout != cmd.Stderr {
-				t.Errorf("Stdout (%T) and Stderr (%T) differ; os/exec will open two pipes and reorder the merged output", cmd.Stdout, cmd.Stderr)
-			}
-		})
+	if cmd.Stdout != cmd.Stderr {
+		t.Errorf("Stdout (%T) and Stderr (%T) differ; os/exec will open two pipes and reorder the merged output", cmd.Stdout, cmd.Stderr)
+	}
+}
+
+func TestChannelTaskLimitAndRemove(t *testing.T) {
+	table := NewTable()
+	ci := &ConnInfo{Host: "h", User: "u", Sock: "/s"}
+	var ids []string
+	for i := 0; i < MaxChannelTasks; i++ {
+		task, err := table.NewChannelTask(ci, "sess")
+		if err != nil {
+			t.Fatalf("task %d: %v", i, err)
+		}
+		ids = append(ids, task.ID)
+	}
+	if _, err := table.NewChannelTask(ci, "sess"); err == nil {
+		t.Fatal("expected the per-session channel task limit to refuse")
+	}
+	table.Remove(ids[0])
+	if _, err := table.NewChannelTask(ci, "sess"); err != nil {
+		t.Fatalf("a removed task should free its slot: %v", err)
+	}
+	if _, err := NewTable().NewChannelTask(ci, "bad/id"); err == nil {
+		t.Fatal("expected an invalid session id to be refused")
 	}
 }

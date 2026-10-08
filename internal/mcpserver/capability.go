@@ -35,7 +35,7 @@ func (t toolAvail) Available() bool { return t.State == toolAvailable }
 var oobToolNames = []string{
 	"file_read", "file_write", "file_edit", "file_patch",
 	"file_stat", "directory_list", "directory_create", "file_grep", "file_search",
-	"file_upload", "file_download", "exec",
+	"file_upload", "file_download", "exec", "exec_background",
 }
 
 var sftpReadToolNames = []string{"file_read", "file_stat", "directory_list", "file_download"}
@@ -278,6 +278,9 @@ func capabilityAvailability(caps sshmux.Capabilities) map[string]toolAvail {
 	statOK := caps.StatC || caps.StatF
 
 	set("exec", true, "", "")
+	// Remote background tasks are launched and polled over the channel, reading
+	// byte ranges of their output file (tail -c/head -c) back as base64.
+	set("exec_background", caps.LineRead && caps.HasBase64, "head -c, tail -c and base64", "coreutils")
 	set("file_read", encode, "base64", "coreutils")
 	set("file_download", encode, "base64", "coreutils")
 	set("file_write", encode && decode, "base64 (with a decode flag)", "coreutils")

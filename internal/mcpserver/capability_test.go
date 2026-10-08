@@ -12,7 +12,7 @@ import (
 func TestCapabilityAvailabilityGNU(t *testing.T) {
 	caps := sshmux.Capabilities{
 		OS: "Linux", HasBase64: true, Base64D: true, StatC: true, HasFind: true,
-		FindPrint: true, HeadZ: true, HasGrep: true, GrepNull: true, Hasher: "sha256sum",
+		FindPrint: true, HeadZ: true, HasGrep: true, GrepNull: true, Hasher: "sha256sum", LineRead: true,
 		PkgMgr: "apt-get",
 	}
 	av := capabilityAvailability(caps)
@@ -28,7 +28,7 @@ func TestCapabilityAvailabilityBusyBox(t *testing.T) {
 	// With fallbacks, everything is still available (grep and stat -c cover it).
 	caps := sshmux.Capabilities{
 		OS: "Linux", HasBase64: true, Base64D: true, StatC: true, HasFind: true,
-		HasGrep: true, Hasher: "sha256sum", PkgMgr: "apk",
+		HasGrep: true, Hasher: "sha256sum", PkgMgr: "apk", LineRead: true,
 	}
 	av := capabilityAvailability(caps)
 	for _, tool := range oobToolNames {
@@ -46,7 +46,7 @@ func TestCapabilityAvailabilityMissingTools(t *testing.T) {
 	if !av["exec"].Available() {
 		t.Fatal("exec should always be available")
 	}
-	for _, tool := range []string{"file_read", "file_write", "file_stat", "directory_list", "file_grep", "file_search"} {
+	for _, tool := range []string{"file_read", "file_write", "file_stat", "directory_list", "file_grep", "file_search", "exec_background"} {
 		if av[tool].Available() {
 			t.Errorf("%s should be unavailable, got %+v", tool, av[tool])
 		}
