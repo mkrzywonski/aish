@@ -162,7 +162,8 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"starting, start_failed (the command never ran), draining (command exited, a child still holds its output), " +
 			"capture_failed, lost (supervisor gone " +
 			"without a result; outcome unknown) and expired. Only done and capture_failed carry the command's exit code; " +
-			"no other state means the command did not run, so never re-run on running=false alone. Polling a remote " +
+			"apart from start_failed, no other state means the command did not run, so never re-run on running=false " +
+			"alone. Polling a remote " +
 			"task is itself an out-of-band read on its host over the shared channel, and works only while the session's " +
 			"out-of-band route is still the connection the task was started on.",
 		Annotations: readOnlyTool("Poll background command"),
