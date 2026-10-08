@@ -12,11 +12,12 @@ Go is NOT on PATH on this machine (NixOS) — wrap all go commands in nix-shell.
 `shell.nix` provides the toolchain, so the Makefile is the shortest path:
 
 ```sh
-nix-shell --run "make"            # build ./aish, version stamped from git
+nix-shell --run "make"            # build ./aish and ./aishwnd, version stamped from git
 nix-shell --run "make check"      # go vet + full test suite (run before committing)
 nix-shell --run "make version"    # what this build would stamp, without building
 nix-shell -p go --run "go test ./internal/term/"   # a single package
-sudo make install                 # deploy to /usr/local/bin (build as yourself first)
+sudo make install                 # deploy aish + aishwnd to /usr/local/bin (build as yourself first;
+                                  # refuses a pair whose version stamps differ)
 ```
 
 Install to **`/usr/local/bin` only** (`make install`, PREFIX-overridable). One

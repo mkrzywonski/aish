@@ -35,12 +35,15 @@ BINDIR ?= $(PREFIX)/bin
 
 .PHONY: build install aishwin aishwin-dev aishwnd install-aishwnd test vet check fmt version clean
 
+# Builds both Linux binaries: aish and aishwnd (the WSL half of aishwin).
+# They ship together, so they are built together.
 build:
 	go build -ldflags "$(LDFLAGS)" -o aish ./cmd/aish
+	go build -ldflags "$(LDFLAGS)" -o aishwnd ./cmd/aishwnd
 
-# aishwnd is the Linux/WSL half of the aishwin feature — installs alongside
-# aish so `wsl.exe -- aishwnd` (aishwin.exe's default launch path) finds it
-# on PATH.
+# aishwnd alone. `make` already builds it alongside aish; `make install`
+# puts it on PATH so `wsl.exe -- aishwnd` (aishwin.exe's default launch path)
+# finds it.
 aishwnd:
 	go build -ldflags "$(LDFLAGS)" -o aishwnd ./cmd/aishwnd
 
@@ -66,25 +69,37 @@ aishwin:
 aishwin-dev:
 	GOOS=windows GOARCH=amd64 go build -tags aishwindev -ldflags "$(LDFLAGS) -H=windowsgui" -o aishwin-dev.exe ./cmd/aishwin
 
-# Usage:  make build && sudo make install
+# Usage:  make && sudo make install
+#
+# Installs both aish and aishwnd. Installing only one of them is how a session
+# ends up running a fixed aish next to a stale aishwnd (or the reverse), so
+# this refuses unless both binaries exist and carry the same version stamp --
+# i.e. they came from the same `make`.
 #
 # Deliberately does NOT depend on build: building under sudo would produce a
 # root-owned binary, and `git describe` run as root trips git's dubious-ownership
 # check, silently stamping the binary "dev" instead of the real version. Build as
 # yourself, install as root.
 install:
-	@test -f aish || { echo "no ./aish — run 'make build' as your own user first, so the version stamp is right"; exit 1; }
+	@test -f aish && test -f aishwnd || { echo "missing ./aish or ./aishwnd — run 'make' as your own user first, so the version stamp is right"; exit 1; }
+	@# Each binary must run, exit 0 and print "<name> <stamp>": a binary that
+	@# cannot run here (wrong arch, no exec bit) must not pass as matching.
+	@a=$$(./aish version) || { echo "./aish failed to report its version; is it built for this machine?"; exit 1; }; \
+	w=$$(./aishwnd version) || { echo "./aishwnd failed to report its version; is it built for this machine?"; exit 1; }; \
+	set -- $$a; if [ "$$#" -ne 2 ] || [ "$$1" != aish ]; then echo "unexpected ./aish version output: '$$a'"; exit 1; fi; av=$$2; \
+	set -- $$w; if [ "$$#" -ne 2 ] || [ "$$1" != aishwnd ]; then echo "unexpected ./aishwnd version output: '$$w'"; exit 1; fi; wv=$$2; \
+	if [ "$$av" != "$$wv" ]; then echo "./aish is $$av but ./aishwnd is $$wv — run 'make' to rebuild both from the same tree"; exit 1; fi
 	install -m 755 aish $(DESTDIR)$(BINDIR)/aish
+	install -m 755 aishwnd $(DESTDIR)$(BINDIR)/aishwnd
 	@echo "installed $(DESTDIR)$(BINDIR)/aish -> $$($(DESTDIR)$(BINDIR)/aish version)"
+	@echo "installed $(DESTDIR)$(BINDIR)/aishwnd -> $$($(DESTDIR)$(BINDIR)/aishwnd version)"
+	@echo "restart running aishwin windows and the aish MCP proxy to pick up the new binaries"
 
-# Separate from install: aishwnd needs to land on PATH (same one-location
-# rule as aish, since `wsl.exe -- aishwnd`, aishwin.exe's default launch path,
-# resolves PATH the way a non-interactive WSL invocation does) but is kept
-# as its own step rather than folded into the primary aish install path.
+# Installs only aishwnd. Prefer `make install`, which keeps the pair in step.
 install-aishwnd:
 	@test -f aishwnd || { echo "no ./aishwnd — run 'make aishwnd' as your own user first, so the version stamp is right"; exit 1; }
 	install -m 755 aishwnd $(DESTDIR)$(BINDIR)/aishwnd
-	@echo "installed $(DESTDIR)$(BINDIR)/aishwnd -> $$($(DESTDIR)$(BINDIR)/aishwnd --version)"
+	@echo "installed $(DESTDIR)$(BINDIR)/aishwnd -> $$($(DESTDIR)$(BINDIR)/aishwnd version)"
 
 test:
 	go test ./...
