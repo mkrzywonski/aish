@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.5
+
+- Fix native Windows sessions where approving an AI client in aishwin never
+  took effect: `aishwnd` deadlocked between the approval prompt and the
+  console's client-count poll, so every approval timed out with "no response
+  to the authorization prompt". Prompts in `aishwin` no longer stall other
+  traffic while the dialog is open.
+- Remote `exec background=true` now runs over the persistent out-of-band
+  channel instead of opening a new SSH session per task, so on hosts with
+  per-session MFA (e.g. Duo push) a background task no longer costs an extra
+  prompt once the channel is open. The command runs detached under POSIX `sh`
+  on the host, and `task_status` polls it over the same channel.
+- **Output change:** `task_status` now returns a `state` (`running`, `done`,
+  and for remote tasks `uncertain`, `starting`, `start_failed`, `draining`,
+  `capture_failed`, `lost`, `expired`), plus `via`/`host`, `dropped_bytes`,
+  `output_limited` and `warning`. A remote launch whose acknowledgment is lost
+  returns state `uncertain` with its task ID rather than an error; poll it
+  before running the command again. New `exec_background` entry in `oob_tools`.
+- Remote task output (first 16 MiB) is kept in `/tmp/aish-task-*` on the host
+  and is not yet cleaned up: those files, and any still-running job, remain
+  after the session ends. At most 16 remote background tasks per session.
+- `exec` and its results now state what can cost an MFA prompt. A remote
+  out-of-band foreground call that reaches `timeout_ms` closes the shared
+  channel without confirming the command stopped; it no longer silently
+  reopens the channel to save oversized partial output.
+- `make` builds `aish` and `aishwnd`, and `make install` installs both,
+  refusing a pair whose version stamps differ or that cannot run here.
+
+Upgrade `aish`, `aishwnd` and `aishwin` together, then restart sessions,
+`aishwin` windows and the MCP proxy/client to refresh schemas. Remote
+background tasks need `head -c`, `tail -c` and `base64` on the host. This
+release does not change OOB consent or auth rules.
+
 ## 0.5.4
 
 - Fix regex alternation with grep fallbacks and missing single-file matches on
