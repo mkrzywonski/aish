@@ -125,8 +125,14 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Annotations: commandTool("Execute on session host"),
 		Description: "Run a command on the host the shared session is currently on. Invisible out-of-band execution " +
 			"requires authorization and an OOB route; " +
-			"otherwise the command runs in-band, visibly, through the shared terminal. Use background=true for " +
-			"long-running commands, then poll task_status (background requires an OOB route). Set cwd to an absolute " +
+			"otherwise the command runs in-band, visibly, through the shared terminal. On a remote host, prefer " +
+			"foreground with a timeout_ms long enough for the command to finish: foreground out-of-band calls reuse one " +
+			"persistent SSH channel, so only its first opening (or a reopen) can prompt for MFA. background=true " +
+			"(requires an OOB route; poll task_status) opens a NEW SSH session per remote task, which can prompt for MFA " +
+			"(e.g. a Duo push) every time -- reserve it for work that runs for many minutes, or detach such work on the " +
+			"host instead (nohup with stdin, stdout and stderr redirected). A remote out-of-band foreground call that reaches " +
+			"timeout_ms closes the shared channel without confirming the command stopped, and the next out-of-band call " +
+			"reopens it: set timeout_ms generously rather than relying on the 30s default. Set cwd to an absolute " +
 			"directory when the command must run somewhere other than the OOB shell's default directory. " +
 			"Out-of-band, the command runs as session_status.oob_user (the SSH login user) regardless of any su/sudo -i " +
 			"in the shared shell; for commands the user should see, or that need the shell's current identity/privileges, " +
@@ -1404,7 +1410,30 @@ type execArgs struct {
 	Command    string `json:"command"`
 	Cwd        string `json:"cwd,omitempty" jsonschema:"absolute working directory on the current host"`
 	Background bool   `json:"background,omitempty"`
-	TimeoutMs  int    `json:"timeout_ms,omitempty" jsonschema:"foreground only; default 30000"`
+	TimeoutMs  int    `json:"timeout_ms,omitempty" jsonschema:"foreground only; default 30000. Out of band on a remote host, reaching it closes the shared channel without confirming the command stopped; the next call reopens it, possibly prompting for MFA"`
+}
+
+// Push-cost warnings for exec results. The tool description says the same
+// thing up front; these repeat it at the moment the cost was paid, which is
+// when a caller can still change course (foreground the next task, raise
+// timeout_ms) instead of learning it from oob_log afterwards.
+const (
+	backgroundSessionWarning = "this background task started a new SSH session attempt, which may prompt the user for MFA on " +
+		"strict hosts. Run work that finishes within a few minutes in the foreground with a larger timeout_ms instead"
+	channelTimeoutWarning = "timeout_ms was reached and the shared out-of-band SSH channel was closed; the remote " +
+		"command may still be running. The next out-of-band call opens a new channel, which can prompt for MFA. Check " +
+		"whether the command is still running or already took effect before re-running it with a larger timeout_ms"
+)
+
+// joinWarnings combines result warnings, skipping empty ones.
+func joinWarnings(warnings ...string) string {
+	var out []string
+	for _, w := range warnings {
+		if w != "" {
+			out = append(out, w)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 type execResult struct {
@@ -1488,7 +1517,7 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 			if err != nil {
 				return nil, execResult{}, err
 			}
-			return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host, Warning: guardWarning, TargetConfidence: targetConfidence}, nil
+			return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host, Warning: joinWarnings(guardWarning, backgroundSessionWarning), TargetConfidence: targetConfidence}, nil
 		}
 		cmd := c.buildExec(context.Background(), rt, args.Command, args.Cwd)
 		task, err := c.Tasks.Start(cmd)
@@ -1512,11 +1541,23 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 			return nil, execResult{}, err
 		}
 		res := execResult{Via: "channel", Host: rt.host, Warning: guardWarning, TargetConfidence: targetConfidence}
-		c.attachSpill(ctx, &res, rt, c.Sess.ID, cres.Output)
 		if cres.TimedOut {
-			res.TimedOut = true
+			// The timeout dropped the channel, so spilling oversized output
+			// would silently open a new one (a possible MFA push the caller
+			// never asked for). Trim only; never touch the remote here.
+			out, truncated := capExecOutput(cres.Output)
+			res.Output, res.Truncated, res.TimedOut = out, truncated, true
+			res.Warning = joinWarnings(res.Warning, channelTimeoutWarning)
+			if truncated {
+				// Unlike other oversized exec output there is no output_path:
+				// saving it would need the channel the timeout just closed.
+				res.OutputBytes = int64(len(cres.Output))
+				res.Warning = joinWarnings(res.Warning, "the partial output collected before the timeout was "+
+					"trimmed and not saved to a file, because saving it would reopen the closed channel")
+			}
 			return nil, res, nil
 		}
+		c.attachSpill(ctx, &res, rt, c.Sess.ID, cres.Output)
 		exit := cres.Exit
 		res.ExitCode = &exit
 		return nil, res, nil

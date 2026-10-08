@@ -152,7 +152,7 @@ func (c *Core) attachSpill(ctx context.Context, res *execResult, rt route, sessi
 	res.OutputBytes = int64(len(full))
 	path, err := c.spillOutput(rt, sessionID, full)
 	if err != nil {
-		res.Warning = "output was trimmed and the full text could not be saved: " + err.Error()
+		res.Warning = joinWarnings(res.Warning, "output was trimmed and the full text could not be saved: "+err.Error())
 		return
 	}
 	res.OutputPath = path

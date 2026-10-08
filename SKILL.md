@@ -134,6 +134,10 @@ shell. Foreground means the call waits for completion, not that it runs in the
 visible terminal. Background `exec` opens a separate channel per task; SFTP
 opens a separate retained channel. New channels may cause MFA on strict hosts.
 Use background execution for genuinely asynchronous work, not by default.
+Run anything that finishes within a few minutes in the foreground with a
+generous `timeout_ms`: a remote out-of-band foreground call that hits its timeout (default
+30s) closes the shared channel without confirming the command stopped, and the
+next call's reopen may cause MFA. Check before re-running such a command.
 
 On unavailability, read the reason. A missing host capability will not improve
 with repeated probing; a transient lost channel may recover on the next call.
