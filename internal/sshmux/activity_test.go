@@ -70,7 +70,7 @@ func TestConcurrentSessionAttemptsAreReferenceCounted(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first attempt did not become visible")
 	}
-	second, _ := m.BeginSessionAttempt(&ConnInfo{Host: "other", User: "mike"}, SessionAttemptBackground)
+	second, _ := m.BeginSessionAttempt(&ConnInfo{Host: "other", User: "mike"}, SessionAttemptSFTP)
 	select {
 	case <-changed:
 	case <-time.After(time.Second):
@@ -86,7 +86,7 @@ func TestConcurrentSessionAttemptsAreReferenceCounted(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first completion did not update visible state")
 	}
-	if got, ok := m.VisibleSessionAttempt(); !ok || got.Count != 1 || got.Kind != SessionAttemptBackground {
+	if got, ok := m.VisibleSessionAttempt(); !ok || got.Count != 1 || got.Kind != SessionAttemptSFTP {
 		t.Fatalf("remaining state = %+v, ok=%v", got, ok)
 	}
 	second()
@@ -138,7 +138,7 @@ func TestBlockCoversEveryAttemptKind(t *testing.T) {
 	m := New(t.TempDir())
 	m.SetBlockNewSessions(true)
 	for _, kind := range []SessionAttemptKind{
-		SessionAttemptShell, SessionAttemptDeep, SessionAttemptSFTP, SessionAttemptBackground,
+		SessionAttemptShell, SessionAttemptDeep, SessionAttemptSFTP,
 	} {
 		if _, err := m.BeginSessionAttempt(testConn(), kind); !errors.Is(err, ErrNewSessionsBlocked) {
 			t.Errorf("%s was not blocked: %v", kind, err)

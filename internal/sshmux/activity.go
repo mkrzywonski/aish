@@ -14,7 +14,7 @@ const sessionAttemptDebounce = 500 * time.Millisecond
 //
 // The motivating case is a host with per-session MFA. One shared channel means
 // one push per host, which is a fine price — but a confused AI can keep paying
-// it: a forced re-probe, a deep or SFTP probe, a background command, or a
+// it: a forced re-probe, a deep or SFTP probe, or a
 // channel that timed out and gets reopened all start a new slave session. Each
 // one rings the user's phone. This is the stop button for that.
 //
@@ -29,10 +29,9 @@ var ErrNewSessionsBlocked = errors.New("new SSH sessions are blocked for this ai
 type SessionAttemptKind string
 
 const (
-	SessionAttemptShell      SessionAttemptKind = "OOB shell probe"
-	SessionAttemptDeep       SessionAttemptKind = "deep identity probe"
-	SessionAttemptBackground SessionAttemptKind = "background command"
-	SessionAttemptSFTP       SessionAttemptKind = "SFTP subsystem"
+	SessionAttemptShell SessionAttemptKind = "OOB shell probe"
+	SessionAttemptDeep  SessionAttemptKind = "deep identity probe"
+	SessionAttemptSFTP  SessionAttemptKind = "SFTP subsystem"
 )
 
 // SessionAttempt is the oldest currently visible SSH slave-session attempt.

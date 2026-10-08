@@ -127,10 +127,12 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 			"requires authorization and an OOB route; " +
 			"otherwise the command runs in-band, visibly, through the shared terminal. On a remote host, prefer " +
 			"foreground with a timeout_ms long enough for the command to finish: foreground out-of-band calls reuse one " +
-			"persistent SSH channel, so only its first opening (or a reopen) can prompt for MFA. background=true " +
-			"(requires an OOB route; poll task_status) opens a NEW SSH session per remote task, which can prompt for MFA " +
-			"(e.g. a Duo push) every time -- reserve it for work that runs for many minutes, or detach such work on the " +
-			"host instead (nohup with stdin, stdout and stderr redirected). A remote out-of-band foreground call that reaches " +
+			"persistent SSH channel, so only its first opening (or a reopen) can prompt for MFA (e.g. a Duo push). " +
+			"background=true (requires an OOB route) is for work that runs for many minutes: on a remote host it " +
+			"starts the command detached, under POSIX sh, through that same channel, and returns a task_id and state; " +
+			"poll it with task_status. A state of \"uncertain\" means the command may have started -- poll before ever " +
+			"running it again. Remote task output is kept on the host (first 16 MiB) until the aish session ends. " +
+			"A remote out-of-band foreground call that reaches " +
 			"timeout_ms closes the shared channel without confirming the command stopped, and the next out-of-band call " +
 			"reopens it: set timeout_ms generously rather than relying on the 30s default. Set cwd to an absolute " +
 			"directory when the command must run somewhere other than the OOB shell's default directory. " +
@@ -154,7 +156,13 @@ func registerRemoteTools(s *mcp.Server, c *Core) {
 		Description: "Poll a background task by the task_id returned when it was started: incremental output " +
 			"(pass next_cursor back), running state, and exit code once it finishes. Tasks are started by " +
 			"exec with background=true on a shared-terminal session, and by run_command with background=true " +
-			"on a direct-host session, which has no exec. Errors if the task_id is unrecognized.",
+			"on a direct-host session, which has no exec. Errors if the task_id is unrecognized. " +
+			"state is one of running, done, and for remote tasks also uncertain (launch unconfirmed; may still start), " +
+			"starting, draining (command exited, a child still holds its output), capture_failed, lost (supervisor gone " +
+			"without a result; outcome unknown) and expired. Only done and capture_failed carry the command's exit code; " +
+			"no other state means the command did not run, so never re-run on running=false alone. Polling a remote " +
+			"task is itself an out-of-band read on its host over the shared channel, and works only while the session's " +
+			"out-of-band route is still the connection the task was started on.",
 		Annotations: readOnlyTool("Poll background command"),
 	}, c.taskStatus)
 
@@ -1413,13 +1421,11 @@ type execArgs struct {
 	TimeoutMs  int    `json:"timeout_ms,omitempty" jsonschema:"foreground only; default 30000. Out of band on a remote host, reaching it closes the shared channel without confirming the command stopped; the next call reopens it, possibly prompting for MFA"`
 }
 
-// Push-cost warnings for exec results. The tool description says the same
-// thing up front; these repeat it at the moment the cost was paid, which is
-// when a caller can still change course (foreground the next task, raise
-// timeout_ms) instead of learning it from oob_log afterwards.
+// Push-cost warning for exec results. The tool description says the same
+// thing up front; this repeats it at the moment the cost was paid, which is
+// when a caller can still change course (raise timeout_ms) instead of
+// learning it from oob_log afterwards.
 const (
-	backgroundSessionWarning = "this background task started a new SSH session attempt, which may prompt the user for MFA on " +
-		"strict hosts. Run work that finishes within a few minutes in the foreground with a larger timeout_ms instead"
 	channelTimeoutWarning = "timeout_ms was reached and the shared out-of-band SSH channel was closed; the remote " +
 		"command may still be running. The next out-of-band call opens a new channel, which can prompt for MFA. Check " +
 		"whether the command is still running or already took effect before re-running it with a larger timeout_ms"
@@ -1440,6 +1446,8 @@ type execResult struct {
 	Output   string `json:"output,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	TaskID   string `json:"task_id,omitempty"`
+	// State is a background task's state at launch (see task_status).
+	State    string `json:"state,omitempty"`
 	TimedOut bool   `json:"timed_out,omitempty"`
 	// Truncated says output was trimmed. exec has no scrollback behind it, so
 	// the full text is written to OutputPath on the host that ran the command
@@ -1501,30 +1509,15 @@ func (c *Core) execTool(ctx context.Context, req *mcp.CallToolRequest, args exec
 	}
 
 	if args.Background {
-		// Long-running tasks need a concurrent stream, so they get a
-		// dedicated channel (one extra MFA push on strict hosts).
 		if rt.via == "controlmaster" {
-			command, marker, err := sshmux.BackgroundCommand(commandWithCwd(args.Command, args.Cwd))
-			if err != nil {
-				return nil, execResult{}, fmt.Errorf("creating background startup marker: %w", err)
-			}
-			finishAttempt, err := c.Mux.BeginSessionAttempt(rt.ci, sshmux.SessionAttemptBackground)
-			if err != nil {
-				return nil, execResult{}, err
-			}
-			cmd := c.Mux.Command(context.Background(), rt.ci, command)
-			task, err := c.Tasks.StartAfterMarker(cmd, marker, finishAttempt)
-			if err != nil {
-				return nil, execResult{}, err
-			}
-			return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host, Warning: joinWarnings(guardWarning, backgroundSessionWarning), TargetConfidence: targetConfidence}, nil
+			return c.execChannelTask(rt, args, guardWarning, targetConfidence)
 		}
 		cmd := c.buildExec(context.Background(), rt, args.Command, args.Cwd)
 		task, err := c.Tasks.Start(cmd)
 		if err != nil {
 			return nil, execResult{}, err
 		}
-		return nil, execResult{TaskID: task.ID, Via: rt.via, Host: rt.host}, nil
+		return nil, execResult{TaskID: task.ID, State: sshmux.TaskRunning, Via: rt.via, Host: rt.host}, nil
 	}
 
 	if rt.via == "controlmaster" {
@@ -1598,10 +1591,20 @@ type taskStatusArgs struct {
 }
 
 type taskStatusResult struct {
-	Running    bool   `json:"running"`
-	Output     string `json:"output"`
-	NextCursor int64  `json:"next_cursor"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
+	// State is finer-grained than Running; see the task_status description.
+	// running=false is never by itself a signal that re-running is safe.
+	State         string `json:"state"`
+	Running       bool   `json:"running"`
+	Output        string `json:"output"`
+	NextCursor    int64  `json:"next_cursor"`
+	DroppedBytes  int64  `json:"dropped_bytes,omitempty"`
+	ExitCode      *int   `json:"exit_code,omitempty"`
+	OutputLimited bool   `json:"output_limited,omitempty"`
+	Warning       string `json:"warning,omitempty"`
+	// Via/Host let the activity log classify the poll: a remote task's poll
+	// is itself an out-of-band operation on that host.
+	Via  string `json:"via,omitempty"`
+	Host string `json:"host,omitempty"`
 }
 
 func (c *Core) taskStatus(ctx context.Context, req *mcp.CallToolRequest, args taskStatusArgs) (*mcp.CallToolResult, taskStatusResult, error) {
@@ -1613,9 +1616,107 @@ func (c *Core) taskStatus(ctx context.Context, req *mcp.CallToolRequest, args ta
 	if args.Cursor != nil {
 		cursor = *args.Cursor
 	}
-	data, next, _ := task.Out.ReadFrom(cursor, execOutputCap)
+	if task.Remote != nil {
+		return c.pollChannelTask(task, cursor)
+	}
+	data, next, dropped := task.Out.ReadFrom(cursor, execOutputCap)
 	running, exit := task.Status()
-	return nil, taskStatusResult{Running: running, Output: string(data), NextCursor: next, ExitCode: exit}, nil
+	state := sshmux.TaskDone
+	if running {
+		state = sshmux.TaskRunning
+	}
+	return nil, taskStatusResult{State: state, Running: running, Output: string(data), NextCursor: next,
+		DroppedBytes: dropped, ExitCode: exit, Via: "local", Host: "local"}, nil
+}
+
+// execChannelTask launches a background command on the remote through the
+// persistent channel. Its identity is allocated first, so a launch whose
+// acknowledgment is lost is still returned (as uncertain) rather than
+// reported as an error the caller might "fix" by running the command again.
+func (c *Core) execChannelTask(rt route, args execArgs, guardWarning, targetConfidence string) (*mcp.CallToolResult, execResult, error) {
+	if err := c.requireTool(rt, "exec_background"); err != nil {
+		return nil, execResult{}, err
+	}
+	task, err := c.Tasks.NewChannelTask(rt.ci, c.Sess.ID)
+	if err != nil {
+		return nil, execResult{}, err
+	}
+	res := execResult{TaskID: task.ID, Via: "channel", Host: rt.host, Warning: guardWarning, TargetConfidence: targetConfidence}
+	err = c.Mux.LaunchChannelTask(task.Remote, args.Command, args.Cwd)
+	switch {
+	case err == nil:
+		res.State = sshmux.TaskStarting
+	case errors.Is(err, sshmux.ErrTaskLaunchUncertain):
+		res.State = sshmux.TaskUncertain
+		res.Warning = joinWarnings(res.Warning, fmt.Sprintf("the launch could not be confirmed (%v): the command MAY "+
+			"have started. Poll task_status for %s before deciding to run it again", err, task.ID))
+	default:
+		c.Tasks.Remove(task.ID)
+		return nil, execResult{}, err
+	}
+	return nil, res, nil
+}
+
+// pollChannelTask reads a remote task's state over the persistent channel.
+// The poll is an out-of-band operation in its own right, so it goes through
+// route() (authorization) and the target guard like any other. The task
+// stays bound to the connection it was launched over: the mismatch check
+// comes BEFORE anything that could open or probe a channel, so polling a
+// task from the wrong host can never cost an MFA prompt on that host.
+func (c *Core) pollChannelTask(task *sshmux.Task, cursor int64) (*mcp.CallToolResult, taskStatusResult, error) {
+	ct := task.Remote
+	rt := c.route()
+	if rt.via != "controlmaster" {
+		return nil, taskStatusResult{}, fmt.Errorf("polling %s reads its state on %s out of band, and no authorized out-of-band "+
+			"route to that host is available now. The task itself is unaffected; its files are in %s", task.ID, ct.CI.Host, ct.Dir)
+	}
+	if rt.ci == nil || rt.ci.Sock != ct.CI.Sock {
+		return nil, taskStatusResult{}, fmt.Errorf("%s runs on %s, but the session's out-of-band route now goes to %s. Return "+
+			"the shared terminal to that ssh connection to poll it; the task itself is unaffected (its files are in %s)",
+			task.ID, ct.CI.Host, rt.host, ct.Dir)
+	}
+	warning, err := c.guardTarget(rt, opRead)
+	if err != nil {
+		return nil, taskStatusResult{}, err
+	}
+	if err := c.requireTool(rt, "exec_background"); err != nil {
+		return nil, taskStatusResult{}, err
+	}
+	st, err := c.Mux.PollChannelTask(ct, cursor, execOutputCap)
+	if err != nil {
+		return nil, taskStatusResult{}, err
+	}
+	res := taskStatusResult{
+		State: st.State, Output: string(st.Output), NextCursor: st.Next, ExitCode: st.ExitCode,
+		OutputLimited: st.OutputLimited, Warning: warning, Via: "channel", Host: rt.host,
+	}
+	switch st.State {
+	case sshmux.TaskUncertain, sshmux.TaskStarting, sshmux.TaskRunning, sshmux.TaskDraining:
+		res.Running = true
+	}
+	switch st.State {
+	case sshmux.TaskUncertain:
+		res.Warning = joinWarnings(res.Warning, "the launch was never confirmed and the task directory does not exist yet; "+
+			"the command may still start. Do not re-run it on the assumption that it failed")
+	case sshmux.TaskDraining:
+		res.Warning = joinWarnings(res.Warning, "the command has exited, but a process it started still holds its output open")
+	case sshmux.TaskLost:
+		res.Warning = joinWarnings(res.Warning, "the task's supervisor is gone without recording completion (killed, host "+
+			"rebooted, or its directory cleaned); the command's outcome is unknown")
+	case sshmux.TaskCaptureFailed:
+		res.Warning = joinWarnings(res.Warning, "the command finished, but capturing its output or exit status failed on the "+
+			"remote (for example a full disk); output and exit_code may be incomplete")
+	case sshmux.TaskExpired:
+		res.Warning = joinWarnings(res.Warning, "the task's directory no longer exists on the remote; its output and outcome are gone")
+	}
+	if st.CwdFailed {
+		res.Warning = joinWarnings(res.Warning, "the command did not run: its working directory could not be entered")
+	}
+	if st.OutputLimited {
+		res.Warning = joinWarnings(res.Warning, fmt.Sprintf("output exceeded %d bytes; only the first %d were kept and "+
+			"next_cursor stops there", sshmux.ChannelTaskOutputLimit, sshmux.ChannelTaskOutputLimit))
+	}
+	return nil, res, nil
 }
 
 // ---- helpers ----

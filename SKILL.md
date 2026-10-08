@@ -131,9 +131,13 @@ not a POSIX group-permission or Windows ACL management interface.
 
 Ordinary remote OOB file operations and foreground `exec` reuse a persistent
 shell. Foreground means the call waits for completion, not that it runs in the
-visible terminal. Background `exec` opens a separate channel per task; SFTP
-opens a separate retained channel. New channels may cause MFA on strict hosts.
+visible terminal. Remote background `exec` also runs over that shell: the
+command starts detached (under POSIX `sh`) and each `task_status` poll is a
+read over the channel, so neither opens a new connection. SFTP opens a
+separate retained channel. New channels may cause MFA on strict hosts.
 Use background execution for genuinely asynchronous work, not by default.
+A background task whose `state` is `uncertain` may have started: poll it
+before ever running the command again.
 Run anything that finishes within a few minutes in the foreground with a
 generous `timeout_ms`: a remote out-of-band foreground call that hits its timeout (default
 30s) closes the shared channel without confirming the command stopped, and the

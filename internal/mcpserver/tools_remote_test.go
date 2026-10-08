@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"ai-ssh/internal/paths"
 	"ai-ssh/internal/session"
@@ -296,5 +298,50 @@ func TestParseOptionalModeRejectsAmbiguousInput(t *testing.T) {
 	}
 	if mode, set, err := parseOptionalMode(""); err != nil || set || mode != 0 {
 		t.Fatalf("parseOptionalMode(empty) = %04o, %v, %v", mode, set, err)
+	}
+}
+
+func TestLocalBackgroundTaskStatus(t *testing.T) {
+	c := localOOBCore(t)
+	_, started, err := c.execTool(context.Background(), nil, execArgs{Command: "printf hi", Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.TaskID == "" || started.State != sshmux.TaskRunning || started.Via != "local" {
+		t.Fatalf("unexpected launch result: %+v", started)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, st, err := c.taskStatus(context.Background(), nil, taskStatusArgs{TaskID: started.TaskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.State == sshmux.TaskDone {
+			if st.Running || st.Output != "hi" || st.ExitCode == nil || *st.ExitCode != 0 || st.Via != "local" {
+				t.Fatalf("unexpected final status: %+v", st)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("local task stuck in %q", st.State)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A remote task polled while the session's route no longer leads to its
+// connection must be refused before anything could open or probe a channel.
+func TestRemoteTaskPollRefusedOffItsRoute(t *testing.T) {
+	c := localOOBCore(t)
+	task, err := c.Tasks.NewChannelTask(&sshmux.ConnInfo{Host: "web1", User: "u", Port: "22", Sock: "/run/aish/cm-web1"}, c.Sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = c.taskStatus(context.Background(), nil, taskStatusArgs{TaskID: task.ID})
+	if err == nil || !strings.Contains(err.Error(), task.ID) || !strings.Contains(err.Error(), "web1") {
+		t.Fatalf("expected a route refusal naming the task and host, got %v", err)
+	}
+	if _, ok := c.Mux.VisibleSessionAttempt(); ok {
+		t.Fatal("a refused poll started an SSH session attempt")
 	}
 }
